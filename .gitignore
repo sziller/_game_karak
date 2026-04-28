@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Lagre media/statics
+*.kra
+*-large.png
+
 # Distribution / packaging
 .Python
 build/
