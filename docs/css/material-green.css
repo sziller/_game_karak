@@ -1,0 +1,125 @@
+/* Asciidoctor default stylesheet | MIT License | https://asciidoctor.org */
+
+@import url(//fonts.googleapis.com/css?family=Noto+Sans);
+@import url(https://cdn.jsdelivr.net/gh/asciidoctor/asciidoctor@2.0/data/stylesheets/asciidoctor-default.css); /* Default asciidoc style framework - important */
+
+/* CUSTOMISATIONS */
+/* Change the values in root for quick customisation. If you want even more fine grain... venture further. */
+
+:root{
+--maincolor:#FFFFFF;
+--primarycolor:#4CAF50; /* Green 500 */
+--secondarycolor:#ba3925;
+--tertiarycolor: #186d7a;
+--sidebarbackground:#1B5E20; /* Green 900 */
+--linkcolor:#A5D6A7; /* Green 200 */
+--linkcoloralternate:#f44336;
+--white:#FFFFFF;
+--black:#000000;
+}
+
+body{font-family: "Noto Sans",sans-serif;}
+
+#header{background-color:var(--primarycolor); padding:25px;max-width: none;}
+#footer{background-color: var(--sidebarbackground);}
+h1,h2,h3{background-color:var(--primarycolor);color:var(--white) !important;font-family:"Noto Sans",sans-serif;text-decoration:none;padding:10px;}
+h4 {
+  color: var(--primarycolor);
+  font-size: 1.5em;   /* slightly larger than default */
+  font-weight: 700;   /* bold */
+}
+
+h5 {
+  color: var(--primarycolor);
+  font-size: 1.3em;
+  font-weight: 700;
+}
+
+h6 {
+  color: var(--primarycolor);
+  font-size: 1.15em;
+  font-weight: 700;
+}
+
+h7 {
+  color: var(--primarycolor);
+  font-size: 1.15em;
+  font-weight: 700;
+  font-style: italic;
+}
+.title{color:var(--sidebarbackground) !important;font-family:"Noto Sans",sans-serif;font-style: normal; font-weight: normal;}
+p{font-family: "Noto Sans",sans-serif ! important}
+#toc.toc2 a:link{color:white;}
+
+a {
+  text-decoration: none;
+  color: var(--linkcolor);
+}
+a:hover {
+  color: var(--sidebarbackground);
+}
+.quoteblock blockquote::before {
+  color: var(--linkcolor);
+}
+mark {
+  color: var(--white);
+  background-color: var(--linkcolor);
+}
+
+/* Card styling */
+.sect1{border-bottom:1px solid grey;border-radius:8px;}
+
+/* ============================================================
+   Capability / Readiness Levels (AsciiDoc roles)
+   ============================================================ */
+
+.r0 {
+  color: #666699;          /* grayblue */
+  font-weight: 600;
+}
+
+.r4 {
+  color: #b00020;          /* red */
+  font-weight: 600;
+}
+
+.r3 {
+  color: #e65100;          /* orange */
+  font-weight: 600;
+}
+
+.r2 {
+  color: #f9a825;          /* yellow */
+  font-weight: 600;
+}
+
+.r1 {
+  color: #2e7d32;          /* green */
+  font-weight: 600;
+}
+
+/* Table styles */
+th{background-color: var(--linkcolor);color:#FFFFFF;}
+
+#toc.toc2{background-color:var(--sidebarbackground);color:white !important;}
+#toc.toc2.a{color:var(--white);}
+#toc.toc2.a:active{color:var(--white) !important;}
+#toc.toc2.a:visited{color:var(--white) !important;}
+#toctitle{color:white;font-size: 16px;}
+
+/* Responsiveness fixes */
+video {
+  max-width: 100%;
+}
+
+
+.tableblock {
+  margin-top: 1em;
+}
+
+@media all and (max-width: 600px) {
+table {
+  width: 55vw!important;
+  font-size: 3vw;
+}
+

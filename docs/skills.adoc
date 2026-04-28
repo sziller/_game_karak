@@ -1,0 +1,9 @@
+
+// rouge, pygments,  
+== Skills
+
+.*SKILL_CATALOG* variable
+[source,python]
+-------------------------------------------------------------------
+include::../app/domain/character_catalog.py[tags=skill_catalog]
+-------------------------------------------------------------------

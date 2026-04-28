@@ -1,0 +1,194 @@
+/* =========================================================
+   1. PAGE FOUNDATION
+   ========================================================= */
+
+body {
+    font-family: monospace;
+    background: #111;
+    color: #888899;
+    text-align: center;
+    padding: 24px;
+    margin: 0;
+}
+
+input,
+button {
+    font-family: monospace;
+    margin: 4px;
+    padding: 6px;
+}
+
+pre {
+    text-align: left;
+    white-space: pre-wrap;
+    background: #1a1a1a;
+    color: #ddd;
+    padding: 12px;
+    overflow-x: auto;
+}
+
+/* =========================================================
+   2. LAYOUT
+   ========================================================= */
+
+.panel {
+    max-width: 1100px;
+    margin: 12px auto;
+    padding: 12px;
+    background: #0b0b0b;
+    border: 1px solid #333;
+}
+
+.two-col {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.col {
+    flex: 1 1 420px;
+    max-width: 500px;
+}
+
+/* =========================================================
+   5. FEEDBACK / UTILITY
+   ========================================================= */
+
+.message-box {
+    font-family: monospace;
+    font-size: 14px;
+    padding: 8px;
+    margin: 10px auto 0 auto;
+    max-width: 900px;
+    width: 100%;
+    display: block;
+    box-sizing: border-box;
+}
+
+.message-box pre {
+    margin: 6px 0 0 0;
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    background: transparent;
+    padding: 0;
+}
+
+.message-info {
+    background: #001a00;
+    color: #77ff77;
+    outline: 2px solid #00aa00;
+}
+
+.message-warning {
+    border: 1px solid #cc8a00;
+    background: rgba(255, 165, 0, 0.14);
+    color: #ffb347;
+}
+
+
+.message-error {
+    background: #220000;
+    color: #ff7777;
+    outline: 2px solid #ff0000;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.muted {
+    color: #aaa;
+}
+
+/* =========================================================
+   4. PHASE 2 PLAYER LIST
+   ========================================================= */
+
+.player-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid #222;
+    max-width: 600px;
+    margin: 0 auto;
+    text-align: left;
+    cursor: pointer;
+}
+
+.player-row.selected {
+    background: #1d2a1d;
+    outline: 1px solid #55aa55;
+}
+
+.player-row.missing-profession {
+    border: 2px solid #ff7777;
+    background: rgba(255, 80, 80, 0.12);
+}
+
+.player-name {
+    color: #ddd;
+}
+
+/* =========================================================
+   5. PHASE 2 CLASS CARD
+   ========================================================= */
+
+.class-card {
+    background: #151515;
+    border: 1px solid #333;
+    padding: 12px;
+}
+
+.class-image-box {
+    width: 100%;
+    height: 280px;
+    background: #0d0d0d;
+    border: 1px solid #2b2b2b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 10px 0;
+}
+
+.class-image-box img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+}
+
+.slideshow-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.mt-10 {
+    margin-top: 10px;
+}
+
+/* =========================================================
+   6. RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 900px) {
+    .two-col {
+        flex-direction: column;
+        align-items: center;
+    }
+}

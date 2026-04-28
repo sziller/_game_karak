@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Karak - Game style selection</title>
+    <link rel="icon" href="/static/favicon.ico">
+    <link href="/static/css/phases12.css" rel="stylesheet">
+</head>
+<body>
+<h1>Karak - Gme style selection</h1>
+<p>Bootstrap / session start</p>
+
+<div class="panel">
+    <h2>Local</h2>
+    <button onclick="startHotseat()">Start Hot-seat</button>
+</div>
+
+<div class="panel">
+    <h2>Host</h2>
+    <input id="host-name" placeholder="Host name" type="text" value="Host">
+    <input id="host-url" placeholder="Optional bind URL" type="text" value="">
+    <button onclick="startHost()">Start Host Session</button>
+</div>
+
+<div class="panel">
+    <h2>Join</h2>
+    <input id="join-name" placeholder="Player name" type="text" value="Guest">
+    <input id="join-url" placeholder="Server URL" type="text" value="http://127.0.0.1:8000">
+    <input id="join-room" placeholder="Optional room code" type="text" value="">
+    <button onclick="joinHost()">Join Session</button>
+</div>
+
+<div class="message-box message-info" id="message-box">
+    <b id="message-title">Info</b>
+    <pre id="message-content">(ready)</pre>
+</div>
+
+<div class="panel">
+    <h2>Diagnostics</h2>
+    <div class="panel">
+        <h3>Status</h3>
+        <pre id="status-box">(no state loaded)</pre>
+    </div>
+</div>
+
+
+<script>
+    const bootstrapApi = (p) => "/api/bootstrap" + (p.startsWith("/") ? p : "/" + p);
+
+    function showMessage(msg, level = "info", title = null) {
+        const box = document.getElementById("message-box");
+        const titleEl = document.getElementById("message-title");
+        const content = document.getElementById("message-content");
+
+        if (!box || !titleEl || !content) {
+            console.error("Message box elements not found.");
+            return;
+        }
+
+        box.classList.remove("message-info", "message-error");
+
+        if (level === "error") {
+            box.classList.add("message-error");
+            titleEl.textContent = title || "Error";
+        } else {
+            box.classList.add("message-info");
+            titleEl.textContent = title || "Info";
+        }
+
+        content.textContent = msg;
+    }
+
+    function showError(msg) {
+        showMessage(msg, "error", "Error");
+    }
+
+    function clearError() {
+        showMessage("(ready)", "info", "Info");
+    }
+
+    function setStatus(data) {
+        document.getElementById("status-box").textContent = JSON.stringify(data, null, 2);
+        showMessage("Bootstrap state updated.", "info", "Info");
+    }
+
+    async function refreshState() {
+    clearError();
+    try {
+        const r = await fetch(bootstrapApi("/state"));
+        const data = await r.json();
+        setStatus(data);
+        if (!r.ok) {
+            showError(data.detail || "Failed to refresh bootstrap state.");
+        }
+    } catch (e) {
+        console.error(e);
+        showError("Failed to refresh bootstrap state.");
+    }
+}
+
+    async function startHotseat() {
+        const r = await fetch(bootstrapApi("/hotseat"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({player_name: "Local Admin"})
+        });
+        const data = await r.json();
+        setStatus(data);
+        if (r.ok) {
+            window.location.href = "/phase2";
+        }
+    }
+
+    async function startHost() {
+    clearError();
+
+    const player_name = document.getElementById("host-name").value.trim() || "Host";
+    const bind_url = document.getElementById("host-url").value.trim() || null;
+
+    try {
+        const r = await fetch(bootstrapApi("/host"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ player_name, bind_url })
+        });
+        const data = await r.json();
+        setStatus(data);
+
+        if (!r.ok) {
+            showError(data.detail || "Failed to start host session.");
+            return;
+        }
+
+        showMessage("Host session started.", "info", "Info");
+        window.location.href = "/phase2";
+    } catch (e) {
+        console.error(e);
+        showError("Failed to start host session.");
+    }
+}
+
+    async function joinHost() {
+    clearError();
+
+    const player_name = document.getElementById("join-name").value.trim();
+    const server_url = document.getElementById("join-url").value.trim();
+    const room_code = document.getElementById("join-room").value.trim() || null;
+
+    try {
+        const r = await fetch(bootstrapApi("/join"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ player_name, server_url, room_code })
+        });
+        const data = await r.json();
+        setStatus(data);
+
+        if (!r.ok) {
+            showError(data.detail || "Failed to join session.");
+            return;
+        }
+
+        showMessage("Joined session.", "info", "Info");
+        window.location.href = "/phase2";
+    } catch (e) {
+        console.error(e);
+        showError("Failed to join session.");
+    }
+}
+
+    refreshState();
+</script>
+</body>
+</html>

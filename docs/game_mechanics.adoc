@@ -1,0 +1,492 @@
+== Turn
+
+* Every Player has `total_of_actions` = 4 _Actions_  in a *Turn*.
+* After the final *Action()* in a given *Turn* the active Player may - in some cases: must - perform one or more _FreeActions_.
+* *Turn* is always owned by exactly one *Player*, but other Players may still be affected by events during that *Turn*.
+* Based on the game's ruleset: *Turns* are strictly Player influenced sequences. (mostly active player guided, but in the case of PvP fight, inactive Players can block the flow) A *Turn* can only - from the games perspective - end as a direct consequence of a Players action.
+* In later stages however we want to introduce timers to avoid lag/drop/slow reaction block the game. Timer would apply for a given *Turn* and end a Players Turn it `time_limit_turn` = 45 seconds.
+* For undetermined *Turn* endings, we introduce an _|End Turn|_ button on the UI / API / Engine's logic.
+  This requires the Turn-owners engagement with a button, thus a *Turn* can only end 2 GameLogic based ways:
+    (either - or)
+    ** Player performs a *TurnEndingFreeAction*
+    ** Player presses the _|End Turn|_ button.
+    ** ...or - optionally - force closed by hitting `time_limit_turn` and default to predetermined outcomes. +
+       (such determined events will prefer default behavior: pick up item if space in inventory, heal if on fountain)
+* For foreign Player based interaction, we will introduce a local timer
+  (e.g.: `time_limit_steal` for looting defeated active Player)
+
+.Building blocks
+****
+*Turn* is made up of the below ingredients, all triggered by Active Player interaction:
+****
+
+=== Action()
+[source,python]
+----
+price: int = 1
+does_end_turn = False
+----
+
+==== Definition
+Consumes 1 `Action` from the active Player's `nr_of_actions_left` Turn.
+
+
+==== Types
+
+===== Move()
+Move between `2` adjacent _discovered_ Tiles.
+
+===== Blink(Move)
+A normal Move between `2` adjacent _discovered_ Tiles, disregarding pathing restrictions.
+Enabled by `skill_wiz_02` - we technically do not need a different class or Endpoint, just need to loosen up
+restrictions.
+
+.Hook
+[NOTE]
+==================================================================
+- _> skill_wiz_02 <_
+==================================================================
+
+===== Teleport()
+Relocation by teleport effect.
+
+Included variants:
+
+* between teleport gates
+* onto a specific Player
+* swapping place with a specific Player
+* onto a Monster
+
+.Hook
+[NOTE]
+==================================================================
+- _> skill_bat_02 <_
+- _> skill_wrl_02 <_
+- _> skill_bea_02 <_
+==================================================================
+
+===== Peek()
+
+Reveal a _HiddenTile_ without moving into it.
+
+Process::
+
+* determine location of the Tile: *place()*
+* take the upper Tile from the *tile_pool*
+* rotate it: *lock()*
+* if `type` == _room_, *populate()* it
+* target Tile becomes `status` = _discovered_
+* target Tile becomes `visited` = _False_
+
+Notes::
+
+* `visited` state matters for Arena Tiles
+* *Peek()* must be announced in advance - requires: _> skill_ran_02 <_
+* later movement into this now-`discovered` Tile is a separate `Action`
+
+.Hook
+[NOTE]
+==================================================================
+- _> skill_ran_02 <_
+==================================================================
+
+===== Discover(sequence)
+
+Move from a `discovered` Tile into a `HiddenSpace`.
+
+Process::
+
+* perform `Peek` as part of this Action
+* then move into the Tile
+* target Tile becomes `discovered`
+* target Tile becomes `_visited_`
+
+===== Initiate Fight(sequence)
+With exceptions (see hooks) and in case of tile being populated:
+a Fight(sequence) automatically strats right after Discover()
+
+.Hook
+[NOTE]
+==================================================================
+- _> skill_thi_02 <_
+- _> skill_pri_02 <_
+==================================================================
+
+* triggers further sequece Fight(sequence) if `occupied` = _True_
+
+===== Pull()
+
+Special Action related to `<skill_sco_02>`.
+
+This violates the otherwise fully disclosed public game concept.
+For the same of simplicity, we may only enforce this on UI lvl - in the first iteration.
+
+Process::
+
+* take the upper Tile from the _TilePool_
+* do not reveal it to the others
+* store it privately
+
+Restrictions and notes::
+
+* the Player does not move into it
+* it has not yet become `discovered`
+* this must be announced in advance
+* later `Discover` of this stored Tile is a separate `Action`
+* `<skill_sco_02>` owner needs private stored-Tile inventory slots
+* stored Tile capacity: `T = 3`
+
+.Hook
+[NOTE]
+==================================================================
+- _> skill_sco_02 <_
+==================================================================
+
+===== Discover Stored
+
+Same as `Discover`, but instead of taking the upper Tile from the `TilePool`, the Player uses an arbitrary stored Tile
+from his own private inventory.
+
+.Hook
+[NOTE]
+==================================================================
+- _> skill_sco_02 <_
+==================================================================
+
+=== FreeAction()
+[source,python]
+----
+price: int = 0
+do_end_turn = False
+----
+
+==== Definition
+Does not consume an `Action` point.
+
+==== Types
+
+===== VampireScroll()
+
+The Player who activates the *Thorn of Darkness* spell scroll chooses another hero and steals `1 HP` from him.
+
+Effect::
+
+* target hero loses `1 HP`
+* activating hero gains `1 HP`
+
+Restrictions::
+
+* it can only be activated during the activating Player's own Turn
+* it does not consume an `Action`
+* it does not end the Turn
+* it is single-use, then removed from the game
+* multiple *Thorns of Darkness* may be used in one Turn
+* they may even target the same hero repeatedly
+
+===== HealingPortalScroll()
+
+May be used on self or on any hero during the active Player's Turn.
+
+Effect::
+
+* target hero is moved to any revealed Healing Fountain
+* target hero is fully healed
+* any curse is removed from the target
+
+Restrictions::
+
+* does not consume an `Action`
+* does not end the Turn
+
+===== Combat
+Always followed by *ItemPickUp()*
+
+===== ItemRearrange
+
+Ease-of-life feature, not core gameplay, but still backend-relevant.
+
+Players may rearrange Items inside their Inventory as long as the final state of Items on the ground does not change.
+
+Purpose::
+
+* allows inventory reordering
+* compensates for the fact that rearrangement of a full Inventory category may otherwise require illegal temporary
+use of ground slots
+
+=== TurnEndingFreeAction()
+[source,python]
+----
+price: int = 0
+do_end_turn = True
+----
+
+==== Definition
+A subclass of `FreeAction`.
+After being performed, it ends the current Player's Turn.
+
+==== Types
+
+===== Healing()
+
+Only possible if the Player is on a Healing Fountain.
+
+Effect::
+
+* Player is healed to full health
+* if cursed, the curse is removed
+
+Refer to::
+
+* `bar_skill_01` may decide the resulting HP amount after healing instead of forced full heal
+
+===== Retreat
+
+After a Monster fight, in case of a `loss-outcome` or `tie-outcome`.
+
+Effect::
+
+* Player is moved back to the `LastValidTile` visited during the current Turn
+
+Refer to::
+
+* `bat_skill_01`
+** may be teleported back to where he came from
+** may choose an adjacent `ValidTile`
+
+* `wiz_skill_02`
+** may move back across a wall
+
+===== ItemPickUp
+
+Details::
+
+* automatically follows a *Combat()*, even if no actual Item changes hands
+* also used when picking up an Item from the ground, left there earlier by a Player
+
+Effect::
+
+* Player resolves his Item pickup opportunity
+
+Canonical rule::
+
+* `ItemPickUp` is a `TurnEndingFreeAction`
+
+Consequences::
+
+* by default, once `ItemPickUp` is resolved, the current Turn ends
+* this remains true even if no Item is actually moved
+
+=== Fixed process: Fight()
+[source,python]
+----
+price: int = 0
+do_end_turn = None
+----
+
+==== Definition
+Determined Action progression.
+Entering a Field with a Monster in it results in a Fight.
+
+Exceptions::
+
+* `pri_skill_02`
+* `thi_skill_02`
+
+Also, first time entering an Arena means the plyaer challenges an other Player to a fight.
+
+==== Fight trigger sources
+
+This can happen after::
+
+* `Move`
+* `Blink`
+* `Teleporting`: `<bat_skill_02>`
+* `Discover`
+* first-time entry into an Arena
+** Combat exception: entering Player is attacker
+* being summoned into an Arena
+** this is an `OffTurnEvent`
+** no `Action` point is required for summoning or being summoned
+
+==== Fight structure
+
+After the initial relocation, which must already have decreased Players `nr_of_actions` by one, a Fight consists of:
+
+* Combat()
+** resolve `outcome`
+** final dice arrangement may be stored for `skill_swo_02`
+** `outcome` is determined - determine_outcome() -> str: ["win", "tie", "loss"]
+
+* ItemPickUp()
+** automatically follows `Combat`
+** happens even if no actual Item is moved
+** canonically produces Turn end
+
+==== Fight end sequence
+
+Canonical sequence::
+
+`Combat`
+→ `ItemPickUp`
+→ `PendingTurnEnd(cause=ITEM_PICKUP)`
+→ hook-based rule checks run
+→ either the Turn ends, or the pending Turn-end is canceled
+
+Important::
+
+* there is no alternative core sequence such as `Combat → ItemPickUpNotEnding`
+* `ItemPickUp` always remains canonically Turn-ending
+* any exception acts on the *consequence* of `ItemPickUp`, not on the definition of `ItemPickUp`
+
+=== TurnEndingFreeEvent()
+
+==== Definition
+Automatic events, triggered by player actvity
+
+==== Types
+
+===== Knock-out()
+Once a Players HP reaches 0, Player looses conciousness and his *Turn* ends
+
+.Hook
+[NOTE]
+==================================================================
+*= skill_wrr_02 =*
+==================================================================
+
+===== Recovery()
+At *Turn* start, if a Players HP is exacly 0:
+- player's HP is set to exactly 1
+- *Healing()* is ran
+
+==== Turn-end bridge
+
+Some rules may override the Turn-ending consequence of an otherwise Turn-ending event.
+
+This does *not* redefine the event itself.
+
+Instead:
+
+* the event is resolved normally
+* it creates a pending Turn-end consequence
+* then a rule-specific bridge may cancel that consequence
+
+This is the canonical interpretation for `skill_swo_02`.
+
+== Skill interaction layers around `ItemPickUp`
+
+=== `skill_bar_02`
+
+`skill_bar_02` acts as a *pre-event bypass*.
+
+It may skip the `ItemPickUp` event itself.
+
+Consequences::
+
+* if `ItemPickUp` is skipped, then `ItemPickUp` does not end the Turn
+* this does not weaken the base rule, because the event was not performed
+
+=== `skill_swo_02`
+
+`skill_swo_02` acts as a *post-event bridge*.
+
+It does *not* change the nature of `ItemPickUp`.
+
+Instead:
+
+* `ItemPickUp` resolves normally
+* it creates a pending Turn-end consequence
+* then `skill_swo_02` may cancel that pending Turn-end, if its conditions are fulfilled
+
+Thus, there is no separate `ItemPickUpNotEnding` event.
+
+=== OffTurnEvent
+
+==== Definition
+Backend/runtime event happening outside the affected Player's own Turn.
+
+==== Examples
+
+* being challenged to an Arena fight
+** changes location of Player
+** forces him to fight as defender
+
+* being relocated by hostile Teleport Swap
+** changes location of Player
+
+* HP change by outside actor
+** healed by `bea_skill_02`: `+1 HP`
+** injured by `VampireScroll`: `-1 HP`
+
+
+== Hook-style skill application
+
+The backend may apply skills through hook points.
+
+Recommended hook points around Fight resolution::
+
+* `before_combat`
+* `after_combat`
+* `before_itempickup`
+* `after_itempickup`
+* `before_turn_end_commit`
+* `after_turn_end_commit`
+
+=== Recommended skill placement
+
+* `skill_bar_02`
+** hooks into `before_itempickup`
+** may skip the `ItemPickUp` event
+
+* `skill_swo_02`
+** hooks into `before_turn_end_commit`
+** may cancel the pending Turn-end caused by `ItemPickUp`, if all conditions are fulfilled
+
+== `skill_swo_02` precise interpretation
+
+`skill_swo_02` does *not* create an alternative Fight sequence.
+
+It does *not* replace:
+
+`Combat → ItemPickUpTurnEnding`
+
+with:
+
+`Combat → ItemPickUpNotEnding`
+
+Instead, the sequence stays:
+
+`Combat`
+→ `ItemPickUp`
+→ `PendingTurnEnd(cause=ITEM_PICKUP)`
+
+Then, if the conditions of `skill_swo_02` are fulfilled, the relevant hook may cancel that pending Turn-end.
+
+Typical conditions may include::
+
+* it is still that Player's own Turn
+* the Player still has Action capacity to continue
+* the final stored dice arrangement contains at least one `6`
+
+== Healing and HP timing notes
+
+`OffTurnEvent`s may alter HP outside the affected Player's own Turn.
+
+Examples::
+
+* `bea_skill_02` may heal a Player
+* `VampireScroll` may injure a Player
+* hostile relocation may move a Player onto a Healing Fountain
+
+Therefor Turn-start and Turn-end healing rules must remain invariant-based and not depend on HP changing only inside one's own Turn.
+
+== Summary invariant
+
+`ItemPickUp` is always canonically Turn-ending.
+
+Exceptions are handled in two different ways::
+
+* by skipping the event itself: `skill_bar_02`
+* by canceling the pending Turn-end consequence after the event resolved: `skill_swo_02`
+
+

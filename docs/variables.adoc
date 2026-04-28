@@ -1,0 +1,3 @@
+== Variables
+
+* All players have `total_of_hp` = 5 they start with.

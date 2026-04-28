@@ -1,0 +1,31 @@
+[[BEGIN]]
+= Karak OpenSource
+Ladányi Szilárd Gábor <ladanyi.szilard@ceh.hu>
+:doctype: book
+:author: Ladányi Szilárd
+:description: Development guidelines
+:iconsdir: ./icons
+:imagesdir: ./media/
+:stylesdir: ./css
+:figure-caption:
+:!table-caption:
+:hide-uri-scheme: true
+:toc: left
+:toc-title: ToC
+:linkattrs:
+:toclevels: 4
+:sectnums: True
+:sectnumlevels: 2
+:stylesheet: adoc-github.css
+:source-highlighter: rouge
+:rouge-style: monokai
+//:stylesheet: boot-cerulean.css
+:icons: image
+
+include::variables.adoc[]
+
+include::game_mechanics.adoc[]
+
+include::concepts.adoc[]
+
+include::skills.adoc[]

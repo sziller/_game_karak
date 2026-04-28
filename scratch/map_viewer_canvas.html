@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dungeon Map – CEH demo (Canvas)</title>
+
+<style>
+  body {
+    background: #111;
+    color: #0f0;
+    font-family: monospace;
+    text-align: center;
+  }
+
+  canvas {
+    background: #000;
+    margin: 20px auto;
+    display: block;
+    border: 1px solid #333;
+  }
+
+  button { margin: 4px; }
+
+  .inactive { opacity: 0.3; pointer-events: none; }
+  .active   { opacity: 1.0; pointer-events: auto; }
+</style>
+</head>
+
+<body>
+
+<h1>Dungeon Map – CEH demo (Canvas)</h1>
+
+<div class="active" id="movement-controls">
+  <div><button onclick="resetMap()">❌ Reset</button></div>
+  <div><button onclick="move('N')">⬆️ North</button></div>
+  <div>
+    <button onclick="move('W')">⬅️ West</button>
+    <button onclick="loadMap()">🔄 Refresh</button>
+    <button onclick="move('E')">➡️ East</button>
+  </div>
+  <div><button onclick="move('S')">⬇️ South</button></div>
+</div>
+
+<div class="inactive" id="controls">
+  <button onclick="rotateTile('left')">⟲ Rotate Left</button>
+  <button onclick="confirmTile()">✅ Confirm</button>
+  <button onclick="rotateTile('right')">⟳ Rotate Right</button>
+</div>
+
+<div class="inactive" id="teleport-controls">
+  <input id="teleport-target" placeholder="Teleport ID (1,2,3…)" />
+  <button onclick="confirmTeleport()">🚀 Teleport</button>
+</div>
+
+<div style="margin-top: 20px;">
+  Tiles left: <span id="tiles-left">?</span> |
+  Monsters left: <span id="monster-tiles-left">?</span> |
+  Room X pulled: <span id="roomx-pulled">?</span>
+</div>
+
+<canvas id="mapCanvas"></canvas>
+
+<script>
+/* ============================================================
+   CONFIG
+   ============================================================ */
+
+const TILE_SIZE = 1064;
+const CONTENT_SIZE = 700;
+const CONTENT_OFFSET = (TILE_SIZE - CONTENT_SIZE) / 2;
+const SCALE = 0.075;   // global zoom – change freely
+
+const TILE_DIR = "/media/tiles/";
+const CONTENT_DIR = "/media/tile-content/";
+
+
+/* ============================================================
+   TILE VARIANTS (visual-only, frontend)
+   ============================================================ */
+
+const TILE_VARIANTS = {
+  "tile_rI": 1,
+  "tile_rL": 1,
+  "tile_rT": 3,
+  "tile_cI": 2,
+  "tile_cL": 2,
+  "tile_cT": 3,
+  "tile_cX": 2,
+  "tile_clt": 4    // teleport tiles
+};
+
+
+/* ============================================================
+   STATE
+   ============================================================ */
+
+const api = (p) => {
+  if (p.startsWith("/")) {
+    return "/api" + p;
+  }
+  return "/api/" + p;
+};
+
+
+let tiles = {};
+let pendingTile = null;
+let pendingX = null;
+let pendingY = null;
+let playerX = 0;
+let playerY = 0;
+
+// Visual variant counters (round-robin, per base tile name)
+const variantCounters = new Map();
+
+const canvas = document.getElementById("mapCanvas");
+const ctx = canvas.getContext("2d");
+
+const imageCache = new Map();
+
+/* ============================================================
+   IMAGE LOADER
+   ============================================================ */
+
+function loadImage(src) {
+  if (imageCache.has(src)) {
+    return imageCache.get(src);
+  }
+
+  const img = new Image();
+  img.onload = () => {
+    // redraw once the image is actually ready
+    renderMap();
+  };
+  img.src = src;
+
+  imageCache.set(src, img);
+  return img;
+}
+
+
+function nextVariant(baseName) {
+  const max = TILE_VARIANTS[baseName] || 1;
+
+  const current = variantCounters.get(baseName) || 0;
+  const next = (current % max) + 1;
+
+  variantCounters.set(baseName, next);
+  return next;
+}
+
+
+/* ============================================================
+   DATA HELPERS
+   ============================================================ */
+
+function lastMoveOppositeDoor() {
+  // We don't know direction directly; but we DO know where the pending tile is relative to the last confirmed tile:
+  // pending tile is always where the player moved into.
+  // So the "entry side" is the side that connects back to the previous player tile position.
+  //
+  // We can infer previous position by using player coords and pending coords:
+  // If pendingX/Y are set, the previous tile is one step away.
+  if (pendingTile == null) return null;
+
+  const dx = pendingX - playerX;
+  const dy = pendingY - playerY;
+
+  // NOTE: in your flow, when pending is created, playerX/playerY already equals pendingX/pendingY.
+  // So we can’t infer using that. Instead, store last move direction when move() happens.
+  // We'll implement that below. This function will use lastMoveDir.
+  return null;
+}
+
+// Track last move direction (client-side only)
+let lastMoveDir = null; // "N"|"S"|"E"|"W"|null
+
+function oppositeDir(dir) {
+  return ({N:"S", S:"N", E:"W", W:"E"})[dir];
+}
+
+function expectedEntryDoorForPending() {
+  if (!pendingTile || !lastMoveDir) return null;
+  return oppositeDir(lastMoveDir); // pending must have door open on the side we entered from
+}
+
+function canConfirmPending() {
+  const need = expectedEntryDoorForPending();
+  if (!pendingTile || !need) return false;
+  return !!pendingTile.doors?.[need];
+}
+
+function shouldAllowRotation(doors) {
+  // EXACTLY the same logic you had in the old text-renderer:
+  // - 4-way: no rotation needed
+  // - 2-way straight (NS or EW): rotation is irrelevant in your UI (engine already rotates on placement)
+  const openSides = Object.entries(doors).filter(([_, open]) => open).map(([dir, _]) => dir);
+  if (openSides.length === 4) return false;
+  if (openSides.length === 2) {
+    const set = new Set(openSides);
+    if ((set.has("N") && set.has("S")) || (set.has("E") && set.has("W"))) return false;
+  }
+  return true;
+}
+
+function setRotationUIState() {
+  const controls = document.getElementById("controls");
+  if (!pendingTile) {
+    controls.className = "inactive";
+    return;
+  }
+  controls.className = "active";
+
+  const rotAllowed = shouldAllowRotation(pendingTile.doors);
+  const confirmAllowed = canConfirmPending();
+
+  // enable/disable buttons directly
+  const btnL = controls.querySelector('button[onclick*="rotateTile(\'left\'"]');
+  const btnR = controls.querySelector('button[onclick*="rotateTile(\'right\'"]');
+  const btnC = controls.querySelector('button[onclick*="confirmTile("]');
+
+  if (btnL) btnL.disabled = !rotAllowed;
+  if (btnR) btnR.disabled = !rotAllowed;
+
+  if (btnC) {
+    btnC.disabled = !confirmAllowed;
+    btnC.title = confirmAllowed ? "" : `Cannot confirm: pending tile must have entry door ${expectedEntryDoorForPending()}`;
+  }
+}
+
+
+const tileVisualCache = new Map(); // key = "x,y"
+
+function tileImageName(tile) {
+  if (tile.tile_type === "entrance") {
+    return "tile_start-front.png";
+  }
+
+  const d = tile.doors;
+  const open = ["N","E","S","W"].filter(k => d[k]).join("");
+
+  let base;
+  if (tile.tile_type === "room") {
+    if (open.length === 4) base = "tile_rX";
+    else if (open.length === 3) base = "tile_rT";
+    else if (open === "NS" || open === "EW") base = "tile_rI";
+    else base = "tile_rL";
+  } else if (tile.tile_type === "corridor") {
+    if (open.length === 4) base = "tile_cX";
+    else if (open.length === 3) base = "tile_cT";
+    else if (open === "NS" || open === "EW") base = "tile_cI";
+    else base = "tile_cL";
+  } else if (tile.tile_type === "room_x") {
+    base = "tile_xP";
+  }
+
+  const key = `${tile.x},${tile.y}`;
+  if (!tileVisualCache.has(key)) {
+    tileVisualCache.set(key, nextVariant(base));
+  }
+
+  return `${base}-${tileVisualCache.get(key)}.png`;
+}
+
+
+
+
+/* ============================================================
+   RENDERING
+   ============================================================ */
+
+function renderMap() {
+  const coords = Object.keys(tiles).map(k => k.split(",").map(Number));
+  if (pendingTile) coords.push([pendingX, pendingY]);
+
+  const xs = coords.map(c => c[0]);
+  const ys = coords.map(c => c[1]);
+
+  const minX = Math.min(...xs) - 1;
+  const maxX = Math.max(...xs) + 1;
+  const minY = Math.min(...ys) - 1;
+  const maxY = Math.max(...ys) + 1;
+
+  const width  = (maxX - minX + 1) * TILE_SIZE * SCALE;
+  const height = (maxY - minY + 1) * TILE_SIZE * SCALE;
+
+  canvas.width = width;
+  canvas.height = height;
+
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+  ctx.clearRect(0, 0, canvas.width / SCALE, canvas.height / SCALE);
+
+  for (let y = maxY; y >= minY; y--) {
+    for (let x = minX; x <= maxX; x++) {
+      let tile = tiles[`${x},${y}`];
+      if (pendingTile && x === pendingX && y === pendingY) tile = pendingTile;
+      if (!tile) continue;
+
+      const px = (x - minX) * TILE_SIZE;
+      const py = (maxY - y) * TILE_SIZE;
+
+      // --- TILE ---
+      const tileImg = loadImage(TILE_DIR + tileImageName(tile));
+      const rot = tile.rotation ?? 0;   // backend-authoritative
+
+
+      ctx.save();
+      ctx.translate(px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+      ctx.rotate(rot * Math.PI / 180);
+      ctx.drawImage(tileImg, -TILE_SIZE / 2, -TILE_SIZE / 2);
+      ctx.restore();
+
+      // --- CONTENT ---
+      if (tile.monster || tile.tool) {
+        const contentName = tile.monster || tile.tool;
+        const contentImg = loadImage(CONTENT_DIR + contentName + ".png");
+        ctx.drawImage(
+          contentImg,
+          px + CONTENT_OFFSET,
+          py + CONTENT_OFFSET
+        );
+      }
+
+      // --- PLAYER MARKER (TEMPORARY VISUAL) ---
+      if (x === playerX && y === playerY) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 8;
+        ctx.strokeRect(px + 16, py + 16, TILE_SIZE - 32, TILE_SIZE - 32);
+      }
+    }
+  }
+}
+
+/* ============================================================
+   NETWORK / GAME LOGIC (UNCHANGED)
+   ============================================================ */
+
+async function loadMap() {
+  const r = await fetch(api("map"));
+  const d = await r.json();
+
+  tiles = d.tiles;
+  playerX = d.player.x;
+  playerY = d.player.y;
+
+  document.getElementById("tiles-left").textContent = d.tiles_left;
+  document.getElementById("monster-tiles-left").textContent = d.monsters_left;
+  document.getElementById("roomx-pulled").textContent = d.room_x_pulled;
+
+  const tile = tiles[`${playerX},${playerY}`];
+  document.getElementById("teleport-controls").className =
+    tile && tile.feature && tile.feature.startsWith("tp-") ? "active" : "inactive";
+
+  renderMap();
+  renderTileImages();
+}
+
+async function move(dir) {
+  const r = await fetch(api("move"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ direction: dir, is_mage: false })
+  });
+  const d = await r.json();
+  if (!r.ok) return alert(d.detail);
+  
+  lastMoveDir = dir;
+  
+  playerX = d.new_position.x;
+  playerY = d.new_position.y;
+  
+  if (d.pending) {
+  pendingTile = d.tile;
+  pendingX = playerX;
+  pendingY = playerY;
+  document.getElementById("controls").className = "active";
+  document.getElementById("movement-controls").className = "inactive";
+  setRotationUIState();
+} else {
+  pendingTile = null;
+  document.getElementById("controls").className = "inactive";
+  document.getElementById("movement-controls").className = "active";
+  setRotationUIState();
+}
+
+loadMap();
+}
+
+function rotateTile(dir) {
+  if (!pendingTile) return;
+
+  const delta = (dir === "left") ? -90 : 90;
+  pendingTile.rotation = ((pendingTile.rotation ?? 0) + delta + 360) % 360;
+
+  // Doors must follow rotation (logic), but rotation is the visual truth
+  const order = ["N","E","S","W"];
+  const nd = {};
+  for (const k in pendingTile.doors) {
+    const i = order.indexOf(k);
+    nd[order[(i + (dir === "left" ? 1 : 3)) % 4]] = pendingTile.doors[k];
+  }
+  pendingTile.doors = nd;
+
+  renderMap();
+}
+
+
+
+
+async function confirmTile() {
+if (!pendingTile) return;
+
+if (!canConfirmPending()) {
+  alert(`Cannot confirm: pending tile must have entry door ${expectedEntryDoorForPending()}`);
+  return;
+}
+
+  await fetch(api("confirm_tile"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ x: pendingX, y: pendingY, doors: pendingTile.doors })
+  });
+  pendingTile = null;
+  document.getElementById("controls").className = "inactive";
+  document.getElementById("movement-controls").className = "active";
+  loadMap();
+}
+
+async function confirmTeleport() {
+  const id = document.getElementById("teleport-target").value.trim();
+  await fetch(api("teleport"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_feature: "tp-" + id })
+  });
+  loadMap();
+}
+
+async function resetMap() {
+  variantCounters.clear();
+  tileVisualCache.clear();
+
+  await fetch(api("reset"), { method: "POST" });
+  pendingTile = null;
+  loadMap();
+}
+
+function renderTileImages() {
+    const layer = document.getElementById("tile-images");
+    layer.innerHTML = "";
+
+    const TILE_SIZE = 48;
+
+    for (const key in currentTiles) {
+        const [x, y] = key.split(",").map(Number);
+        const tile = currentTiles[key];
+        if (!tile.img_base) continue;
+
+        const img = document.createElement("img");
+        img.src = `/media/tiles/${tile.img_base}.png`;
+        img.className = "tile";
+
+        const screenX = (x - playerX) * TILE_SIZE + 400;
+        const screenY = (playerY - y) * TILE_SIZE + 300;
+
+        img.style.left = `${screenX}px`;
+        img.style.top = `${screenY}px`;
+        img.style.transform = `rotate(${tile.rotation_q * 90}deg)`;
+
+        layer.appendChild(img);
+    }
+}
+
+
+loadMap();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,530 @@
+/* =====================================================================
+   CÉH Reveal Theme – Pastel / Executive / Low-noise
+   Usage (in .adoc):
+     :revealjs_customtheme: css/ceh-reveal-pastel.css
+
+   Design goals:
+   - elegant, calm, pastel palette
+   - modest heading sizes (no shouting)
+   - consistent rhythm & whitespace
+   - usable for dense governance / strategy content
+   - images/tables/code blocks styled coherently
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   0) PALETTE + GLOBAL TOKENS (single source of truth)
+   --------------------------------------------------------------------- */
+
+:root{
+  /* Core neutrals */
+  --bg:            #f6f7f9;
+  --surface:       #ffffff;
+  --surface-2:     #f1f4f7;
+  --ink:           #1f2937;   /* dark slate */
+  --ink-2:         #4b5563;   /* muted text */
+  --ink-3:         #6b7280;   /* secondary */
+
+  /* Pastel accents (CÉH-friendly) */
+  --accent:        #2f7d6e;   /* calm green-teal (primary accent) */
+  --accent-2:      #6aa8d6;   /* pastel blue */
+  --accent-3:      #d98b8b;   /* pastel red */
+  --accent-4:      #e3c26c;   /* pastel yellow/amber */
+
+  /* Semantic tints */
+  --req-bg:        #eef6f4;   /* requirement block tint */
+  --impl-bg:       #eef3fb;   /* implementation block tint */
+  --note-bg:       #fbf6ea;   /* notes/warnings tint */
+
+  /* Borders / shadows */
+  --border:        #e3e7ee;
+  --border-2:      #d6dce6;
+  --shadow:        0 8px 30px rgba(17, 24, 39, 0.08);
+
+  /* Layout rhythm */
+  --radius:        14px;
+  --radius-sm:     10px;
+  --pad:           16px;
+  --pad-lg:        22px;
+
+  /* Typography */
+  --font-sans:     ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+                   Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+  --font-mono:     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                   "Liberation Mono", "Courier New", monospace;
+
+  /* Type scale (modest headings) */
+  --base:          28px;      /* Reveal default is often too big; tune here */
+  --h1:            1.55em;
+  --h2:            1.22em;
+  --h3:            1.02em;
+
+  /* Links */
+  --link:          var(--accent);
+  --link-hover:    #256a5e;
+
+  /* Code blocks */
+  --code-bg:       #0f172a;   /* deep slate */
+  --code-ink:      #e5e7eb;
+  --code-border:   rgba(255,255,255,0.10);
+}
+
+/* ---------------------------------------------------------------------
+   1) GLOBAL REVEAL BASE
+   --------------------------------------------------------------------- */   
+   
+.reveal {
+  font-family: var(--font-sans);
+  font-size: var(--base);
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.reveal .slides {
+  /* Slightly more breathing room */
+  line-height: 1.42;
+}
+
+/* Disable the "center everything" feel; we control alignment explicitly */
+.reveal section {
+  text-align: left;
+}
+
+/* Optional utility for centered slides (apply with [.center]) */
+.reveal .center { text-align: center; }
+
+/* ---------------------------------------------------------------------
+   2) HEADINGS (modest, executive)
+   --------------------------------------------------------------------- */
+.reveal h1,
+.reveal h2,
+.reveal h3,
+.reveal h4 {
+  letter-spacing: -0.015em;
+  margin: 0 0 0.55em 0;
+  color: var(--ink);
+}
+
+.reveal h1 {
+  font-size: var(--h1);
+  font-weight: 100;
+  font-style: italic
+}
+
+.reveal h2 {
+  font-size: var(--h2);
+  font-weight: 300;
+  padding-bottom: 0.25em;
+  border-bottom: 2px solid var(--border);
+}
+
+.reveal h3 {
+  font-size: var(--h3);
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 0.35em;
+}
+
+.reveal h4 {
+  font-size: 0.92em;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* Make title slide calmer */
+.reveal section:first-of-type h1,
+.reveal section:first-of-type h2 {
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------------
+   3) TEXT, LISTS, EMPHASIS
+   --------------------------------------------------------------------- */
+.reveal p {
+  margin: 0.20em 0 0.35em 0;
+  color: var(--ink);
+}
+
+.reveal small,
+.reveal .small {
+  font-size: 0.78em;
+  color: var(--ink-3);
+}
+
+.reveal strong:not(.r0):not(.r1):not(.r2):not(.r3):not(.r4) {
+  font-weight: 650;
+  color: #111827;
+}
+
+
+.reveal em {
+  color: var(--ink-2);
+}
+
+.reveal ul,
+.reveal ol {
+  margin: 0.10em 0 0.85em 1.05em;
+}
+
+.reveal li {
+  margin: 0.08em 0;
+}
+
+.reveal ul ul,
+.reveal ol ol,
+.reveal ul ol,
+.reveal ol ul {
+  margin-top: 0.15em;
+  margin-bottom: 0.15em;
+}
+
+/* Cleaner bullets (slightly smaller) */
+.reveal ul li::marker {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------
+   4) LINKS
+   --------------------------------------------------------------------- */
+.reveal a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(47, 125, 110, 0.25);
+  padding-bottom: 1px;
+}
+
+.reveal a:hover {
+  color: var(--link-hover);
+  border-bottom-color: rgba(37, 106, 94, 0.45);
+}
+
+/* ---------------------------------------------------------------------
+   5) CONTENT CARDS / CALLOUTS (optional but useful)
+   --------------------------------------------------------------------- */
+/* Use in AsciiDoc:
+   [.card]
+   --
+   content...
+   --
+*/
+.reveal .card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--pad-lg);
+  box-shadow: var(--shadow);
+}
+
+/* Soft semantic blocks:
+   [.req] ... requirement
+   [.impl] ... implementation
+   [.note] ... note/warn/info
+*/
+.reveal .req,
+.reveal .impl,
+.reveal .note {
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: var(--pad);
+  margin: 0.35em 0 0.9em 0;
+  background: var(--surface);
+}
+
+.reveal .req {
+  background: var(--req-bg);
+  border-left: 6px solid var(--accent);
+}
+
+.reveal .impl {
+  background: var(--impl-bg);
+  border-left: 6px solid var(--accent-2);
+}
+
+.reveal .note {
+  background: var(--note-bg);
+  border-left: 6px solid var(--accent-4);
+}
+
+/* Small section labels (optional):
+   [.label]Követelmény
+*/
+.reveal .label {
+  display: inline-block;
+  font-size: 0.72em;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: rgba(17, 24, 39, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.20em 0.60em;
+  margin-bottom: 0.35em;
+}
+
+/* ---------------------------------------------------------------------
+   6) TABLES (keep them readable, less "grid-heavy")
+   --------------------------------------------------------------------- */
+.reveal table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  margin: 0.35em 0 0.9em 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.reveal table thead th {
+  background: var(--surface-2);
+  color: var(--ink);
+  font-weight: 650;
+  border-bottom: 1px solid var(--border);
+}
+
+.reveal table th,
+.reveal table td {
+  padding: 0.55em 0.70em;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.reveal table tr:last-child td {
+  border-bottom: none;
+}
+
+.reveal table td {
+  color: inherit;
+}
+
+/* Highlight a row softly (optional class) */
+.reveal table tr.highlight > td {
+  background: rgba(106, 168, 214, 0.12);
+}
+
+/* ---------------------------------------------------------------------
+   7) CODE / LISTINGS
+   --------------------------------------------------------------------- */
+.reveal pre,
+.reveal code {
+  font-family: var(--font-mono);
+}
+
+.reveal code {
+  font-size: 0.86em;
+  background: rgba(17, 24, 39, 0.06);
+  padding: 0.12em 0.32em;
+  border-radius: 8px;
+  color: #111827;
+}
+
+.reveal pre {
+  background: var(--code-bg) !important;
+  color: var(--code-ink);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius);
+  padding: 0.75em 0.9em !important;
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+
+.reveal pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 0.82em;
+  line-height: 1.35;
+}
+
+/* If you use line numbers, keep them subtle */
+.reveal pre code .hljs-ln-numbers {
+  opacity: 0.45;
+}
+
+/* ---------------------------------------------------------------------
+   8) IMAGES / FIGURES
+   --------------------------------------------------------------------- */
+.reveal section img {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  max-width: 100%;
+  height: auto;
+}
+
+/* Optional: add a soft frame by applying [.imgframe] to an image block */
+.reveal .imgframe img {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 10px;
+  box-shadow: var(--shadow);
+}
+
+/* Captions (if you use them) */
+.reveal .imageblock .title,
+.reveal .listingblock .title,
+.reveal .tableblock .title {
+  font-size: 0.72em;
+  color: var(--ink-3);
+  margin: 0.35em 0 0.15em 0;
+}
+
+/* ---------------------------------------------------------------------
+   9) SLIDE FOOTER / HEADER (optional)
+   --------------------------------------------------------------------- */
+/* Reveal supports footer text via :revealjs_footer:
+   We style it lightly.
+*/
+.reveal .footer {
+  font-size: 0.55em;
+  color: var(--ink-3);
+  opacity: 0.85;
+}
+
+/* Slide numbers: make them quieter */
+.reveal .slide-number {
+  font-size: 0.55em;
+  color: var(--ink-3);
+  background: transparent;
+  right: 18px !important;
+  bottom: 12px !important;
+}
+
+/* Progress bar: pastel */
+.reveal .progress {
+  height: 5px;
+  background: rgba(31, 41, 55, 0.06);
+}
+.reveal .progress span {
+  background: var(--accent);
+}
+
+
+/* ============================================================
+   Capability / Readiness Levels (AsciiDoc roles)
+   ============================================================ */
+
+.reveal .r0 {
+  color: #666699;          /* red */
+  font-weight: 600;
+}
+
+.reveal .r1 {
+  color: #b00020;          /* red */
+  font-weight: 600;
+}
+
+.reveal .r2 {
+  color: #e65100;          /* orange */
+  font-weight: 600;
+}
+
+.reveal .r3 {
+  color: #f9a825;          /* yellow */
+  font-weight: 600;
+}
+
+.reveal .r4 {
+  color: #2e7d32;          /* green */
+  font-weight: 600;
+}
+
+/* ============================================================
+   Capability indicators – rendered via CSS, not glyphs
+   ============================================================ */
+
+.reveal table td .r0 { color: #666699 !important; }
+.reveal table td .r1 { color: #b00020 !important; }
+.reveal table td .r2 { color: #e65100 !important; }
+.reveal table td .r3 { color: #f9a825 !important; }
+.reveal table td .r4 { color: #2e7d32 !important; }
+
+
+.reveal .r0 { color: #666699 !important; }
+.reveal .r1 { color: #b00020 !important; }
+.reveal .r2 { color: #e65100 !important; }
+.reveal .r3 { color: #f9a825 !important; }
+.reveal .r4 { color: #2e7d32 !important; }
+
+
+/* ---------------------------------------------------------------------
+   10) FRAGMENTS (step-by-step reveals)
+   --------------------------------------------------------------------- */
+.reveal .fragment {
+  opacity: 0.15;
+}
+.reveal .fragment.visible {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------
+   11) LAYOUT HELPERS (optional but handy)
+   --------------------------------------------------------------------- */
+/* Two columns without tables (use with open blocks)
+   Example:
+     [.cols]
+     --
+     [.col]
+     content...
+     [.col]
+     content...
+     --
+*/
+.reveal .cols {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+}
+
+.reveal .col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Narrow mode for dense slides: apply [.narrow] on a slide */
+.reveal .narrow {
+  font-size: 0.92em;
+}
+
+/* Wide mode: a bit more spacing */
+.reveal .wide {
+  letter-spacing: 0;
+}
+
+/* ---------------------------------------------------------------------
+   12) PRINT FRIENDLINESS (Reveal PDF export)
+   --------------------------------------------------------------------- */
+@media print {
+  .reveal {
+    background: #fff;
+  }
+  .reveal section img {
+    box-shadow: none !important;
+  }
+  .reveal pre {
+    box-shadow: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   13) OPTIONAL: LIGHT GRID (debug layout)
+   Uncomment if you need alignment debugging
+   ---------------------------------------------------------------------
+.reveal section {
+  outline: 1px dashed rgba(47, 125, 110, 0.18);
+}
+--------------------------------------------------------------------- */
+
+
+/* =====================================================
+   Sidebar blocks (****)
+   ===================================================== */
+
+.reveal .sidebarblock {
+  background: #e0e0e0;
+  border-left: 4px solid var(--accent-2);
+  padding: 0.65em 0.85em;
+  font-size: 0.92em;
+}

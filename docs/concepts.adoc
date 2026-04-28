@@ -1,0 +1,49 @@
+== Further concepts and rules
+
+=== Tiles
+
+Different states of a given Tile:
+
+* `discovered`: <bool>
+** _False_: unplaced but already drawn tiles
+** _True_: means the Tile is already on the Field (location and rotation determined), it also has or has had a monster/
+           item in it, if `type` == _room_
+   `visited`: <bool>
+   *** _False_: as a result of *Peek()* the Tile is fully set and eventually also populated, but has never been entered. 
+                A Tile `archetype_id` = "room_x_arena" is activates a PvP Fight on turning from _False_ -> _True_
+   *** _True_: at least one Player has already occupied the tiles location before, or is now. 
+
+
+=== ValidTile / InvalidTile
+
+_InvalidTile_::
+* Tiles with a living Monster in them are _InvalidTiles_
+* You cannot end (thus start) your *Turn* on an _Invalid Tile_
+
+_ValidTile_::
+* not _InvalidTile's_ are _ValidTiles_
+* you my end your turn on _ValidTiles_, thus you may also retreat to such Tiles
+
+
+=== Movement restriction from monster Tiles
+
+A Player may *not* move *from* a Monster-occupied Tile.
+
+Exceptions::
+
+* _pri_skill_02_
+* _thi_skill_02_
+
+Even these exceptions do *not* allow a Player to *end* his Turn on an `InvalidTile`.
+
+Therefore, in case of `loss-outcome` or `tie-outcome`, such Players are moved back to their current Turn's `LastValidTile`.
+
+=== LastValidTile
+
+`LastValidTile` must be tracked Turn-by-Turn for each Player.
+
+Rules::
+
+* it stores the last `ValidTile` visited by the Player during the current Turn
+* it is guaranteed to reset at Turn end
+* it is used by `Retreat` and related fallback mechanics

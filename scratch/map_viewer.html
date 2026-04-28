@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dungeon Map - CEH demo</title>
+    
+    <style>
+/* =========================================================
+   GLOBAL
+   ========================================================= */
+body {
+    font-family: monospace;
+    background: #111;
+    color: #0f0;
+    text-align: center;
+}
+
+button { margin: 4px; }
+
+.inactive { opacity: 0.3; pointer-events: none; }
+.active   { opacity: 1.0; pointer-events: auto; }
+
+/* =========================================================
+   MAP AREA
+   ========================================================= */
+#map {
+    margin: 20px auto;
+    min-height: 300px;      /* ensures visible box */
+    position: relative;
+}
+
+/* ASCII mode — unchanged behavior */
+#map.ascii {
+    white-space: pre;
+    font-size: 16px;
+}
+
+/* IMAGE mode — camera viewport */
+#map.image {
+    white-space: normal;
+    width: 100vw;
+    height: 30vh;
+    position: relative;
+    overflow: hidden;
+}
+
+/* render surface */
+#mapCanvas {
+    position: absolute;
+    inset: 0;
+    min-width: 100%;
+    min-height: 100%;
+}
+
+/* =========================================================
+   CONTROLS
+   ========================================================= */
+#controls,
+#movement-controls,
+#teleport-controls {
+    margin-top: 20px;
+    transition: opacity 0.3s;
+}
+
+/* =========================================================
+   PANELS UNDER MAP
+   ========================================================= */
+
+/* error box directly under map */
+#errors {
+    font-family: monospace;
+    font-size: 14px;
+    padding: 8px;
+    margin: 10px auto 0 auto;
+    background: #220000;
+    color: #ff7777;
+    max-width: 600px;
+    width: 100%;
+    display: none; /* keep runtime behavior */
+}
+
+/* row containing diagnostics + hero */
+#bottom-row {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 12px;
+    margin: 10px auto 0 auto;
+    max-width: 900px;
+    width: 100%;
+    padding: 0 10px;
+}
+
+/* diagnostics panel */
+#diagnostics {
+    font-family: monospace;
+    font-size: 14px;
+    padding: 8px;
+    background: #111;
+    color: #ddd;
+    width: 100%;
+    max-width: 440px;
+    text-align: left;
+}
+
+/* hero panel */
+#hero {
+    font-family: monospace;
+    font-size: 14px;
+    padding: 8px;
+    background: #111;
+    color: #ddd;
+    width: 100%;
+    max-width: 440px;
+    text-align: left;
+}
+
+/* hero inner box */
+#hero-box {
+    margin-top: 6px;
+    width: 100%;
+    height: 220px;
+    background: #0b0b0b;
+    border: 1px solid #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #777;
+}
+
+/* mobile fallback */
+@media (max-width: 900px) {
+    #bottom-row {
+        flex-direction: column;
+        align-items: center;
+    }
+    #diagnostics,
+    #hero {
+        max-width: 600px;
+    }
+}
+
+/* =========================================================
+   DIAGNOSTIC FRAMES — ALWAYS VISIBLE
+   ========================================================= */
+
+/* map + canvas */
+#map,
+#mapCanvas {
+    outline: 2px solid #ff5555;   /* red */
+}
+
+/* controls */
+#movement-controls,
+#controls,
+#teleport-controls {
+    outline: 1px solid #55ff55;   /* green */
+}
+
+/* error box */
+#errors {
+    outline: 2px solid #ff0000;   /* bright red */
+}
+
+/* panels */
+#diagnostics {
+    outline: 1px solid #5555ff;   /* blue */
+}
+
+#hero {
+    outline: 1px solid #aa55ff;   /* purple */
+}
+</style>
+
+    
+</head>
+<body>
+
+<h1>Dungeon Map - CEH demo</h1>
+
+<div class="active" id="movement-controls">
+    <div>
+        <button onclick="resetMap()">❌ Reset</button>
+    </div>
+    <div>
+        <button onclick="move('N')">⬆️ North</button>
+    </div>
+    <div>
+        <button onclick="move('W')">⬅️ West</button>
+        <button onclick="loadMap()">🔄 Refresh Map</button>
+
+        <button onclick="move('E')">➡️ East</button>
+    </div>
+    <div>
+        <button onclick="move('S')">⬇️ South</button>
+    </div>
+</div>
+
+<div class="inactive" id="controls">
+    <button id="rotate-left" onclick="rotateTile('left')">⟲ Rotate Left</button>
+    <button id="confirm" onclick="confirmTile()">✅ Confirm Placement</button>
+    <button id="rotate-right" onclick="rotateTile('right')">⟳ Rotate Right</button>
+</div>
+<div class="inactive" id="fight-controls">
+    <button onclick="fight()">⚔️ Fight</button>
+</div>
+
+
+<div class="inactive" id="teleport-controls">
+    <input id="teleport-x" placeholder="x" type="number"/>
+    <input id="teleport-y" placeholder="y" type="number"/>
+
+    <button id="teleport-button" onclick="confirmTeleport()">🚀 Teleport</button>
+</div>
+
+<div id="tile-counters" style="margin-top: 20px;">
+    <div>Tiles left: <span id="tiles-left">?</span></div>
+    <div>Monster tiles left: <span id="monster-tiles-left">?</span></div>
+    <div>Room X pulled: <span id="roomx-pulled">?</span></div>
+</div>
+
+<div id="map">
+    <div id="mapCanvas"></div>
+</div>
+
+<!-- ✅ errors directly under map -->
+<div id="errors">
+    <b>Error</b>
+    <pre id="error-content"></pre>
+</div>
+
+<hr>
+
+<!-- ✅ 2-column row: diagnostics + hero -->
+<div id="bottom-row">
+    <div id="diagnostics">
+        <b>Tile diagnostics</b>
+        <pre id="diag-content">(no tile)</pre>
+    </div>
+
+    <div id="hero">
+        <b>Hero</b>
+        <div id="hero-box">
+            <!-- later: <img id="hero-img" ...> -->
+            (hero image placeholder)
+        </div>
+    </div>
+</div>
+
+
+
+<script>
+    // -----------------------------
+// Render mode
+// -----------------------------
+let RENDER_MODE = "image"; // "ascii" | "image"
+// -----------------------------
+// Image rendering config
+// -----------------------------
+const TILE_SIZE = 96;       // native tile px
+const TILE_SCALE = 1.0;     // single global scale factor
+    
+    // -----------------------------
+// Tile variant availability
+// -----------------------------
+const TILE_VARIANTS = {
+    tile_rX: 1,
+    tile_rT: 3,
+    tile_rI: 1,
+    tile_rL: 1,
+
+    tile_xA: 1,
+    tile_xP: 1,
+
+    tile_cI: 2,
+    tile_cL: 2,
+    tile_cX: 2,
+    tile_cT: 3,
+    tile_cIt: 4,
+    tile_cLf: 1,
+    entrance: 1,
+};
+
+    
+    // -----------------------------
+// Tile variant bookkeeping
+// -----------------------------
+const tileVariantCounters = {};   // archetype_id -> next index
+const tileVariantMap = {};        // "x,y" -> variant index
+
+function getTileVariant(tile, x, y) {
+    const key = `${x},${y}`;
+
+    if (tileVariantMap[key] !== undefined) {
+        return tileVariantMap[key];
+    }
+
+    const base = tile.img_base;
+    const max = TILE_VARIANTS[base] ?? 1;
+
+    if (!tileVariantCounters[base]) {
+        tileVariantCounters[base] = 1;
+    }
+
+    const idx = tileVariantCounters[base];
+    tileVariantCounters[base] =
+        (tileVariantCounters[base] % max) + 1;
+
+    tileVariantMap[key] = idx;
+    return idx;
+}
+
+    // --------------------------------------------------------------
+    function setFightActive(active) {
+    document.getElementById("fight-controls").className =
+        active ? "active" : "inactive";
+}
+
+    
+    // -----------------------------
+    // API helper
+    // -----------------------------
+    const api = (p) => {
+    const path = p.startsWith("/") ? p : "/" + p;
+    return "/api" + path;
+};
+
+    let ASCII_TILES = null;
+    async function loadAsciiTiles() {
+    const r = await fetch(api("ascii_tiles"));
+    ASCII_TILES = await r.json();
+}
+    function cloneAsciiTile(tile3x3) {
+    return tile3x3.map(row =>
+        row.map(cell => ({ ...cell }))
+    );
+}
+    const HIGHLIGHT_COLOR = {
+    default: "bright",        // normal tiles
+    red: "bright_red",        // room_x tiles
+    green: "bright_green",
+    yellow: "bright_yellow",
+};
+
+
+
+    // -----------------------------
+    // Client state
+    // -----------------------------
+    let playerX = 0;
+    let playerY = 0;
+    let currentTiles = {};
+
+    let pendingTile = null;
+    let pendingX = null;
+    let pendingY = null;
+
+    // -----------------------------
+    // Map loading
+    // -----------------------------
+    
+    function renderCell(cell) {
+    const COLORS = {
+    default: "#888",
+    bright: "#fff",
+
+    red: "#aa4444",
+    bright_red: "#ff7777",
+
+    green: "#55ff55",
+    bright_green: "#88ff88",
+
+    yellow: "#ffff55",
+    bright_yellow: "#ffffaa",
+};
+
+
+    const color = COLORS[cell.color] || COLORS.default;
+    return `<span style="color:${color}">${cell.ch}</span>`;
+}
+
+
+    
+    // -----------------------------
+// ASCII renderer
+// -----------------------------
+function renderMapAscii() {
+    let xs = [], ys = [];
+    for (const key in currentTiles) {
+        const [x, y] = key.split(",").map(Number);
+        xs.push(x);
+        ys.push(y);
+    }
+    if (pendingTile) {
+        xs.push(pendingX);
+        ys.push(pendingY);
+    }
+
+    const minX = Math.min(...xs) - 2;
+    const maxX = Math.max(...xs) + 2;
+    const minY = Math.min(...ys) - 2;
+    const maxY = Math.max(...ys) + 2;
+
+    let outputRows = [];
+
+    for (let y = maxY; y >= minY; y--) {
+        let row1 = "", row2 = "", row3 = "";
+
+        for (let x = minX; x <= maxX; x++) {
+            let tile = currentTiles[`${x},${y}`];
+            if (pendingTile && x === pendingX && y === pendingY) {
+                tile = pendingTile;
+            }
+
+            const isPlayerHere = (x === playerX && y === playerY);
+
+            let tile3x3;
+            if (!tile) {
+                tile3x3 = [
+                    [{ch:" ",color:"default"},{ch:" ",color:"default"},{ch:" ",color:"default"}],
+                    [{ch:" ",color:"default"},{ch:" ",color:"default"},{ch:" ",color:"default"}],
+                    [{ch:" ",color:"default"},{ch:" ",color:"default"},{ch:" ",color:"default"}],
+                ];
+            } else {
+                const base = ASCII_TILES[tile.archetype_id];
+                tile3x3 = cloneAsciiTile(
+                    rotateAsciiTile(base, tile.rotation_q)
+                );
+
+                if (isPlayerHere) {
+                    for (let r = 0; r < 3; r++) {
+                        for (let c = 0; c < 3; c++) {
+                            const bc = tile3x3[r][c].color ?? "default";
+                            tile3x3[r][c].color =
+                                HIGHLIGHT_COLOR[bc] ?? bc;
+                        }
+                    }
+                }
+
+                if (tile.monster_id) {
+                    tile3x3[1][1] = { ch: "M", color: "yellow" };
+                }
+            }
+
+            row1 += tile3x3[0].map(renderCell).join("");
+            row2 += tile3x3[1].map(renderCell).join("");
+            row3 += tile3x3[2].map(renderCell).join("");
+        }
+
+        outputRows.push(row1, row2, row3);
+    }
+
+    document.getElementById("map").innerHTML =
+        outputRows.join("<br>");
+}
+
+
+// -----------------------------
+// IMAGE renderer
+// -----------------------------
+
+// -----------------------------------------------------------------
+async function loadHero() {
+    try {
+        const r = await fetch(api("player"));
+        if (!r.ok) return;
+
+        const hero = await r.json();
+
+        const box = document.getElementById("hero-box");
+        box.innerHTML = "";
+
+        const img = document.createElement("img");
+        img.src = hero.image_path;
+        img.alt = hero.character;
+        img.style.width = "100%";
+        img.style.height = "100%";
+        img.style.objectFit = "contain";
+        img.style.imageRendering = "pixelated";
+
+        box.appendChild(img);
+    } catch (e) {
+        console.error("Hero load failed", e);
+    }
+}
+// -----------------------------------------------------------------
+
+function renderMapImage() {
+    const mapDiv = document.getElementById("mapCanvas");
+    mapDiv.innerHTML = "";
+
+    // -----------------------------
+    // Compute bounds
+    // -----------------------------
+    let xs = [], ys = [];
+    for (const key in currentTiles) {
+        const [x, y] = key.split(",").map(Number);
+        xs.push(x);
+        ys.push(y);
+    }
+
+    if (xs.length === 0) {
+        return; // nothing to render yet
+    }
+
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    const size = TILE_SIZE * TILE_SCALE;
+
+    // -----------------------------
+    // Camera (centered like ASCII)
+    // -----------------------------
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+
+    const rect = mapDiv.getBoundingClientRect();
+const screenCX = rect.width / 2;
+const screenCY = rect.height / 2;
+
+
+    // -----------------------------
+    // Render tiles
+    // -----------------------------
+    for (const key in currentTiles) {
+        const [x, y] = key.split(",").map(Number);
+        const tile = currentTiles[key];
+
+        const px = (x - centerX) * size + screenCX;
+        const py = (centerY - y) * size + screenCY;
+
+        const tileBox = document.createElement("div");
+        tileBox.style.position = "absolute";
+        
+        tileBox.style.left = `${px - size / 2}px`;
+        tileBox.style.top  = `${py - size / 2}px`;
+
+        
+        tileBox.style.width = `${size}px`;
+        tileBox.style.height = `${size}px`;
+        tileBox.style.pointerEvents = "none";
+
+        // Base tile
+        const baseImg = document.createElement("img");
+        if (tile.archetype_id === "entrance") {
+            baseImg.src = "/static/media/tiles/entrance.png";
+        } else {
+            const variant = getTileVariant(tile, x, y);
+            baseImg.src = `/media/tiles/${tile.img_base}-${variant}.png`;
+        }
+
+        baseImg.style.width = "100%";
+baseImg.style.height = "100%";
+baseImg.style.position = "absolute";
+baseImg.style.left = "0";
+baseImg.style.top = "0";
+baseImg.style.display = "block";
+baseImg.style.transformOrigin = "50% 50%";
+baseImg.style.transform = `rotate(${tile.rotation_q * 90}deg)`;
+
+
+        tileBox.appendChild(baseImg);
+
+        // Monster (upright, scaled with tile)
+    
+    // Content layer (mutually exclusive)
+if (tile.monster_id) {
+    const img = document.createElement("img");
+    img.src = `/media/tile-content/${tile.monster_id}.png`;
+    img.style.position = "absolute";
+    img.style.width = "70%";
+    img.style.height = "70%";
+    img.style.left = "50%";
+    img.style.top = "50%";
+    img.style.transform = "translate(-50%, -50%)";
+    tileBox.appendChild(img);
+
+} else if (tile.object_id) {
+    const img = document.createElement("img");
+    img.src = `/media/tile-content/${tile.object_id}.png`;
+    img.style.position = "absolute";
+    img.style.width = "70%";
+    img.style.height = "70%";
+    img.style.left = "50%";
+    img.style.top = "50%";
+    img.style.transform = "translate(-50%, -50%)";
+    tileBox.appendChild(img);
+}
+
+
+
+        // Player frame
+        if (x === playerX && y === playerY) {
+            const frame = document.createElement("div");
+            frame.style.position = "absolute";
+            frame.style.inset = "0";
+            frame.style.border = "3px solid #00ffcc";
+            tileBox.appendChild(frame);
+        }
+
+        mapDiv.appendChild(tileBox);
+    }
+}
+
+
+
+    async function loadMap() {
+        const response = await fetch(api("map"));
+        const data = await response.json();
+
+        currentTiles = data.tiles;
+
+        if (data.player) {
+            playerX = data.player.x;
+            playerY = data.player.y;
+        }
+
+        document.getElementById("tiles-left").textContent = data.tiles_left;
+        document.getElementById("monster-tiles-left").textContent = data.monsters_left;
+        document.getElementById("roomx-pulled").textContent = data.room_x_pulled;
+
+        const map = document.getElementById("map");
+        map.className = (RENDER_MODE === "ascii") ? "ascii" : "image";
+
+        if (RENDER_MODE === "ascii") {
+            renderMapAscii();
+        } else {
+            renderMapImage();
+}
+
+
+
+        const playerTile = currentTiles[`${playerX},${playerY}`];
+ 
+        if (playerTile && playerTile.monster_id) {
+        setFightActive(true);
+        } else {
+        setFightActive(false);
+        }
+        
+        if (playerTile && playerTile.feature === "teleport") {
+        setTeleportActive(true);
+        } else {
+        setTeleportActive(false);
+        }
+        renderDiagnostics(data);
+    }
+
+    // -----------------------------
+    // UI helpers
+    // -----------------------------
+    function setControlsActive(active) {
+        document.getElementById("controls").className = active ? "active" : "inactive";
+    }
+
+    function setMovementActive(active) {
+        document.getElementById("movement-controls").className = active ? "active" : "inactive";
+    }
+
+    function setTeleportActive(active) {
+        document.getElementById("teleport-controls").className = active ? "active" : "inactive";
+        document.getElementById("teleport-button").className = active ? "active" : "inactive";
+    }
+    
+    function rotateAsciiTile(tile, rotation) {
+    let t = tile;
+    for (let i = 0; i < (rotation % 4); i++) {
+        t = [
+            [t[2][0], t[1][0], t[0][0]],
+            [t[2][1], t[1][1], t[0][1]],
+            [t[2][2], t[1][2], t[0][2]],
+        ];
+    }
+    return t;
+}
+    
+    // -----------------------------
+    // Fight
+    // -----------------------------
+    
+    async function fight() {
+    try {
+        const r = await fetch(api("fight"), { method: "POST" });
+        const data = await r.json();
+
+        if (!r.ok) {
+            showError(data.detail || "Fight failed");
+            return;
+        }
+
+        await loadMap(); // authoritative refresh
+
+    } catch (e) {
+        console.error(e);
+        showError("Fight error");
+    }
+}
+
+    
+    
+    // -----------------------------
+    // Movement
+    // -----------------------------
+    async function move(direction) {
+        try {
+            const response = await fetch(api("move"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ direction, is_mage: false })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                showError("Cannot move: " + data.detail);
+                // alert("Cannot move: " + data.detail);
+                return;
+            }
+
+            playerX = data.new_position.x;
+            playerY = data.new_position.y;
+
+            if (data.pending) {
+                pendingTile = data.tile;
+                pendingX = playerX;
+                pendingY = playerY;
+
+                setControlsActive(true);
+                setMovementActive(false);
+            } else {
+                pendingTile = null;
+                setControlsActive(false);
+                setMovementActive(true);
+            }
+            
+            
+            await loadMap();
+
+        } catch (err) {
+            console.error(err);
+            showError("Error communicating with server.");
+            // alert("Error communicating with server.");
+        }
+    }
+
+    // -----------------------------
+    // Rotation (SERVER AUTHORITATIVE)
+    // -----------------------------
+    async function rotateTile(direction) {
+    if (!pendingTile) return;
+
+    try {
+        const r = await fetch(api("rotate_tile"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                x: pendingX,
+                y: pendingY,
+                direction: direction
+            })
+        });
+
+        const text = await r.text();
+        if (!r.ok) {
+            showError(text);
+            // alert(text);
+            return;
+        }
+
+        const data = JSON.parse(text);
+
+        // Update local copy from server response
+        pendingTile.doors = data.doors;
+        pendingTile.rotation_q = data.rotation_q;
+        
+        await loadMap();
+
+    } catch (e) {
+        console.error(e);
+        showError("Rotation failed");
+        // alert("Rotation failed");
+    }
+}
+
+
+    // -----------------------------
+    // Confirm placement
+    // -----------------------------
+    async function confirmTile() {
+        if (!pendingTile) return;
+
+        try {
+            const response = await fetch(api("confirm_tile"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ x: pendingX, y: pendingY })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                showError("Confirm failed: " + data.detail);
+                // alert("Confirm failed: " + data.detail);
+                return;
+            }
+
+            pendingTile = null;
+            pendingX = null;
+            pendingY = null;
+
+            setControlsActive(false);
+            setMovementActive(true);
+            
+            await loadMap();
+
+        } catch (err) {
+            console.error(err);
+            showError("Error confirming tile.");
+            // alert("Error confirming tile.");
+        }
+    }
+
+    // -----------------------------
+    // Teleport
+    // -----------------------------
+    async function confirmTeleport() {
+    const x = parseInt(document.getElementById("teleport-x").value, 10);
+    const y = parseInt(document.getElementById("teleport-y").value, 10);
+
+    if (isNaN(x) || isNaN(y)) {
+        showError("Invalid teleport coordinates");
+        return;
+    }
+
+    try {
+        const response = await fetch(api("teleport"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ x, y })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            showError("Teleport failed: " + data.detail);
+            return;
+        }
+
+        playerX = data.new_position.x;
+        playerY = data.new_position.y;
+
+        document.getElementById("teleport-x").value = "";
+        document.getElementById("teleport-y").value = "";
+
+        await loadMap();
+    } catch (err) {
+        console.error(err);
+        showError("Teleport error.");
+    }
+}
+
+    
+    function renderDiagnostics(mapData) {
+    const diag = document.getElementById("diag-content");
+    const lines = [];
+
+    // -----------------------
+    // Player tile info
+    // -----------------------
+    const px = mapData.player.x;
+    const py = mapData.player.y;
+    const key = `${px},${py}`;
+    const tile = mapData.tiles[key];
+
+    lines.push("=== Player Tile ===");
+    if (!tile) {
+        lines.push("(no tile at player position)");
+    } else {
+        lines.push(`Position: (${px}, ${py})`);
+        lines.push(`Tile type: ${tile.tile_type}`);
+        lines.push(`Archetype: ${tile.archetype_id}`);
+        lines.push(`Rotation: ${tile.rotation_q}`);
+        lines.push("Doors:");
+        lines.push(`  N: ${tile.doors.N ? "open" : "closed"}`);
+        lines.push(`  E: ${tile.doors.E ? "open" : "closed"}`);
+        lines.push(`  S: ${tile.doors.S ? "open" : "closed"}`);
+        lines.push(`  W: ${tile.doors.W ? "open" : "closed"}`);
+        lines.push(`Monster: ${tile.monster_id ?? "-"}`);
+        lines.push(`Feature: ${tile.feature ?? "-"}`);
+    }
+
+    // -----------------------
+    // Tile pocket
+    // -----------------------
+    lines.push("");
+    lines.push("=== Tile Pocket ===");
+
+    const pocket = mapData.tile_pocket ?? [];
+    if (pocket.length === 0) {
+        lines.push("(empty)");
+    } else {
+        pocket.forEach((t, i) => {
+            lines.push(
+                `#${i + 1}: ${t.archetype_id} (${t.tile_type})`
+                + (t.feature ? ` | feature: ${t.feature}` : "")
+            );
+        });
+    }
+
+    // -----------------------
+    // Monster choices
+    // -----------------------
+    lines.push("");
+    lines.push("=== Monster Choices ===");
+
+    const monsters = mapData.monster_choices ?? [];
+    if (monsters.length === 0) {
+        lines.push("(none)");
+    } else {
+        monsters.forEach((m, i) => {
+            lines.push(`#${i + 1}: ${m}`);
+        });
+    }
+
+    diag.textContent = lines.join("\n");
+}
+
+
+
+    
+    // -----------------------------
+    // Reset
+    // -----------------------------
+    async function resetMap() {
+        try {
+            const r = await fetch(api("reset"), { method: "POST" });
+            if (!r.ok) {
+                const e = await r.json();
+                showError("Reset failed: " + e.detail);
+                // alert("Reset failed: " + e.detail);
+                return;
+            }
+
+            pendingTile = null;
+            setControlsActive(false);
+            setMovementActive(true);
+            
+            await loadMap();
+
+        } catch (err) {
+            console.error(err);
+            showError("Error resetting map.");
+            // alert("Error resetting map.");
+        }
+    }
+
+    // -----------------------------
+// Rendering – ASCII (debug renderer, finalized)
+// -----------------------------
+// This renderer is now considered feature-complete.
+// Image rendering will be added alongside it.
+
+
+    (async () => {
+    await loadAsciiTiles();
+    await loadMap();
+    await loadHero();
+})();
+
+
+    function showError(msg) {
+    const box = document.getElementById("errors");
+    const content = document.getElementById("error-content");
+    content.textContent = msg;
+    box.style.display = "block";
+}
+
+function clearError() {
+    const box = document.getElementById("errors");
+    const content = document.getElementById("error-content");
+    content.textContent = "";
+    box.style.display = "none";
+}
+
+</script>
+
+
+</body>
+</html>
+
