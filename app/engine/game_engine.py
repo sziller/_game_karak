@@ -9,7 +9,7 @@ import copy
 import random
 
 # --- External pools (new canonical module) ---
-from domain.game_entities import TILE_POOL as _TILE_POOL, MONSTER_POOL as _MONSTER_POOL, ITEM_FEATURES, get_monster_by_id
+from domain.game_entities import TILE_POOL as _TILE_POOL, MONSTER_POOL as _MONSTER_POOL, ITEM_FEATURES, get_monster_by_id, serialize_item_ref
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
 
@@ -90,6 +90,11 @@ class TileNode:
         self.passable_neighbors: Dict[DIRECTION, bool] = {}
 
     def to_dict(self) -> dict:
+        object_item = None
+
+        if self.object_id is not None:
+            object_item = serialize_item_ref(self.object_id)
+
         return {
             "x": self.x,
             "y": self.y,
@@ -99,9 +104,18 @@ class TileNode:
             "rotation_q": self.rotation_q,
             "doors": self.doors,
             "monster_id": self.monster_id,
-            "object_id": self.object_id,  # 🔑 REQUIRED
+
+            # Runtime identity.
+            # Use this for game logic, diagnostics, comparisons.
+            "object_id": self.object_id,
+
+            # Renderable frontend object.
+            # FE must use object_item["image_path"], never object_id-derived paths.
+            "object_item": object_item,
+
             "tool": self.tool,
-            "feature": self.feature}
+            "feature": self.feature,
+        }
 
 
 TurnMode = Literal[ "idle",
@@ -1341,6 +1355,7 @@ class DungeonGraph:
                 "slot_group": slot_group,
                 "slot_index": slot_index,
                 "item_id": removed,
+                "item": serialize_item_ref(removed),
                 "inventory": active.inventory.to_dict(),
                 "tile": tile.to_dict(),
             }
@@ -1384,6 +1399,7 @@ class DungeonGraph:
                 "slot_group": slot_group,
                 "slot_index": slot_index,
                 "item_id": ground_item_id,
+                "item": serialize_item_ref(ground_item_id),
                 "inventory": active.inventory.to_dict(),
                 "tile": tile.to_dict(),
             }
@@ -1409,7 +1425,9 @@ class DungeonGraph:
             "slot_group": slot_group,
             "slot_index": slot_index,
             "picked_item_id": ground_item_id,
+            "picked_item": serialize_item_ref(ground_item_id),
             "dropped_item_id": removed,
+            "dropped_item": serialize_item_ref(removed),
             "inventory": active.inventory.to_dict(),
             "tile": tile.to_dict(),
         }
@@ -1447,6 +1465,7 @@ class DungeonGraph:
             "ok": True,
             "status": "treasure_picked_up",
             "item_id": item_id,
+            "item": serialize_item_ref(item_id),
             "value": value,
             "inventory": active.inventory.to_dict(),
             "tile": tile.to_dict(),
@@ -1496,12 +1515,14 @@ class DungeonGraph:
             raise ValueError("Active tile not found.")
 
         ground_item_id = tile.object_id
-        ground_item = ITEM_FEATURES.get(ground_item_id) if ground_item_id else None
+        ground_item = serialize_item_ref(ground_item_id)
         ground_item_type = ground_item["item_type"] if ground_item else None
 
         def build_slot(slot_group: SlotGroup, slot_index: int, item_id: Optional[str]) -> dict:
             slot_has_item = item_id is not None
             ground_has_item = ground_item_id is not None
+
+            slot_item = serialize_item_ref(item_id)
 
             can_receive_ground_item = False
             receive_reason = None
@@ -1539,7 +1560,14 @@ class DungeonGraph:
             return {
                 "slot_group": slot_group,
                 "slot_index": slot_index,
+
+                # Runtime identity
                 "item_id": item_id,
+
+                # Renderable item object
+                "item": slot_item,
+
+                # UI/action state
                 "slot_has_item": slot_has_item,
                 "ground_has_item": ground_has_item,
                 "can_receive_ground_item": can_receive_ground_item,
@@ -1552,8 +1580,13 @@ class DungeonGraph:
         return {
             "player_id": active.player_id,
             "inventory": active.inventory.to_dict(),
+
+            # Runtime ground identity
             "ground_item_id": ground_item_id,
+
+            # Renderable ground item object
             "ground_item": ground_item,
+
             "treasure_ui": {
                 "ground_item_is_treasure": bool(ground_item and ground_item["item_type"] == "treasure"),
                 "pickup_enabled": bool(ground_item and ground_item["item_type"] == "treasure"),
@@ -1614,6 +1647,7 @@ class DungeonGraph:
                 "ok": False,
                 "status": "inventory_full",
                 "item_id": item_id,
+                "item": serialize_item_ref(item_id),
                 "reason": res.get("reason"),
                 "inventory": active.inventory.to_dict(),
             }
@@ -1624,6 +1658,7 @@ class DungeonGraph:
             "ok": True,
             "status": "picked_up",
             "item_id": item_id,
+            "item": serialize_item_ref(item_id),
             "storage": res.get("storage"),
             "slot_index": res.get("slot_index"),
             "inventory": active.inventory.to_dict(),
@@ -1651,6 +1686,7 @@ class DungeonGraph:
             "ok": True,
             "status": "dropped",
             "item_id": item_id,
+            "item": serialize_item_ref(item_id),
             "slot_group": slot_group,
             "slot_index": slot_index,
             "inventory": active.inventory.to_dict(),

@@ -164,6 +164,7 @@
     let latestMap = null;
     let latestFight = null;
     let selectedCurseTargetPlayerId = null;
+    let skillUiState = {};
 
     /* =========================================================
        MAP RENDERER (adapted from existing map_viewer.html)
@@ -300,9 +301,10 @@
                 img.style.top = "50%";
                 img.style.transform = "translate(-50%, -50%)";
                 tileBox.appendChild(img);
-            } else if (tile.object_id) {
+            } else if (tile.object_item) {
                 const img = document.createElement("img");
-                img.src = `/media/tile-content/${tile.object_id}.png`;
+                img.src = itemImagePath(tile.object_item);
+                img.alt = tile.object_item.item_id || "";
                 img.style.position = "absolute";
                 img.style.width = "70%";
                 img.style.height = "70%";
@@ -814,23 +816,27 @@
         await refreshAll();
     }
 
-    function itemImg(itemId) {
-        if (!itemId) return "";
-        return `/static/media/tile-content/${itemId}.png`;
+    function itemImagePath(item) {
+        if (!item || !item.image_path) {
+            throw new Error("Missing item.image_path in API response.");
+        }
+
+        return item.image_path;
     }
 
     function renderGround(data) {
         const box = document.getElementById("ground-box");
         if (!box) return;
 
-        const groundItemId = data?.ground_item_id || null;
+        const groundItem = data?.ground_item || null;
+        const groundItemId = data?.ground_item_id || groundItem?.item_id || null;
 
         box.innerHTML = `
         <div class="ground-title">Ground</div>
         <div class="ground-slot">
             <div class="ground-image">
-                ${groundItemId
-            ? `<img src="${itemImg(groundItemId)}" alt="${groundItemId}">`
+                ${groundItem
+            ? `<img src="${itemImagePath(groundItem)}" alt="${groundItemId}">`
             : `<span class="muted">(empty)</span>`}
             </div>
             <div class="ground-id">${groundItemId || "-"}</div>
@@ -848,15 +854,16 @@
     }
 
     function renderSingleSlotCard(slotGroup, slot) {
-        const itemId = slot?.item_id;
+        const item = slot?.item || null;
+        const itemId = slot?.item_id || item?.item_id || null;
         const btnLabel = slotActionLabel(slot);
         const disabled = slotActionDisabled(slot);
 
         return `
         <div style="border:1px solid #333; background:#151515; padding:8px; min-width:100px;">
             <div style="height:56px; display:flex; align-items:center; justify-content:center;">
-                ${itemId
-            ? `<img src="${itemImg(itemId)}" alt="${itemId}" style="max-width:48px; max-height:48px; image-rendering:pixelated;">`
+                ${item
+            ? `<img src="${itemImagePath(item)}" alt="${itemId}" style="max-width:48px; max-height:48px; image-rendering:pixelated;">`
             : `<span class="muted">(empty)</span>`}
             </div>
             <div style="margin-top:6px; font-size:12px;">slot ${slot?.slot_index ?? "-"}</div>
@@ -898,25 +905,26 @@
         let html = `<div style="margin-bottom:10px;"><b>${label}</b><div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:6px;">`;
 
         slots.forEach((slot) => {
-            const itemId = slot.item_id;
+            const item = slot?.item || null;
+            const itemId = slot?.item_id || item?.item_id || null;
             const btnLabel = slotActionLabel(slot);
             const disabled = slotActionDisabled(slot);
 
             html += `
-            <div style="border:1px solid #333; background:#151515; padding:8px; min-width:100px;">
-                <div style="height:56px; display:flex; align-items:center; justify-content:center;">
-                    ${itemId
-                ? `<img src="${itemImg(itemId)}" alt="${itemId}" style="max-width:48px; max-height:48px; image-rendering:pixelated;">`
+        <div style="border:1px solid #333; background:#151515; padding:8px; min-width:100px;">
+            <div style="height:56px; display:flex; align-items:center; justify-content:center;">
+                ${item
+                ? `<img src="${itemImagePath(item)}" alt="${itemId}" style="max-width:48px; max-height:48px; image-rendering:pixelated;">`
                 : `<span class="muted">(empty)</span>`}
-                </div>
-                <div style="margin-top:6px; font-size:12px;">slot ${slot.slot_index}</div>
-                <div style="font-size:12px; color:#aaa;">${itemId || "-"}</div>
-                <button
-                    onclick="inventorySlotAction('${slotGroup}', ${slot.slot_index})"
-                    ${disabled ? "disabled" : ""}
-                >${btnLabel}</button>
             </div>
-        `;
+            <div style="margin-top:6px; font-size:12px;">slot ${slot.slot_index}</div>
+            <div style="font-size:12px; color:#aaa;">${itemId || "-"}</div>
+            <button
+                onclick="inventorySlotAction('${slotGroup}', ${slot.slot_index})"
+                ${disabled ? "disabled" : ""}
+            >${btnLabel}</button>
+        </div>
+    `;
         });
 
         html += `</div></div>`;
@@ -1362,19 +1370,38 @@
         }
 
         const fightBtn = document.getElementById("fight-start-btn");
+        const finishItemPickupBtn = document.getElementById("finish-itempickup-btn");
+        const endTurnBtn = document.getElementById("end-turn-btn");
         const teleportBtn = document.getElementById("teleport-btn");
+
+        const mode = turn?.mode || "idle";
+
+        const isIdle = mode === "idle";
+        const isPendingTile = mode === "pending_tile";
+        const isFight = mode === "fight";
+        const isItemPickup = mode === "item_pickup";
+        const isAwaitingCurse = mode === "awaiting_curse_choice";
+        const isAwaitingHeal = mode === "awaiting_heal_choice";
 
         const canStartFight =
             !!currentTile?.monster_id &&
             !!turn &&
-            (turn.mode === "idle" || turn.mode === "pending_tile");
+            (isIdle || isPendingTile);
 
         if (fightBtn) {
             fightBtn.disabled = !canStartFight;
         }
 
+        if (finishItemPickupBtn) {
+            finishItemPickupBtn.disabled = !isItemPickup;
+        }
+
+        if (endTurnBtn) {
+            endTurnBtn.disabled = isFight || isItemPickup || isAwaitingCurse || isAwaitingHeal;
+        }
+
         if (teleportBtn) {
-            teleportBtn.disabled = !(currentTile && currentTile.feature === "teleport");
+            teleportBtn.disabled = !(currentTile && currentTile.feature === "teleport" && isIdle);
         }
     }
 
@@ -1427,83 +1454,6 @@
 
         selectedCurseTargetPlayerId = null;
         await refreshAll();
-    }
-
-    async function toggleSkillUiSelection(playerId, skillId) {
-        const activePlayerId = latestPlayers?.active_player?.player_id;
-        if (playerId !== activePlayerId) {
-            showError("Only the active player's skill UI can be changed.");
-            return;
-        }
-
-        const r = await fetch(gameApi("/skills/toggle"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({skill_id: skillId})
-        });
-
-        const data = await r.json();
-        if (!r.ok) {
-            showError(data.detail || "Skill toggle failed.");
-            return;
-        }
-
-        await refreshAll();
-    }
-
-    async function stepSkillUiValue(playerId, skillId, delta) {
-        const activePlayerId = latestPlayers?.active_player?.player_id;
-        if (playerId !== activePlayerId) {
-            showError("Only the active player's skill value can be changed.");
-            return;
-        }
-
-        const activePlayer = latestPlayers?.active_player || null;
-        const skillsUi = activePlayer?.skills_ui || [];
-        let currentSkill = null;
-
-        for (const row of skillsUi) {
-            for (const skill of row) {
-                if (skill.skill_id === skillId) {
-                    currentSkill = skill;
-                    break;
-                }
-            }
-            if (currentSkill) break;
-        }
-
-        const currentHp = activePlayer?.hp?.current ?? 1;
-        const maxHp = activePlayer?.hp?.max ?? 5;
-
-        const currentValue = currentSkill?.value ?? currentHp;
-        const nextValue = Math.max(currentHp, Math.min(maxHp, currentValue + delta));
-
-        const r = await fetch(gameApi("/skills/set_value"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                skill_id: skillId,
-                value: nextValue
-            })
-        });
-
-        const data = await r.json();
-        if (!r.ok) {
-            showError(data.detail || "Skill value update failed.");
-            return;
-        }
-
-        await refreshAll();
-    }
-
-    function pulseSkillUiButton(playerId, skillId) {
-        const activePlayerId = latestPlayers?.active_player?.player_id;
-        if (playerId !== activePlayerId) {
-            showError("Only the active player's skill UI can be changed.");
-            return;
-        }
-
-        showMessage(`Skill button pressed: ${skillId}`, "info", "Info");
     }
 
     async function fightStart() {

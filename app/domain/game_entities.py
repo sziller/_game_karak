@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypedDict, Literal, Optional, List
+from typing import TypedDict, Literal, Optional, List, Any
 from typing import NamedTuple
 
 # ============================================================
@@ -40,6 +40,55 @@ def tile(*,
         "feature": feature,
     }
 
+ITEM_ASSET_BASE_PATH = "/static/media/tile-content"
+
+
+def get_item_feature(item_id: Optional[str]) -> Optional[dict[str, Any]]:
+    if not item_id:
+        return None
+
+    try:
+        return ITEM_FEATURES[item_id]
+    except KeyError:
+        raise ValueError(f"Unknown item_id: {item_id!r}")
+
+
+def get_item_image_path(item_id: Optional[str]) -> Optional[str]:
+    item = get_item_feature(item_id)
+    if item is None:
+        return None
+
+    img_file = item.get("img_file")
+    if not img_file:
+        raise ValueError(f"Missing img_file for item_id: {item_id!r}")
+
+    return f"{ITEM_ASSET_BASE_PATH}/{img_file}"
+
+
+def serialize_item_ref(item_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """
+    Serialize an item reference for frontend rendering.
+
+    item_id:
+        Runtime/gameplay identity.
+
+    img_file:
+        Static archetype filename.
+
+    image_path:
+        Fully resolved frontend path. The frontend must use this directly.
+    """
+    if not item_id:
+        return None
+
+    item = get_item_feature(item_id)
+    if item is None:
+        return None
+
+    return {
+        **item,
+        "image_path": get_item_image_path(item_id),
+    }
 
 TILE_POOL: List[TileArchetype] = (
 
@@ -161,47 +210,55 @@ TILE_POOL: List[TileArchetype] = (
 # Monster archetypes
 # ============================================================
 
-def monster(
-    *,
-    monster_id: str,
-    strength: int,
-    loot_id: str,
-    img_file: str,
-) -> MonsterArchetype:
+def monster(*,
+            monster_id: str,
+            strength: int,
+            loot_id: str,
+            img_file: str,
+            sort: str) -> MonsterArchetype:
     """
     Factory for monster archetypes.
 
     Monsters are immutable archetypes.
     Instances are created elsewhere.
     """
-    return {
-        "monster_id": monster_id,
-        "strength": strength,
-        "loot_id": loot_id,
-        "img_file": img_file,
-    }
-
+    return {"monster_id": monster_id,
+            "strength": strength,
+            "loot_id": loot_id,
+            "img_file": img_file,
+            "sort": sort}
 
 class MonsterArchetype(TypedDict):
+    """=== Monster basics ==="""
     monster_id: str
     strength: int
     loot_id: str
     img_file: str
+    sort: str
 
 
 MONSTER_POOL: List[MonsterArchetype] = (
+    [monster(monster_id="GiantRat",         strength=5,     loot_id="dagger",   sort="LIV", img_file="GiantRat.png")] * 8 +
+    [monster(monster_id="GiantSpider",      strength=6,     loot_id="heal",     sort="LIV", img_file="GiantSpider.png")] * 4 +
+    [monster(monster_id="GiantBat",         strength=6,     loot_id="thorn",    sort="LIV", img_file="GiantBat.png")] * 6 +
+    [monster(monster_id="SkeletonTurnkey",  strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 12 +
+    [monster(monster_id="SkeletonWarrior",  strength=9,     loot_id="sword",    sort="UND", img_file="SkeletonWarrior.png")] * 5 +
+    [monster(monster_id="SkeletonKing",     strength=10,    loot_id="axe",      sort="UND", img_file="SkeletonKing.png")] * 3 +
+    [monster(monster_id="SkeletalMage",     strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 2 +
+    [monster(monster_id="Mummy",            strength=7,     loot_id="fireball", sort="UND", img_file="Mummy.png")] * 8 +
+    [monster(monster_id="Fallen",           strength=12,    loot_id="treasure", sort="UND", img_file="Fallen.png")] * 2 +
+    [monster(monster_id="Dragon",           strength=15,    loot_id="ruby",     sort="LIV", img_file="Dragon.png")] * 1 +
+    [monster(monster_id="Chest",            strength=0,     loot_id="treasure", sort="ITM", img_file="Chest.png")] * 10
+    +
 
-    [monster(monster_id="GiantRat",         strength=5,     loot_id="dagger",   img_file="GiantRat.png")] * 8 +
-    [monster(monster_id="GiantSpider",      strength=6,     loot_id="heal",     img_file="GiantSpider.png")] * 4 +
-    [monster(monster_id="GiantBat",         strength=6,     loot_id="thorn",    img_file="GiantBat.png")] * 6 +
-    [monster(monster_id="SkeletonTurnkey",  strength=8,     loot_id="key",      img_file="SkeletonTurnkey.png")] * 12 +
-    [monster(monster_id="SkeletonWarrior",  strength=9,     loot_id="sword",    img_file="SkeletonWarrior.png")] * 5 +
-    [monster(monster_id="SkeletonKing",     strength=10,    loot_id="axe",      img_file="SkeletonKing.png")] * 3 +
-    [monster(monster_id="SkeletalMage",     strength=11,    loot_id="fist",     img_file="SkeletalMage.png")] * 2 +
-    [monster(monster_id="Mummy",            strength=7,     loot_id="fireball", img_file="Mummy.png")] * 8 +
-    [monster(monster_id="Fallen",           strength=12,    loot_id="treasure", img_file="Fallen.png")] * 2 +
-    [monster(monster_id="Dragon",           strength=15,    loot_id="ruby",     img_file="Dragon.png")] * 1 +
-    [monster(monster_id="Chest",            strength=0,     loot_id="treasure", img_file="Chest.png")] * 10
+# )
+# MONSTER_POOL_EXT: List[MonsterArchetype] = (
+
+    [monster(monster_id="GiantSnake",       strength=7,     loot_id="poison",   sort="LIV", img_file="GiantSnake.png")] * 2 +
+    [monster(monster_id="Tuneller",         strength=9,     loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 2 +
+    [monster(monster_id="ShadeGreen",       strength=8,     loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 200 +
+    [monster(monster_id="ShadeOrange",      strength=8,     loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 200 +
+    [monster(monster_id="SkeletalStealer",  strength=6,     loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 2
 )
 
 # ============================================================
@@ -210,27 +267,48 @@ MONSTER_POOL: List[MonsterArchetype] = (
 
 ItemType = Literal["weapon", "scroll", "key", "treasure"]
 
-
 class ItemArchetype(TypedDict):
     item_id: str
     item_type: ItemType
     str_mod: int
     img_file: str
+    effect: Optional[str]
     value: Optional[float]
+    mode: Optional[str]
+    active: Optional[bool]
 
 
 ITEM_FEATURES: dict[str, ItemArchetype] = {
-    "dagger":    {"item_id": "dagger",    "item_type": "weapon",   "str_mod": 1, "img_file": "dagger.png",    "value": None},
-    "sword":     {"item_id": "sword",     "item_type": "weapon",   "str_mod": 2, "img_file": "sword.png",     "value": None},
-    "axe":       {"item_id": "axe",       "item_type": "weapon",   "str_mod": 3, "img_file": "axe.png",       "value": None},
-    "heal":      {"item_id": "heal",      "item_type": "scroll",   "str_mod": 0, "img_file": "heal.png",      "value": None},
-    "thorn":     {"item_id": "thorn",     "item_type": "scroll",   "str_mod": 0, "img_file": "thorn.png",     "value": None},
-    "key":       {"item_id": "key",       "item_type": "key",      "str_mod": 0, "img_file": "key.png",       "value": None},
-    "fist":      {"item_id": "fist",      "item_type": "scroll",   "str_mod": 2, "img_file": "fist.png",      "value": None},
-    "fireball":  {"item_id": "fireball",  "item_type": "scroll",   "str_mod": 1, "img_file": "fireball.png",  "value": None},
-    "treasure":  {"item_id": "treasure",  "item_type": "treasure", "str_mod": 0, "img_file": "treasure.png",  "value": 1.0},
-    "ruby":      {"item_id": "ruby",      "item_type": "treasure", "str_mod": 0, "img_file": "ruby.png",      "value": 1.5},
-}
+    "dagger":   {"item_id": "dagger",       "item_type": "weapon",      "str_mod": 1,   "img_file": "dagger.png",
+                 "effect": None,            "value": 0.1,               "mode": "base", "active": False},
+    "sword":    {"item_id": "sword",        "item_type": "weapon",      "str_mod": 2,   "img_file": "sword.png",
+                 "effect": None,            "value": 0.2,               "mode": "base", "active": False},
+    "axe":      {"item_id": "axe",          "item_type": "weapon",      "str_mod": 3,   "img_file": "axe.png",
+                 "effect": None,            "value": 0.3,               "mode": "base", "active": False},
+    "heal":     {"item_id": "heal",         "item_type": "scroll",      "str_mod": 0,   "img_file": "heal.png",
+                 "effect": "TP_HEAL",       "value": 0.1,               "mode": "base", "active": True},
+    "thorn":    {"item_id": "thorn",        "item_type": "scroll",      "str_mod": 0,   "img_file": "thorn.png",
+                 "effect": "LIFESTEAL",     "value": 0.1,               "mode": "base", "active": True},
+    "key":      {"item_id": "key",          "item_type": "key",         "str_mod": 0,   "img_file": "key.png",
+                 "effect": None,            "value": 0,                 "mode": "base", "active": False},
+    "fist":     {"item_id": "fist",         "item_type": "scroll",      "str_mod": 2,   "img_file": "fist.png",
+                 "effect": None,            "value": 0.15,              "mode": "base", "active": False},
+    "fireball": {"item_id": "fireball",     "item_type": "scroll",      "str_mod": 1,   "img_file": "fireball.png",
+                 "effect": None,            "value": 0.1,               "mode": "base", "active": False},
+    "treasure": {"item_id": "treasure",     "item_type": "treasure",    "str_mod": 0,   "img_file": "treasure.png",
+                 "effect": None,            "value": 1.0,               "mode": "base", "active": False},
+    "ruby":     {"item_id": "ruby",         "item_type": "treasure",    "str_mod": 0,   "img_file": "ruby.png",
+                 "effect": None,            "value": 1.5,               "mode": "base", "active": False},
+    "poison":   {"item_id": "poison",       "item_type": "scroll",      "str_mod": 2,   "img_file": "poison.png",
+                 "effect": "AOE_2",         "value": 0.1,               "mode": "ext",  "active": False},
+    "amulet_o": {"item_id": "amulet_o",     "item_type": "scroll",      "str_mod": 0,   "img_file": "amulet_orange.png",
+                 "effect": "NO_CURSE",      "value": 0.1,               "mode": "ext",  "active": False},
+    "amulet_g": {"item_id": "amulet_g",     "item_type": "scroll",      "str_mod": 0,   "img_file": "amulet_green.png",
+                 "effect": "PURGE",         "value": 0.1,               "mode": "ext",  "active": False},
+    "kris":     {"item_id": "kris",         "item_type": "weapon",      "str_mod": 1,   "img_file": "kris.png",
+                 "effect": "LIV+1",         "value": 1,                 "mode": "ext",  "active": False},
+    "hammer":   {"item_id": "hammer",       "item_type": "weapon",      "str_mod": 2,   "img_file": "hammer.png",
+                 "effect": "UND+1",         "value": 2,                 "mode": "ext",  "active": False}}
 
 # ============================================================
 # ASCII tile drawings (canonical rotation = 0)

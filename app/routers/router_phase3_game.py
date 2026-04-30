@@ -45,7 +45,32 @@ class SetSkillUiValueRequest(BaseModel):
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
+    
+    ITEM_ASSET_BASE_PATH = "/static/media/tile-content"
 
+    def serialize_item_ref(item_id: str | None) -> dict | None:
+        """
+        Server-side item serializer for frontend rendering.
+
+        Frontend must use item["image_path"] directly.
+        It must not derive image filenames from item_id.
+        """
+        if item_id is None:
+            return None
+
+        item = item_features.get(item_id)
+        if item is None:
+            raise ValueError(f"Unknown item_id: {item_id!r}")
+
+        img_file = item.get("img_file")
+        if not img_file:
+            raise ValueError(f"Missing img_file for item_id: {item_id!r}")
+
+        return {
+            **item,
+            "image_path": f"{ITEM_ASSET_BASE_PATH}/{img_file}",
+        }
+    
     def serialize_ascii_tiles(tiles):
         out = {}
         for k, tile in tiles.items():
@@ -163,13 +188,23 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             tile.object_id = loot_id
             graph.clear_current_fight_state()
 
+            try:
+                item = serialize_item_ref(loot_id)
+            except ValueError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
             return {
                 "ok": True,
                 "mode": "chest_opened",
                 "x": tile.x,
                 "y": tile.y,
+
+                # Runtime identity
                 "object_id": loot_id,
-                "item": item_features[loot_id],
+
+                # Renderable item object
+                "item": item,
+
                 "inventory": active.inventory.to_dict(),
                 "tile": tile.to_dict(),
             }
@@ -393,6 +428,14 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.request_end_turn()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    # @router.post(
+    #     "/fight",
+    #     summary="Legacy compatibility fight start",
+    #     description="Temporary compatibility endpoint that starts the new fight flow.",
+    # )
+    # def fight_legacy_alias():
+    #     return fight_start()
     
     return router
     
@@ -400,12 +443,6 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     
     
     
-    @router.post(
-        "/fight",
-        summary="Legacy compatibility fight start",
-        description="Temporary compatibility endpoint that starts the new fight flow.",
-    )
-    def fight_legacy_alias():
-        return fight_start()
+    
     
     
