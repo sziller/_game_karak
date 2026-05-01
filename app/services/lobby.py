@@ -198,7 +198,11 @@ class LobbyService:
         if not cleaned_profession:
             raise ValueError("profession is required.")
 
-        valid = {c["profession"] for c in CHARACTER_CLASSES}
+        valid = {
+            c["profession"]
+            for c in CHARACTER_CLASSES
+            if c.get("selectable", True)
+        }
         if cleaned_profession not in valid:
             raise ValueError("Invalid profession.")
 

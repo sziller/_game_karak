@@ -106,6 +106,40 @@ button {
     overflow: hidden;
     margin: 0 auto;
 }
+
+.item-icon {
+    display: block;
+    max-width: 48px;
+    max-height: 48px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+.map-content-icon {
+    position: absolute;
+    width: 48px;
+    height: 48px;
+    max-width: 70%;
+    max-height: 70%;
+    object-fit: contain;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    image-rendering: auto;
+}
+
+.tile-base-img {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+    display: block;
+    transform-origin: 50% 50%;
+}
 /* =========================================================
    3. PLAYERS
    ========================================================= */
@@ -226,6 +260,7 @@ button {
     text-align: right;
     color: #aaa;
 }
+
 /* =========================================================
    4. MAP
    ========================================================= */
@@ -274,6 +309,77 @@ button {
     min-height: 118px;
     height: 100%;
     flex: 1 1 auto;
+}
+
+/* ---------------------------------------------------------
+   Header numeric status boxes
+   Used by:
+   - RED / X-room counter
+   - Manual curse-room toss display
+
+   State classes:
+   - counter-neutral
+   - counter-triggered
+   --------------------------------------------------------- */
+
+.room-x-counter-box,
+.curse-toss-box {
+    border: 2px solid #555;
+    background: #151515;
+    padding: 8px;
+    min-width: 100px;
+    text-align: center;
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+.room-x-counter-title,
+.curse-toss-title {
+    font-size: 12px;
+    color: #aaa;
+    margin-bottom: 4px;
+}
+
+.room-x-counter-value,
+.curse-toss-die {
+    font-size: 44px;
+    font-weight: bold;
+    line-height: 1.0;
+    color: #ddd;
+}
+
+.room-x-counter-box.counter-neutral,
+.curse-toss-box.counter-neutral {
+    border-color: #555;
+    background: #151515;
+}
+
+.room-x-counter-box.counter-triggered,
+.curse-toss-box.counter-triggered {
+    border-color: #cc3333;
+    background: #2a1010;
+}
+
+.room-x-counter-box.counter-triggered .room-x-counter-value,
+.curse-toss-box.counter-triggered .curse-toss-die {
+    color: #ff4444;
+}
+
+/* Backward-tolerant aliases.
+   Safe to remove once no JS uses these class names anymore. */
+
+.curse-toss-box.curse-triggered {
+    border-color: #cc3333;
+    background: #2a1010;
+}
+
+.curse-toss-box.curse-triggered .curse-toss-die {
+    color: #ff4444;
+}
+
+.curse-toss-box.curse-not-triggered {
+    border-color: #555;
+    background: #151515;
 }
 
 .message-box pre {
@@ -493,16 +599,15 @@ button {
 }
 
 .ground-image {
-    height: 52px;
+    width: 56px;
+    height: 56px;
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
 .ground-image img {
-    max-width: 48px;
-    max-height: 48px;
-    image-rendering: pixelated;
+    display: block;
 }
 
 .ground-id {

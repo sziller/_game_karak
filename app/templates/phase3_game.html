@@ -32,6 +32,21 @@
             </div>
         </div>
 
+        <!-- ROOM X COUNTER BLOCK -->
+        <div class="controls-col controls-stack">
+            <div class="room-x-counter-box" id="room-x-counter-box">
+                <div class="room-x-counter-title">RED rooms</div>
+                <div class="room-x-counter-value" id="room-x-counter-value">0</div>
+            </div>
+        </div>
+
+        <!-- CURSE TOSS BLOCK -->
+        <div class="controls-col controls-stack">
+            <div class="curse-toss-box" id="curse-toss-box">
+                <div class="curse-toss-title">Manual toss</div>
+                <div class="curse-toss-die" id="curse-toss-die">-</div>
+            </div>
+        </div>
         <!-- TURN / FIGHT CONTROL BLOCK -->
         <div class="controls-col controls-stack">
             <div>
@@ -281,36 +296,21 @@
                 baseImg.src = `/static/media/tiles/${tile.img_base}-${variant}.png`;
             }
 
-            baseImg.style.width = "100%";
-            baseImg.style.height = "100%";
-            baseImg.style.position = "absolute";
-            baseImg.style.left = "0";
-            baseImg.style.top = "0";
-            baseImg.style.display = "block";
-            baseImg.style.transformOrigin = "50% 50%";
+            baseImg.className = "tile-base-img";
             baseImg.style.transform = `rotate(${tile.rotation_q * 90}deg)`;
             tileBox.appendChild(baseImg);
 
             if (tile.monster_id) {
                 const img = document.createElement("img");
                 img.src = `/static/media/tile-content/${tile.monster_id}.png`;
-                img.style.position = "absolute";
-                img.style.width = "70%";
-                img.style.height = "70%";
-                img.style.left = "50%";
-                img.style.top = "50%";
-                img.style.transform = "translate(-50%, -50%)";
+                img.alt = tile.monster_id;
+                img.className = "map-content-icon";
                 tileBox.appendChild(img);
             } else if (tile.object_item) {
                 const img = document.createElement("img");
                 img.src = itemImagePath(tile.object_item);
                 img.alt = tile.object_item.item_id || "";
-                img.style.position = "absolute";
-                img.style.width = "70%";
-                img.style.height = "70%";
-                img.style.left = "50%";
-                img.style.top = "50%";
-                img.style.transform = "translate(-50%, -50%)";
+                img.className = "map-content-icon";
                 tileBox.appendChild(img);
             }
 
@@ -579,11 +579,12 @@
             line1.className = "player-topline";
 
             const cls = p.profession ? ` | class: ${p.profession}` : " | class: -";
-            const cursedMark = (p.is_cursed || p.cursed) ? " | CURSED" : "";
+            const cursedMark = (p.status?.is_cursed || p.is_cursed || p.cursed) ? " | CURSED" : "";
+            const evilMark = (p.status?.is_evil || p.is_evil) ? " | KARAK" : "";
 
             const playerTitle = document.createElement("span");
             playerTitle.className = "player-title-text";
-            playerTitle.textContent = `#${(p.player_id ?? idx)} | ${p.display_name || "(unnamed)"}${cls}${cursedMark}`;
+            playerTitle.textContent = `#${(p.player_id ?? idx)} | ${p.display_name || "(unnamed)"}${cls}${evilMark}${cursedMark}`;
 
             const playerCoords = document.createElement("span");
             playerCoords.className = "player-coordinates";
@@ -665,9 +666,63 @@
 
         lines.push(`Tiles left: ${mapData.tiles_left}`);
         lines.push(`Monsters left: ${mapData.monsters_left}`);
-        lines.push(`Room X pulled: ${mapData.room_x_pulled}`);
+        lines.push(`Room X discovered: ${mapData.room_x_discovered ?? 0}`);
+        lines.push(`Karak triggered: ${mapData.karak_triggered ? "yes" : "no"}`);
+
+        if (mapData.last_karak_event?.triggered) {
+            lines.push(`Karak player: #${mapData.last_karak_event.selected_player_id}`);
+            lines.push(`Karak score: ${mapData.last_karak_event.selected_player_score}`);
+        }
+        lines.push(`Karak triggered: ${mapData.karak_triggered ? "yes" : "no"}`);
 
         box.textContent = lines.join("\n");
+    }
+
+    function renderCurseRoomToss(mapData) {
+        const box = document.getElementById("curse-toss-box");
+        const dieEl = document.getElementById("curse-toss-die");
+
+        if (!box || !dieEl) {
+            return;
+        }
+
+        const event = mapData?.last_room_x_event || null;
+
+        box.classList.remove("counter-triggered", "counter-neutral");
+
+        if (!event || event.kind !== "curse_room") {
+            dieEl.textContent = "-";
+            box.classList.add("counter-neutral");
+            return;
+        }
+
+        const die = event.die ?? "-";
+        const triggered = !!event.triggered;
+
+        dieEl.textContent = String(die);
+        box.classList.add(triggered ? "counter-triggered" : "counter-neutral");
+    }
+
+    function renderRoomXCounter(mapData) {
+        const box = document.getElementById("room-x-counter-box");
+        const valueEl = document.getElementById("room-x-counter-value");
+
+        if (!box || !valueEl) {
+            return;
+        }
+
+        const value = Number(mapData?.room_x_discovered ?? 0);
+        const limit = Number(mapData?.room_x_karak_limit ?? 5);
+
+        valueEl.textContent = String(value);
+
+        box.classList.remove("counter-triggered", "counter-neutral");
+
+        if (value >= limit) {
+            box.classList.add("counter-triggered");
+        } else {
+            box.classList.add("counter-neutral");
+        }
     }
 
     async function loadPlayers() {
@@ -722,23 +777,69 @@
     `;
     }
 
+    function showKarakCreatedMessage(confirmData) {
+        const karak = confirmData?.discovery?.karak || null;
+
+        if (!karak || !karak.triggered) {
+            return false;
+        }
+
+        const players =
+            confirmData.players ||
+            latestPlayers?.players ||
+            [];
+
+        const scores = karak.all_player_scores || {};
+        const selectedPlayerId = karak.selected_player_id;
+
+        const lines = [];
+
+        lines.push("Karak has appeared.");
+        lines.push("");
+        lines.push("Inventory value calculation:");
+
+        Object.entries(scores).forEach(([playerIdRaw, score]) => {
+            const playerId = Number(playerIdRaw);
+            const player = players.find(p => Number(p.player_id) === playerId);
+
+            const name =
+                player?.display_name ||
+                player?.character_name ||
+                `Player #${playerId}`;
+
+            const marker = playerId === Number(selectedPlayerId) ? "  ← KARAK" : "";
+
+            lines.push(`${name}: ${score}${marker}`);
+        });
+
+        showMessage(lines.join("\n"), "error", "Karak created");
+
+        return true;
+    }
+
     async function refreshAll() {
-        try {
-            await loadPlayers();
-            await loadMap();
-            await loadInventory();
-            if (!latestPlayers?.players?.length) {
-                skillUiState = {};
-            }
+    try {
+        await loadPlayers();
+        await loadMap();
+        await loadInventory();
 
-            if (!isAwaitingCurseChoice()) {
-                selectedCurseTargetPlayerId = null;
-            }
+        if (!latestPlayers?.players?.length) {
+            skillUiState = {};
+        }
 
-            renderMapVisual();
-            renderDiagnostics(latestPlayers, latestMap);
-            renderCurseConfirmArea();
+        if (!isAwaitingCurseChoice()) {
+            selectedCurseTargetPlayerId = null;
+        }
 
+        renderMapVisual();
+        renderDiagnostics(latestPlayers, latestMap);
+        renderRoomXCounter(latestMap);
+        renderCurseRoomToss(latestMap);
+        renderCurseConfirmArea();
+
+        const turn = latestMap?.turn || latestPlayers?.turn || null;
+
+        if (turn?.mode === "fight") {
             try {
                 const r = await fetch(gameApi("/fight/state"));
                 const data = await r.json();
@@ -746,21 +847,45 @@
                 if (r.ok) {
                     renderFight(data);
                 } else {
-                    renderFight(null);
+                    openFightModal();
+
+                    const box = document.getElementById("fight-box");
+                    if (box) {
+                        box.innerHTML = `
+                            <div class="message-box message-error">
+                                <b>Fight state unavailable</b>
+                                <pre>${data.detail || "Backend says turn is in fight mode, but fight/state could not be loaded."}</pre>
+                            </div>
+                        `;
+                    }
                 }
             } catch (fightError) {
                 console.error("fight/state refresh failed:", fightError);
-                renderFight(null);
-            }
 
-            showMessage("Phase 3 state refreshed.", "info", "Info");
-        } catch (e) {
-            console.error("refreshAll failed:", e);
-            showError(String(e));
+                openFightModal();
+
+                const box = document.getElementById("fight-box");
+                if (box) {
+                    box.innerHTML = `
+                        <div class="message-box message-error">
+                            <b>Fight render failed</b>
+                            <pre>${String(fightError)}</pre>
+                        </div>
+                    `;
+                }
+            }
+        } else {
+            renderFight(null);
         }
 
-        updateActionAvailability();
+        showMessage("Phase 3 state refreshed.", "info", "Info");
+    } catch (e) {
+        console.error("refreshAll failed:", e);
+        showError(String(e));
     }
+
+    updateActionAvailability();
+}
 
     async function confirmTeleport() {
         clearError();
@@ -836,7 +961,7 @@
         <div class="ground-slot">
             <div class="ground-image">
                 ${groundItem
-            ? `<img src="${itemImagePath(groundItem)}" alt="${groundItemId}">`
+            ? `<img class="item-icon" src="${itemImagePath(groundItem)}" alt="${groundItemId}">`
             : `<span class="muted">(empty)</span>`}
             </div>
             <div class="ground-id">${groundItemId || "-"}</div>
@@ -863,7 +988,7 @@
         <div style="border:1px solid #333; background:#151515; padding:8px; min-width:100px;">
             <div style="height:56px; display:flex; align-items:center; justify-content:center;">
                 ${item
-            ? `<img src="${itemImagePath(item)}" alt="${itemId}" style="max-width:48px; max-height:48px; image-rendering:pixelated;">`
+            ? `<img class="item-icon" src="${itemImagePath(item)}" alt="${itemId}">`
             : `<span class="muted">(empty)</span>`}
             </div>
             <div style="margin-top:6px; font-size:12px;">slot ${slot?.slot_index ?? "-"}</div>
@@ -914,7 +1039,7 @@
         <div style="border:1px solid #333; background:#151515; padding:8px; min-width:100px;">
             <div style="height:56px; display:flex; align-items:center; justify-content:center;">
                 ${item
-                ? `<img src="${itemImagePath(item)}" alt="${itemId}" style="max-width:48px; max-height:48px; image-rendering:pixelated;">`
+                ? `<img class="item-icon" src="${itemImagePath(item)}" alt="${itemId}">`
                 : `<span class="muted">(empty)</span>`}
             </div>
             <div style="margin-top:6px; font-size:12px;">slot ${slot.slot_index}</div>
@@ -998,26 +1123,26 @@
                     if (btn.action === "fight_toggle_scroll") {
                         const slotId = btn.payload?.slot_id || btn.button_id;
                         return `
-                        <button
-                            onclick="fightToggleScroll('${slotId}')"
-                            ${btn.enabled ? "" : "disabled"}
-                            style="margin-right:6px; ${activeStyle}"
-                            title="${btn.label}"
-                        >
-                            ${btn.image_path
-                            ? `<img src="${btn.image_path}" alt="${btn.label}" style="width:24px; height:24px; image-rendering:pixelated; vertical-align:middle;">`
+        <button
+            onclick="fightToggleScroll('${slotId}')"
+            ${btn.enabled ? "" : "disabled"}
+            style="margin-right:6px; ${activeStyle}"
+            title="${btn.label}"
+        >
+            ${btn.image_path
+                            ? `<img class="item-icon" src="${btn.image_path}" alt="${btn.label || slotId || ""}">`
                             : btn.label}
-                        </button>
-                    `;
+        </button>
+    `;
                     }
 
                     return `
-                    <button disabled style="margin-right:6px; ${activeStyle}">
-                        ${btn.image_path
-                        ? `<img src="${btn.image_path}" alt="${btn.label}" style="width:24px; height:24px; image-rendering:pixelated; vertical-align:middle;">`
+    <button disabled style="margin-right:6px; ${activeStyle}">
+        ${btn.image_path
+                        ? `<img class="item-icon" src="${btn.image_path}" alt="${btn.label || btn.button_id || ""}">`
                         : btn.label}
-                    </button>
-                `;
+    </button>
+`;
                 }).join("");
             } else if (row.button_label) {
                 if (row.button_action === "fight_toss") {
@@ -1397,7 +1522,12 @@
         }
 
         if (endTurnBtn) {
-            endTurnBtn.disabled = isFight || isItemPickup || isAwaitingCurse || isAwaitingHeal;
+            endTurnBtn.disabled =
+                isPendingTile ||
+                isFight ||
+                isItemPickup ||
+                isAwaitingCurse ||
+                isAwaitingHeal;
         }
 
         if (teleportBtn) {
@@ -1424,6 +1554,17 @@
         }
 
         await refreshAll();
+
+        const karakMessageShown = showKarakCreatedMessage(data);
+
+        if (!karakMessageShown && data.entry?.curse_room) {
+            const curse = data.entry.curse_room;
+            showMessage(
+                `Curse-room toss: ${curse.die}`,
+                curse.triggered ? "error" : "info",
+                "Curse room"
+            );
+        }
     }
 
     function clearCurseSelection() {

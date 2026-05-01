@@ -256,8 +256,8 @@ MONSTER_POOL: List[MonsterArchetype] = (
 
     [monster(monster_id="GiantSnake",       strength=7,     loot_id="poison",   sort="LIV", img_file="GiantSnake.png")] * 2 +
     [monster(monster_id="Tuneller",         strength=9,     loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 2 +
-    [monster(monster_id="ShadeGreen",       strength=8,     loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 200 +
-    [monster(monster_id="ShadeOrange",      strength=8,     loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 200 +
+    [monster(monster_id="ShadeGreen",       strength=7,     loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 2 +
+    [monster(monster_id="ShadeOrange",      strength=8,     loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 2 +
     [monster(monster_id="SkeletalStealer",  strength=6,     loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 2
 )
 
@@ -280,25 +280,25 @@ class ItemArchetype(TypedDict):
 
 ITEM_FEATURES: dict[str, ItemArchetype] = {
     "dagger":   {"item_id": "dagger",       "item_type": "weapon",      "str_mod": 1,   "img_file": "dagger.png",
-                 "effect": None,            "value": 0.1,               "mode": "base", "active": False},
+                 "effect": None,            "value": 1,               "mode": "base", "active": False},
     "sword":    {"item_id": "sword",        "item_type": "weapon",      "str_mod": 2,   "img_file": "sword.png",
-                 "effect": None,            "value": 0.2,               "mode": "base", "active": False},
+                 "effect": None,            "value": 2,               "mode": "base", "active": False},
     "axe":      {"item_id": "axe",          "item_type": "weapon",      "str_mod": 3,   "img_file": "axe.png",
-                 "effect": None,            "value": 0.3,               "mode": "base", "active": False},
+                 "effect": None,            "value": 3,               "mode": "base", "active": False},
     "heal":     {"item_id": "heal",         "item_type": "scroll",      "str_mod": 0,   "img_file": "heal.png",
                  "effect": "TP_HEAL",       "value": 0.1,               "mode": "base", "active": True},
     "thorn":    {"item_id": "thorn",        "item_type": "scroll",      "str_mod": 0,   "img_file": "thorn.png",
                  "effect": "LIFESTEAL",     "value": 0.1,               "mode": "base", "active": True},
     "key":      {"item_id": "key",          "item_type": "key",         "str_mod": 0,   "img_file": "key.png",
-                 "effect": None,            "value": 0,                 "mode": "base", "active": False},
+                 "effect": None,            "value": 0.1,                 "mode": "base", "active": False},
     "fist":     {"item_id": "fist",         "item_type": "scroll",      "str_mod": 2,   "img_file": "fist.png",
-                 "effect": None,            "value": 0.15,              "mode": "base", "active": False},
+                 "effect": None,            "value": 0.1,               "mode": "base", "active": False},
     "fireball": {"item_id": "fireball",     "item_type": "scroll",      "str_mod": 1,   "img_file": "fireball.png",
                  "effect": None,            "value": 0.1,               "mode": "base", "active": False},
     "treasure": {"item_id": "treasure",     "item_type": "treasure",    "str_mod": 0,   "img_file": "treasure.png",
-                 "effect": None,            "value": 1.0,               "mode": "base", "active": False},
+                 "effect": None,            "value": 10,               "mode": "base", "active": False},
     "ruby":     {"item_id": "ruby",         "item_type": "treasure",    "str_mod": 0,   "img_file": "ruby.png",
-                 "effect": None,            "value": 1.5,               "mode": "base", "active": False},
+                 "effect": None,            "value": 15,               "mode": "base", "active": False},
     "poison":   {"item_id": "poison",       "item_type": "scroll",      "str_mod": 2,   "img_file": "poison.png",
                  "effect": "AOE_2",         "value": 0.1,               "mode": "ext",  "active": False},
     "amulet_o": {"item_id": "amulet_o",     "item_type": "scroll",      "str_mod": 0,   "img_file": "amulet_orange.png",
@@ -306,9 +306,9 @@ ITEM_FEATURES: dict[str, ItemArchetype] = {
     "amulet_g": {"item_id": "amulet_g",     "item_type": "scroll",      "str_mod": 0,   "img_file": "amulet_green.png",
                  "effect": "PURGE",         "value": 0.1,               "mode": "ext",  "active": False},
     "kris":     {"item_id": "kris",         "item_type": "weapon",      "str_mod": 1,   "img_file": "kris.png",
-                 "effect": "LIV+1",         "value": 1,                 "mode": "ext",  "active": False},
+                 "effect": "LIV+1",         "value": 1.5,                 "mode": "ext",  "active": False},
     "hammer":   {"item_id": "hammer",       "item_type": "weapon",      "str_mod": 2,   "img_file": "hammer.png",
-                 "effect": "UND+1",         "value": 2,                 "mode": "ext",  "active": False}}
+                 "effect": "UND+1",         "value": 2.5,                 "mode": "ext",  "active": False}}
 
 # ============================================================
 # ASCII tile drawings (canonical rotation = 0)

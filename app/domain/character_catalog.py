@@ -1,6 +1,11 @@
 from __future__ import annotations
 from typing import Optional, TypedDict, Literal
 
+try:
+    from typing import NotRequired  # Python 3.11+
+except ImportError:
+    from typing_extensions import NotRequired  # Python 3.10
+
 SkillScope = Literal["combat", "move"]
 SkillUiControl = Literal["passive", "button", "toggle", "number_stepper", "choice_set"]
 SkillAvailabilityMode = Literal["always", "turn_start_only", "while_standing_on_monster", "awaiting_heal_choice",
@@ -75,6 +80,7 @@ class CharacterClassInfo(TypedDict):
     icon_path: Optional[str]
     figurine_path: Optional[str]
     skills: list[str]
+    selectable: NotRequired[bool]
 
 
 class CharacterClassResolved(TypedDict):
@@ -375,6 +381,7 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
 CHARACTER_CLASSES: list[CharacterClassInfo] = [
 
     {"profession": "wizard",
+     "selectable": True,
      "label": "Wizard",
      "image_path": "static/media/hero-boards/Argentus-large.png",
      "tableau_path": "static/media/hero-boards/Argentus-tiny.png",
@@ -383,6 +390,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_wiz_01", "skill_wiz_02"]},
 
     {"profession": "thief",
+     "selectable": True,
      "label": "Thief",
      "image_path": "static/media/hero-boards/Aderyn-large.png",
      "tableau_path": "static/media/hero-boards/Aderyn-tiny.png",
@@ -391,6 +399,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_thi_01", "skill_thi_02"]},
 
     {"profession": "beasthunter",
+     "selectable": True,
      "label": "Beasthunter",
      "image_path": "static/media/hero-boards/Kirima-large.png",
      "tableau_path": "static/media/hero-boards/Kirima-tiny.png",
@@ -399,6 +408,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_bea_01", "skill_bea_02"]},
 
     {"profession": "warlock",
+     "selectable": True,
      "label": "Warlock",
      "image_path": "static/media/hero-boards/Xanros-large.png",
      "tableau_path": "static/media/hero-boards/Xanros-tiny.png",
@@ -407,6 +417,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_wlk_01", "skill_wlk_02"]},
 
     {"profession": "battlemage",
+     "selectable": True,
      "label": "Battlemage",
      "image_path": "static/media/hero-boards/Markul-large.png",
      "tableau_path": "static/media/hero-boards/Markul-tiny.png",
@@ -415,6 +426,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_bat_01", "skill_bat_02"]},
 
     {"profession": "acrobat",
+     "selectable": True,
      "label": "Acrobat",
      "image_path": "static/media/hero-boards/Hannah-large.png",
      "tableau_path": "static/media/hero-boards/Hannah-tiny.png",
@@ -423,6 +435,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_acr_01", "skill_acr_02"]},
 
     {"profession": "oracle",
+     "selectable": True,
      "label": "Oracle",
      "image_path": "static/media/hero-boards/Taia-large.png",
      "tableau_path": "static/media/hero-boards/Taia-tiny.png",
@@ -431,6 +444,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_ora_01", "skill_ora_02"]},
 
     {"profession": "alchemist",
+     "selectable": True,
      "label": "Alchemist",
      "image_path": "static/media/hero-boards/Sidhar-large.png",
      "tableau_path": "static/media/hero-boards/Sidhar-tiny.png",
@@ -439,6 +453,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_alc_01", "skill_alc_02"]},
 
     {"profession": "barbarian",
+     "selectable": True,
      "label": "Barbarian",
      "image_path": "static/media/hero-boards/Valduk-large.png",
      "tableau_path": "static/media/hero-boards/Valduk-tiny.png",
@@ -447,6 +462,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_bar_01", "skill_bar_02"]},
 
     {"profession": "warrior_princess",
+     "selectable": True,
      "label": "Warrior Princess",
      "image_path": "static/media/hero-boards/Elspeth-large.png",
      "tableau_path": "static/media/hero-boards/Elspeth-tiny.png",
@@ -455,6 +471,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_pri_01", "skill_pri_02"]},
 
     {"profession": "ranger",
+     "selectable": True,
      "label": "Ranger",
      "image_path": "static/media/hero-boards/Lorraine-large.png",
      "tableau_path": "static/media/hero-boards/Lorraine-tiny.png",
@@ -463,6 +480,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_ran_01", "skill_ran_02"]},
 
     {"profession": "swordsman",
+     "selectable": True,
      "label": "Swordsman",
      "image_path": "static/media/hero-boards/Victorius-large.png",
      "tableau_path": "static/media/hero-boards/Victorius-tiny.png",
@@ -471,6 +489,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_swo_01", "skill_swo_02"]},
 
     {"profession": "warrior",
+     "selectable": True,
      "label": "Warrior",
      "image_path": "static/media/hero-boards/Horan-large.png",
      "tableau_path": "static/media/hero-boards/Horan-tiny.png",
@@ -479,12 +498,22 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "skills": ["skill_wrr_01", "skill_wrr_02"]},
 
     {"profession": "scout",
+     "selectable": True,
      "label": "Scout",
      "image_path": "static/media/hero-boards/Darius-large.png",
      "tableau_path": "static/media/hero-boards/Darius-tiny.png",
      "icon_path": "static/media/hero-boards/Darius-icon.png",
      "figurine_path": None,
-     "skills": ["skill_sco_01", "skill_sco_02"]}
+     "skills": ["skill_sco_01", "skill_sco_02"]},
+
+    {"profession": "evil",
+     "label": "Evil",
+     "image_path": "static/media/hero-boards/Karak-large.png",
+     "tableau_path": "static/media/hero-boards/Karak-tiny.png",
+     "icon_path": "static/media/hero-boards/Karak-icon.png",
+     "figurine_path": None,
+     "skills": [],
+     "selectable": False}
 ]
 
 
@@ -505,8 +534,16 @@ def build_character_class_resolved(char: CharacterClassInfo) -> CharacterClassRe
             "skill_details": [resolve_skill(skill_id) for skill_id in char["skills"]]}
 
 
-def build_character_classes_resolved() -> list[CharacterClassResolved]:
-    return [build_character_class_resolved(char) for char in CHARACTER_CLASSES]
+def build_character_classes_resolved(*, selectable_only: bool = True) -> list[CharacterClassInfo]:
+    rows = []
+
+    for c in CHARACTER_CLASSES:
+        if selectable_only and not c.get("selectable", True):
+            continue
+
+        rows.append(c)
+
+    return rows
 
 
 def get_character_class_by_profession(profession: str) -> CharacterClassInfo:

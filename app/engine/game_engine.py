@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES
 from domain.character_catalog import SKILL_CATALOG
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Literal, Tuple
+from typing import Dict, Optional, Literal, Tuple, Any
 
 import copy
 import random
@@ -21,7 +21,8 @@ from engine.fight_models import FightState
 # --------------------------
 DIRECTION = Literal["N", "S", "E", "W"]
 DIR_ORDER: tuple[DIRECTION, DIRECTION, DIRECTION, DIRECTION] = ("N", "E", "S", "W")
-
+ROOM_X_KARAK_LIMIT = 5
+CURSE_ROOM_RELOCATE_CHANCE = 0.5
 
 def direction_to_delta(direction: DIRECTION) -> Tuple[int, int]:
     return {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0)}[direction]
@@ -127,14 +128,16 @@ TurnMode = Literal[ "idle",
                     "awaiting_turn_end_commit",
                     "awaiting_heal_choice"]
 
+
 @dataclass
 class TurnState:
+    """=== dataclass ===================================================================================================
+    Stores Turn related state data
+    ============================================================================================== by Sziller ==="""
     owner_player_id: int
     turn_nr: int
-
     actions_total: int = 4
     actions_left: int = 4
-
     mode: TurnMode = "idle"
 
     pending_turn_end_cause: Optional[str] = None
@@ -145,25 +148,33 @@ class TurnState:
 
     last_valid_safe_tile: Optional[tuple[int, int]] = None
 
+    # Ground-item snapshot for reversible idle inventory manipulation.
+    ground_snapshot_item_id: Optional[str] = None
+    item_pickup_origin: Optional[Literal["idle_ground_changed", "post_combat", "chest"]] = None
+    
     # lightweight turn-local memory
     used_skill_ids: set[str] = field(default_factory=set)
     selected_skill_ids: set[str] = field(default_factory=set)
     skill_values: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
-            "owner_player_id": self.owner_player_id,
-            "turn_nr": self.turn_nr,
-            "actions_total": self.actions_total,
-            "actions_left": self.actions_left,
-            "mode": self.mode,
-            "pending_turn_end_cause": self.pending_turn_end_cause,
-            "pending_forced_fight": self.pending_forced_fight,
-            "pending_item_pickup": self.pending_item_pickup,
-            "pending_retreat": self.pending_retreat,
-            "last_valid_safe_tile": self.last_valid_safe_tile,
-            "used_skill_ids": sorted(self.used_skill_ids),
-        }
+        """=== export method ===========================================================================================
+        returns dataclass as a dictionary
+        ========================================================================================== by Sziller ==="""
+        return {"owner_player_id": self.owner_player_id,
+                "turn_nr": self.turn_nr,
+                "actions_total": self.actions_total,
+                "actions_left": self.actions_left,
+                "mode": self.mode,
+                "pending_turn_end_cause": self.pending_turn_end_cause,
+                "pending_forced_fight": self.pending_forced_fight,
+                "pending_item_pickup": self.pending_item_pickup,
+                "pending_retreat": self.pending_retreat,
+                "pending_curse_choice": self.pending_curse_choice,
+                "last_valid_safe_tile": self.last_valid_safe_tile,
+                "ground_snapshot_item_id": self.ground_snapshot_item_id,
+                "item_pickup_origin": self.item_pickup_origin,
+                "used_skill_ids": sorted(self.used_skill_ids)}
     
     
 # --------------------------
@@ -335,8 +346,21 @@ class DungeonGraph:
         self.pending_tiles: Dict[tuple[int, int], TileNode] = {}
         self.last_move_direction: Optional[DIRECTION] = None
 
+        # Counters / one-shot world events
         # Counters
-        self.room_x_pulled = 0
+        self.room_x_discovered = 0
+
+        # One-shot Karak/Evil transformation state.
+        self.karak_triggered = False
+        self.last_karak_event: Optional[dict] = None
+
+        # Last resolved room_x / curse-room event.
+        self.last_room_x_event: Optional[dict] = None
+
+        # Startup skill snapshot.
+        # Karak/Evil skill inheritance is based on skills handed out at game start,
+        # not on later runtime mutations.
+        self.initial_player_skillsets: dict[int, set[str]] = {}
 
         # Ensure entrance exists
         self.ensure_entrance()
@@ -441,7 +465,11 @@ class DungeonGraph:
             "player": {"x": self.player_x, "y": self.player_y},
             "tiles_left": len(self.tile_pool),
             "monsters_left": len(self.monster_pool),
-            "room_x_pulled": self.room_x_pulled,
+            "room_x_discovered": self.room_x_discovered,
+            "room_x_karak_limit": int(self.rules_general.get("room_x_karak_limit", 5)),
+            "karak_triggered": self.karak_triggered,
+            "last_karak_event": self.last_karak_event,
+            "last_room_x_event": self.last_room_x_event,
             "turn": self.serialize_turn_state(),
             # 🔍 diagnostics (safe, read-only)
             "tile_pocket": [
@@ -470,7 +498,11 @@ class DungeonGraph:
         self.last_move_direction = None
         self.teleport_counter = 1
         self.teleport_tiles.clear()
-        self.room_x_pulled = 0
+        self.room_x_discovered = 0
+        self.last_karak_event = None
+        self.last_room_x_event = None
+        self.karak_triggered = False
+        self.initial_player_skillsets = {}
         self.current_fight_state = None
 
         self.tile_pool = copy.deepcopy(self._orig_tile_pool)
@@ -514,6 +546,8 @@ class DungeonGraph:
         if target.feature != "teleport":
             raise ValueError("You can only teleport onto teleport tiles.")
 
+        entry_result = None
+
         if active is None:
             self.player_x = tx
             self.player_y = ty
@@ -522,9 +556,20 @@ class DungeonGraph:
             active.y = ty
             self._sync_compat_player_position()
 
+            entry_result = self._after_player_entered_tile(
+                player=active,
+                tile=target,
+                entry_cause="teleport",
+                is_turn_owner=True,
+            )
+
+        self.snapshot_active_ground_item()
+
         return {
             "new_position": {"x": tx, "y": ty},
             "tile": target.to_dict(),
+            "entry": entry_result,
+            "turn": self.serialize_turn_state(),
         }
     
     def move(self, direction: DIRECTION, is_mage: bool = False) -> dict:
@@ -560,8 +605,15 @@ class DungeonGraph:
         current_y = active.y
 
         current = self.get_tile(current_x, current_y)
-        if not current:
-            raise ValueError("Current tile not found.")
+
+        if current is None:
+            current = self.pending_tiles.get((current_x, current_y))
+
+        if current is None:
+            raise ValueError(
+                f"Current tile not found at ({current_x}, {current_y}). "
+                "Player position is not on a committed or pending tile."
+            )
 
         dx, dy = direction_to_delta(action.direction)
         nx, ny = current_x + dx, current_y + dy
@@ -587,8 +639,16 @@ class DungeonGraph:
             active.y = ny
             self._sync_compat_player_position()
 
+            entry_result = self._after_player_entered_tile(
+                player=active,
+                tile=target,
+                entry_cause="move",
+                is_turn_owner=True,
+            )
+
             self.last_move_direction = action.direction
             self.set_turn_mode("idle")
+            self.snapshot_active_ground_item()
             self.current_fight_state = None
 
             return {
@@ -598,6 +658,7 @@ class DungeonGraph:
                 "movement_mode": "blink" if (blink_pass and not normal_pass) else "normal",
                 "new_position": {"x": nx, "y": ny},
                 "tile": target.to_dict(),
+                "entry": entry_result,
                 "turn": self.serialize_turn_state(),
             }
 
@@ -665,9 +726,6 @@ class DungeonGraph:
             feature=feature,
         )
 
-        if new_tile.tile_type == "room_x":
-            self.room_x_pulled += 1
-
         if new_tile.tile_type == "room" and self.monster_pool:
             m_idx = random.randrange(len(self.monster_pool))
             m = self.monster_pool.pop(m_idx)
@@ -730,14 +788,346 @@ class DungeonGraph:
             raise ValueError(f"Invalid placement: no entry from {expected_entry_from}")
 
         self.add_tile(action.x, action.y, pending)
+        discovery_result = self._after_tile_discovered(pending)
+        turn, active = self.ensure_active_player_owns_turn()
+        entry_result = self._after_player_entered_tile(player=active,
+                                                       tile=pending,
+                                                       entry_cause="discovery",
+                                                       is_turn_owner=True)
+
         self.set_turn_mode("idle")
+        self.snapshot_active_ground_item()
+
+        return {"ok": True,
+                "status": "confirmed",
+                "action_kind": action.kind,
+                "tile": pending.to_dict(),
+                "discovery": discovery_result,
+                "entry": entry_result,
+                "players": self.serialize_players(),
+                "active_player": self.serialize_active_player(),
+                "turn": self.serialize_turn_state()}
+
+    def _after_tile_discovered(self, tile: TileNode) -> dict:
+        """
+        Apply immediate consequences of confirmed tile discovery.
+
+        Current implemented discovery effects:
+        - confirmed room_x tiles increment room_x_discovered
+        - when the configured room_x limit is reached, one eligible player turns Karak/Evil
+
+        Important:
+        - curse room does NOT trigger here by itself.
+        - curse room triggers through _after_player_entered_tile().
+        """
+        result = {
+            "is_room_x": False,
+            "room_x_discovered": self.room_x_discovered,
+            "karak": None,
+        }
+
+        if tile.tile_type != "room_x":
+            return result
+
+        self.room_x_discovered += 1
+
+        result["is_room_x"] = True
+        result["room_x_discovered"] = self.room_x_discovered
+
+        karak_limit = int(self.rules_general.get("room_x_karak_limit", 5))
+
+        if (
+                not self.karak_triggered
+                and self.room_x_discovered >= karak_limit
+        ):
+            karak_result = self._trigger_karak_transformation()
+            result["karak"] = karak_result
+            self.last_karak_event = karak_result
+
+        self.last_room_x_event = {
+            "kind": "room_x_discovered",
+            "tile": tile.to_dict(),
+            "room_x_discovered": self.room_x_discovered,
+        }
+
+        return result
+
+    def _after_player_entered_tile(
+            self,
+            *,
+            player: Player,
+            tile: TileNode,
+            entry_cause: str,
+            is_turn_owner: bool = True,
+    ) -> dict:
+        """
+        Apply effects that trigger whenever a player enters a tile.
+
+        Current implemented entry effects:
+        - curse room:
+          - triggers on every entry
+          - triggers on discovery+entry
+          - triggers on movement into an already discovered tile
+          - triggers on retreat entry
+          - future-compatible with swap/teleport/off-turn entry
+
+        Notes:
+        - RED/X-room discovery counting does NOT happen here.
+          That belongs to confirmed discovery.
+        - This method may be called for non-active/off-turn players later,
+          so it accepts an explicit player argument.
+        """
+        result = {
+            "entry_cause": entry_cause,
+            "player_id": player.player_id,
+            "tile": {
+                "x": tile.x,
+                "y": tile.y,
+                "archetype_id": tile.archetype_id,
+                "tile_type": tile.tile_type,
+                "feature": tile.feature,
+            },
+            "curse_room": None,
+        }
+
+        if tile.tile_type == "room_x" and tile.feature == "curse":
+            curse_result = self._resolve_curse_room_effect_for_player(player)
+            result["curse_room"] = curse_result
+
+            self.last_room_x_event = {
+                "kind": "curse_room",
+                "entry_cause": entry_cause,
+                "is_turn_owner": is_turn_owner,
+                "tile": tile.to_dict(),
+                **curse_result,
+            }
+
+        return result
+
+    def _resolve_curse_room_effect_for_player(self, player: Player) -> dict:
+        """
+        Resolve curse-room dice toss for the entering player.
+
+        Rule:
+        - Toss 1d6.
+        - If the result is in GENERAL["curse_room_triggers"], curse relocates
+          to the entering player.
+        - Otherwise the current curse state remains unchanged.
+        """
+        triggers_raw = self.rules_general.get("curse_room_triggers", [1, 2, 3])
+        curse_room_triggers = {int(v) for v in triggers_raw}
+
+        die = random.randint(1, 6)
+        triggered = die in curse_room_triggers
+
+        if triggered:
+            self._apply_curse_to_player(player)
 
         return {
-            "ok": True,
-            "status": "confirmed",
-            "action_kind": action.kind,
-            "tile": pending.to_dict(),
-            "turn": self.serialize_turn_state(),
+            "die": die,
+            "triggered": triggered,
+            "curse_room_triggers": sorted(curse_room_triggers),
+            "target_player_id": player.player_id if triggered else None,
+            "entering_player_id": player.player_id,
+            "entering_player": player.to_dict(),
+        }
+
+    def _get_item_value(self, item_id: Optional[str]) -> float:
+        """
+        Return configured item value.
+
+        Missing/None item references count as zero.
+        """
+        if item_id is None:
+            return 0.0
+
+        feat = ITEM_FEATURES.get(item_id)
+        if feat is None:
+            raise ValueError(f"Unknown item_id while scoring inventory: {item_id!r}")
+
+        return float(feat.get("value") or 0.0)
+
+    def _get_player_inventory_value(self, player: Player) -> float:
+        """
+        Calculate total inventory value used for Karak/Evil selection.
+
+        Includes:
+        - all weapon slot item values
+        - all scroll slot item values
+        - all key slot item values
+        - treasure counter
+
+        The treasure counter already stores accumulated configured value.
+        """
+        total = 0.0
+
+        for item_id in player.inventory.weapon_slots:
+            total += self._get_item_value(item_id)
+
+        for item_id in player.inventory.scroll_slots:
+            total += self._get_item_value(item_id)
+
+        for item_id in player.inventory.key_slots:
+            total += self._get_item_value(item_id)
+
+        total += float(player.inventory.treasure or 0.0)
+
+        return total
+
+    def _select_karak_target_player(self) -> Optional[Player]:
+        """
+        Select who turns Karak/Evil.
+
+        Rule:
+        - only non-evil players are eligible
+        - calculate total inventory value
+        - lowest value group is the worst group
+        - if multiple players are tied for lowest value, randomly choose one
+        """
+        eligible = [
+            p for p in self.players
+            if not getattr(p, "is_evil", False)
+        ]
+
+        if not eligible:
+            return None
+
+        scores = {
+            p.player_id: self._get_player_inventory_value(p)
+            for p in eligible
+        }
+
+        min_score = min(scores.values())
+
+        # Float-tolerant tie grouping.
+        epsilon = 1e-9
+        worst_group = [
+            p for p in eligible
+            if abs(scores[p.player_id] - min_score) <= epsilon
+        ]
+
+        return random.choice(worst_group)
+
+    def _derive_karak_skillset_for_player(self, target: Player) -> set[str]:
+        """
+        Derive Karak/Evil skills from initial game-start skill distribution.
+
+        Rule:
+        - 2 players: Karak gets all skills handed out at startup.
+        - 3+ players: Karak gets all other players' startup skills,
+          excluding the transformed player's own startup skills.
+        """
+        if self.initial_player_skillsets:
+            source = {
+                player_id: set(skills)
+                for player_id, skills in self.initial_player_skillsets.items()
+            }
+        else:
+            # Fallback for manual tests that bypass setup_players_from_lobby().
+            source = {
+                p.player_id: set(p.skills)
+                for p in self.players
+            }
+
+        inherited: set[str] = set()
+
+        if len(self.players) <= 2:
+            for skills in source.values():
+                inherited.update(skills)
+            return inherited
+
+        for player_id, skills in source.items():
+            if player_id == target.player_id:
+                continue
+            inherited.update(skills)
+
+        return inherited
+
+    def _trigger_karak_transformation(self) -> dict:
+        """
+        One-shot Karak/Evil transformation.
+
+        Trigger:
+        - called when room_x_discovered reaches configured limit.
+
+        Selection:
+        - player with the least total owned inventory value turns Karak
+        - ties are randomized
+
+        Runtime identity:
+        - engine logic depends on is_evil and skills
+        - character/profession/image fields are presentation only
+        """
+        if self.karak_triggered:
+            return {
+                "triggered": False,
+                "reason": "already_triggered",
+            }
+
+        target = self._select_karak_target_player()
+
+        if target is None:
+            return {
+                "triggered": False,
+                "reason": "no_eligible_player",
+            }
+
+        all_scores = {
+            p.player_id: self._get_player_inventory_value(p)
+            for p in self.players
+        }
+
+        before = target.to_dict()
+        inherited_skills = self._derive_karak_skillset_for_player(target)
+
+        # --------------------------------------------------
+        # Runtime transformation
+        # --------------------------------------------------
+        target.turn_evil()
+        target.skills = inherited_skills
+
+        # --------------------------------------------------
+        # Presentation-only transformation
+        # Engine logic must not depend on these fields.
+        # --------------------------------------------------
+        evil_char = get_character_class_resolved_by_profession("evil")
+
+        target.profession = "evil"
+        target.character_name = evil_char["label"] if evil_char else "Evil"
+
+        if evil_char:
+            target.image_path = evil_char["image_path"]
+            target.tableau_path = evil_char["tableau_path"]
+            target.icon_path = evil_char["icon_path"]
+            target.figurine_path = evil_char["figurine_path"]
+
+        self.karak_triggered = True
+
+        after = target.to_dict()
+        selected_score = all_scores[target.player_id]
+
+        return {
+            "triggered": True,
+            "reason": "room_x_limit_reached",
+            "room_x_discovered": self.room_x_discovered,
+            "limit": int(self.rules_general.get("room_x_karak_limit", 5)),
+
+            # Selected Karak player
+            "selected_player_id": target.player_id,
+            "selected_player_name": target.display_name,
+            "selected_player_score": selected_score,
+
+            # More explicit aliases
+            "selected_player_owned_inventory_value": selected_score,
+            "all_player_scores": all_scores,
+            "all_player_owned_inventory_values": all_scores,
+
+            # State snapshots
+            "before": before,
+            "after": after,
+
+            # Runtime skill result
+            "inherited_skills": sorted(inherited_skills),
         }
     
     def _execute_end_turn_turn_ending_free_action(self, action: EndTurnTurnEndingFreeAction) -> dict:
@@ -745,6 +1135,9 @@ class DungeonGraph:
 
         if turn.mode == "fight":
             raise ValueError("Cannot end turn during fight.")
+
+        if turn.mode == "pending_tile":
+            raise ValueError("Cannot end turn before confirming the pending tile.")
 
         if turn.pending_item_pickup:
             raise ValueError("Cannot end turn before resolving item pickup.")
@@ -771,8 +1164,8 @@ class DungeonGraph:
         """
         turn, active = self.ensure_active_player_owns_turn()
 
-        if turn.mode not in ("idle", "pending_tile"):
-            raise ValueError(f"Cannot start fight while turn mode is '{turn.mode}'.")
+        if turn.mode != "idle":
+            raise ValueError(f"Cannot start fight while turn mode is '{turn.mode}'. Confirm pending tile first.")
 
         tile = self.get_active_tile()
         if tile is None:
@@ -932,8 +1325,14 @@ class DungeonGraph:
                 }
 
             turn.pending_curse_choice = False
-            turn.pending_item_pickup = True
-            self.set_turn_mode("item_pickup")
+
+            if active.is_skill_active("skill_bar_02"):
+                turn.pending_item_pickup = False
+                turn.item_pickup_origin = None
+                self.set_turn_mode("idle")
+                self.snapshot_active_ground_item()
+            else:
+                self.enter_forced_item_pickup(origin="post_combat")
 
             return {
                 "ok": True,
@@ -1018,18 +1417,22 @@ class DungeonGraph:
         self._apply_curse_to_player(target)
 
         turn.pending_curse_choice = False
-        turn.pending_item_pickup = True
-        self.set_turn_mode("item_pickup")
 
-        return {
-            "ok": True,
-            "status": "curse_applied",
-            "action_kind": action.kind,
-            "target_player_id": target.player_id,
-            "target_player": target.to_dict(),
-            "turn": self.serialize_turn_state(),
-            "active_player": self.serialize_active_player(),
-        }
+        if active.is_skill_active("skill_bar_02"):
+            turn.pending_item_pickup = False
+            turn.item_pickup_origin = None
+            self.set_turn_mode("idle")
+            self.snapshot_active_ground_item()
+        else:
+            self.enter_forced_item_pickup(origin="post_combat")
+
+        return {"ok": True,
+                "status": "curse_applied",
+                "action_kind": action.kind,
+                "target_player_id": target.player_id,
+                "target_player": target.to_dict(),
+                "turn": self.serialize_turn_state(),
+                "active_player": self.serialize_active_player()}
     
     def _execute_combat_free_action(self, action: CombatFreeAction) -> dict:
         raise ValueError("CombatFreeAction is not implemented yet.")
@@ -1078,20 +1481,41 @@ class DungeonGraph:
         active.y = ry
         self._sync_compat_player_position()
 
+        entry_result = self._after_player_entered_tile(
+            player=active,
+            tile=retreat_tile,
+            entry_cause="retreat",
+            is_turn_owner=True,
+        )
+
         turn.pending_retreat = False
         turn.pending_turn_end_cause = "retreat"
         self.set_turn_mode("awaiting_turn_end_commit")
 
-        return self._finalize_current_turn_and_advance(end_cause="retreat")
+        finalize_result = self._finalize_current_turn_and_advance(end_cause="retreat")
+        finalize_result["entry"] = entry_result
+        return finalize_result
 
     def _execute_itempickup_turn_ending_free_action(self, action: ItemPickUpTurnEndingFreeAction) -> dict:
-        turn, _active = self.ensure_active_player_owns_turn()
+        turn, active = self.ensure_active_player_owns_turn()
 
         if turn.mode != "item_pickup":
             raise ValueError(f"Cannot finish item pickup while turn mode is '{turn.mode}'.")
 
         turn.pending_item_pickup = False
         turn.pending_turn_end_cause = "item_pickup"
+
+        # --------------------------------------------------
+        # skill_swo_02 bridge placeholder
+        # --------------------------------------------------
+        # Later, this condition should check the real fight-result flag:
+        # "any final die showed 6 and skill_swo_02 continuation is available".
+        #
+        # For now, keep canonical behavior:
+        # FinishItemPickup ends the turn.
+        # --------------------------------------------------
+
+        turn.item_pickup_origin = None
         self.set_turn_mode("awaiting_turn_end_commit")
 
         return self._finalize_current_turn_and_advance(end_cause="item_pickup")
@@ -1159,6 +1583,47 @@ class DungeonGraph:
             "active_player": self.serialize_active_player(),
         }
 
+    def repair_players_on_missing_tiles(self) -> dict:
+        """
+        Emergency state repair.
+
+        If a player stands on a coordinate that is neither committed nor pending,
+        move that player back to the entrance.
+
+        If a player stands on a pending tile, leave them there.
+        That case should be resolved by confirming the tile.
+        """
+        repaired = []
+
+        for p in self.players:
+            pos = (p.x, p.y)
+
+            if pos in self.tiles:
+                continue
+
+            if pos in self.pending_tiles:
+                continue
+
+            old_pos = {"x": p.x, "y": p.y}
+            p.x = 0
+            p.y = 0
+
+            repaired.append({
+                "player_id": p.player_id,
+                "from": old_pos,
+                "to": {"x": 0, "y": 0},
+            })
+
+        self._sync_compat_player_position()
+
+        return {
+            "ok": True,
+            "repaired": repaired,
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+            "turn": self.serialize_turn_state(),
+        }
+    
     def rotate_pending_tile(self, x: int, y: int, direction: str) -> dict:
         """
         Rotate the currently pending discovery tile.
@@ -1317,12 +1782,12 @@ class DungeonGraph:
             "player_id": active.player_id,
             "inventory": active.inventory.to_dict(),
         }
-    
+
     def item_to_slot(self, slot_group: SlotGroup, slot_index: int) -> dict:
         active = self.get_active_player()
         if active is None:
             raise ValueError("No active player.")
-        
+
         turn, _ = self.ensure_active_player_owns_turn()
         if turn.mode not in ("idle", "item_pickup"):
             raise ValueError(f"Cannot manipulate inventory while turn mode is '{turn.mode}'.")
@@ -1347,7 +1812,9 @@ class DungeonGraph:
             removed = active.drop_item_from_slot(slot_group, slot_index)
             if removed is None:
                 raise ValueError("No item in selected slot.")
+
             tile.object_id = removed
+            self.update_idle_item_pickup_state_after_ground_change()
 
             return {
                 "ok": True,
@@ -1358,9 +1825,10 @@ class DungeonGraph:
                 "item": serialize_item_ref(removed),
                 "inventory": active.inventory.to_dict(),
                 "tile": tile.to_dict(),
+                "turn": self.serialize_turn_state(),
             }
 
-        # from here: there is a ground item
+        # From here: there is a ground item.
         assert ground_item_id is not None
 
         feat = ITEM_FEATURES.get(ground_item_id)
@@ -1369,7 +1837,7 @@ class DungeonGraph:
 
         item_type = feat["item_type"]
 
-        # treasure is not slot-placeable
+        # Treasure is not slot-placeable.
         if item_type == "treasure":
             raise ValueError("Treasure cannot be assigned to a slot with this action.")
 
@@ -1384,7 +1852,7 @@ class DungeonGraph:
             raise ValueError(reason)
 
         # --------------------------------------------------
-        # Case 3: empty slot + matching ground item => pickup
+        # Case 3: empty slot + compatible ground item => pickup
         # --------------------------------------------------
         if slot_item_id is None:
             placed = active.place_item_into_slot(slot_group, slot_index, ground_item_id)
@@ -1392,6 +1860,7 @@ class DungeonGraph:
                 raise ValueError("Could not place item into slot.")
 
             tile.object_id = None
+            self.update_idle_item_pickup_state_after_ground_change()
 
             return {
                 "ok": True,
@@ -1402,10 +1871,11 @@ class DungeonGraph:
                 "item": serialize_item_ref(ground_item_id),
                 "inventory": active.inventory.to_dict(),
                 "tile": tile.to_dict(),
+                "turn": self.serialize_turn_state(),
             }
 
         # --------------------------------------------------
-        # Case 4: occupied slot + matching ground item => swap
+        # Case 4: occupied slot + compatible ground item => swap
         # --------------------------------------------------
         removed = active.drop_item_from_slot(slot_group, slot_index)
         if removed is None:
@@ -1413,11 +1883,12 @@ class DungeonGraph:
 
         placed = active.place_item_into_slot(slot_group, slot_index, ground_item_id)
         if not placed:
-            # restore best-effort
+            # Restore best-effort.
             active.place_item_into_slot(slot_group, slot_index, removed)
             raise ValueError("Could not place item into slot.")
 
         tile.object_id = removed
+        self.update_idle_item_pickup_state_after_ground_change()
 
         return {
             "ok": True,
@@ -1430,45 +1901,7 @@ class DungeonGraph:
             "dropped_item": serialize_item_ref(removed),
             "inventory": active.inventory.to_dict(),
             "tile": tile.to_dict(),
-        }
-    
-    def pickup_ground_treasure(self) -> dict:
-        active = self.get_active_player()
-        if active is None:
-            raise ValueError("No active player.")
-        
-        turn, _ = self.ensure_active_player_owns_turn()
-        if turn.mode not in ("idle", "item_pickup"):
-            raise ValueError(f"Cannot pick up treasure while turn mode is '{turn.mode}'.")
-
-        tile = self.get_active_tile()
-        if tile is None:
-            raise ValueError("Active tile not found.")
-
-        if tile.object_id is None:
-            raise ValueError("No item on current tile.")
-
-        feat = ITEM_FEATURES.get(tile.object_id)
-        if feat is None:
-            raise ValueError(f"Unknown item_id: {tile.object_id}")
-
-        if feat["item_type"] != "treasure":
-            raise ValueError("Current ground item is not treasure.")
-
-        item_id = tile.object_id
-        value = float(feat.get("value") or 0.0)
-
-        active.add_treasure(value)
-        tile.object_id = None
-
-        return {
-            "ok": True,
-            "status": "treasure_picked_up",
-            "item_id": item_id,
-            "item": serialize_item_ref(item_id),
-            "value": value,
-            "inventory": active.inventory.to_dict(),
-            "tile": tile.to_dict(),
+            "turn": self.serialize_turn_state(),
         }
     
     def start_monster_fight_on_current_tile(self) -> dict:
@@ -1618,80 +2051,48 @@ class DungeonGraph:
             return False
 
         return feat["item_type"] == "treasure"
-    
-    def pickup_item_on_current_tile(self) -> dict:
+
+    def pickup_ground_treasure(self) -> dict:
         active = self.get_active_player()
         if active is None:
             raise ValueError("No active player.")
+
+        turn, _ = self.ensure_active_player_owns_turn()
+        if turn.mode not in ("idle", "item_pickup"):
+            raise ValueError(f"Cannot pick up treasure while turn mode is '{turn.mode}'.")
 
         tile = self.get_active_tile()
         if tile is None:
             raise ValueError("Active tile not found.")
 
-        if not tile.object_id:
+        if tile.object_id is None:
             raise ValueError("No item on current tile.")
 
-        item_id = tile.object_id
-        feat = ITEM_FEATURES.get(item_id)
+        feat = ITEM_FEATURES.get(tile.object_id)
         if feat is None:
-            raise ValueError(f"Unknown item_id: {item_id}")
+            raise ValueError(f"Unknown item_id: {tile.object_id}")
 
-        res = active.try_store_item(
-            item_id=item_id,
-            item_type=feat["item_type"],
-            value=feat.get("value"),
-        )
+        if feat["item_type"] != "treasure":
+            raise ValueError("Current ground item is not treasure.")
 
-        if not res.get("stored", False):
-            return {
-                "ok": False,
-                "status": "inventory_full",
-                "item_id": item_id,
-                "item": serialize_item_ref(item_id),
-                "reason": res.get("reason"),
-                "inventory": active.inventory.to_dict(),
-            }
+        item_id = tile.object_id
+        value = float(feat.get("value") or 0.0)
 
+        active.add_treasure(value)
         tile.object_id = None
+        self.update_idle_item_pickup_state_after_ground_change()
 
         return {
             "ok": True,
-            "status": "picked_up",
+            "status": "treasure_picked_up",
             "item_id": item_id,
             "item": serialize_item_ref(item_id),
-            "storage": res.get("storage"),
-            "slot_index": res.get("slot_index"),
-            "inventory": active.inventory.to_dict(),
-        }
-    
-    def drop_item_on_current_tile(self, slot_group: str, slot_index: int) -> dict:
-        active = self.get_active_player()
-        if active is None:
-            raise ValueError("No active player.")
-
-        tile = self.get_active_tile()
-        if tile is None:
-            raise ValueError("Active tile not found.")
-
-        if tile.object_id is not None:
-            raise ValueError("Current tile already has an object on the ground.")
-
-        item_id = active.drop_item_from_slot(slot_group, slot_index)
-        if item_id is None:
-            raise ValueError("No item in selected slot.")
-
-        tile.object_id = item_id
-
-        return {
-            "ok": True,
-            "status": "dropped",
-            "item_id": item_id,
-            "item": serialize_item_ref(item_id),
-            "slot_group": slot_group,
-            "slot_index": slot_index,
+            "value": value,
             "inventory": active.inventory.to_dict(),
             "tile": tile.to_dict(),
+            "turn": self.serialize_turn_state(),
         }
+    
 
     def _sync_compat_player_position(self) -> None:
         """
@@ -1747,25 +2148,34 @@ class DungeonGraph:
             )
 
         self.players = runtime_players
+        self.initial_player_skillsets = {p.player_id: set(p.skills) for p in self.players}
         self.active_player_idx = 0
         self._sync_compat_player_position()
         turn_info = self.begin_turn_for_active_player()
 
-        return {
-            "ok": True,
-            "players_initialized": len(self.players),
-            "active_player_idx": self.active_player_idx,
-            "active_player": self.serialize_active_player(),
-            "players": self.serialize_players(),
-            "turn": self.turn_state.to_dict() if self.turn_state else None,
-        }
+        return {"ok": True,
+                "players_initialized": len(self.players),
+                "active_player_idx": self.active_player_idx,
+                "active_player": self.serialize_active_player(),
+                "players": self.serialize_players(),
+                "turn": self.turn_state.to_dict() if self.turn_state else None}
 
     def serialize_players(self) -> list[dict]:
         out: list[dict] = []
+
         for p in self.players:
             row = p.to_dict()
+
+            pos = (p.x, p.y)
+            row["position_state"] = {
+                "is_on_committed_tile": pos in self.tiles,
+                "is_on_pending_tile": pos in self.pending_tiles,
+                "has_any_tile": pos in self.tiles or pos in self.pending_tiles,
+            }
+
             row["skills_ui"] = self.build_skill_ui_for_player(p)
             out.append(row)
+
         return out
 
     def serialize_active_player(self) -> Optional[dict]:
@@ -1873,14 +2283,13 @@ class DungeonGraph:
 
         actions_total = 8 if active.is_skill_active("skill_acr_02") else 4
 
-        self.turn_state = TurnState(
-            owner_player_id=active.player_id,
-            turn_nr=self.turn_counter,
-            actions_total=actions_total,
-            actions_left=actions_total,
-            mode="idle",
-            last_valid_safe_tile=(active.x, active.y),
-        )
+        self.turn_state = TurnState(owner_player_id=active.player_id,
+                                    turn_nr=self.turn_counter,
+                                    actions_total=actions_total,
+                                    actions_left=actions_total,
+                                    mode="idle",
+                                    last_valid_safe_tile=(active.x, active.y))
+        self.snapshot_active_ground_item()
 
         self.current_fight_state = None
 
@@ -1974,6 +2383,77 @@ class DungeonGraph:
     def set_turn_mode(self, mode: TurnMode) -> None:
         turn = self.ensure_turn_active()
         turn.mode = mode
+        
+    def get_active_ground_item_id(self) -> Optional[str]:
+        tile = self.get_active_tile()
+        if tile is None:
+            return None
+        return tile.object_id
+
+    def snapshot_active_ground_item(self) -> None:
+        """
+        Store the current ground item_id as the reversible baseline.
+
+        Important:
+        - This uses item_id equality only.
+        - Runtime object identity is intentionally ignored.
+        """
+        turn = self.ensure_turn_active()
+        turn.ground_snapshot_item_id = self.get_active_ground_item_id()
+
+    def enter_forced_item_pickup(self, *, origin: Literal["post_combat", "chest"]) -> None:
+        """
+        Enter a forced ItemPickup TurnEndingFreeAction.
+
+        Used after combat/chest-like forced loot events.
+        Unlike idle-origin pickup, this does not auto-return to idle
+        just because the ground item matches the snapshot again.
+        """
+        turn = self.ensure_turn_active()
+        turn.pending_item_pickup = True
+        turn.item_pickup_origin = origin
+        turn.ground_snapshot_item_id = self.get_active_ground_item_id()
+        self.set_turn_mode("item_pickup")
+
+    def update_idle_item_pickup_state_after_ground_change(self) -> None:
+        """
+        Reversible idle pickup detector.
+
+        Rule:
+        - In idle, changing the ground item_id enters item_pickup.
+        - In item_pickup entered from idle, restoring the original ground item_id
+          returns to idle.
+        - Forced post-combat/chest item_pickup does NOT auto-return to idle.
+        """
+        turn = self.ensure_turn_active()
+
+        if turn.mode not in ("idle", "item_pickup"):
+            return
+
+        current_ground_item_id = self.get_active_ground_item_id()
+        snapshot_item_id = turn.ground_snapshot_item_id
+
+        # --------------------------------------------------
+        # Idle-origin reversible pickup entry
+        # --------------------------------------------------
+        if turn.mode == "idle":
+            if current_ground_item_id != snapshot_item_id:
+                turn.pending_item_pickup = True
+                turn.item_pickup_origin = "idle_ground_changed"
+                self.set_turn_mode("item_pickup")
+            return
+
+        # --------------------------------------------------
+        # Idle-origin reversible pickup exit
+        # --------------------------------------------------
+        if turn.mode == "item_pickup":
+            if turn.item_pickup_origin != "idle_ground_changed":
+                return
+
+            if current_ground_item_id == snapshot_item_id:
+                turn.pending_item_pickup = False
+                turn.item_pickup_origin = None
+                self.set_turn_mode("idle")
 
     def register_last_valid_safe_tile_from_active_player(self) -> None:
         turn, active = self.ensure_active_player_owns_turn()

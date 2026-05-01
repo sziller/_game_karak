@@ -316,6 +316,16 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         return {"ok": True, "status": "reset"}
 
     @router.post(
+        "/debug/repair_players",
+        summary="Repair players standing on missing tiles",
+    )
+    def repair_players():
+        try:
+            return graph.repair_players_on_missing_tiles()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @router.post(
         "/move",
         summary="Move player",
         description=(

@@ -1,4 +1,6 @@
-GENERAL = {"max_of_players": 5}
+GENERAL = {"max_of_players": 5,
+           "room_x_karak_limit": 5,
+           "curse_room_trigers": [1, 2, 3]}
 
 PLAYER_FEATURES = {"max_hp": 5,
                    "total_of_scrolls": 3,
