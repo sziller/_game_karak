@@ -818,74 +818,74 @@
     }
 
     async function refreshAll() {
-    try {
-        await loadPlayers();
-        await loadMap();
-        await loadInventory();
+        try {
+            await loadPlayers();
+            await loadMap();
+            await loadInventory();
 
-        if (!latestPlayers?.players?.length) {
-            skillUiState = {};
-        }
+            if (!latestPlayers?.players?.length) {
+                skillUiState = {};
+            }
 
-        if (!isAwaitingCurseChoice()) {
-            selectedCurseTargetPlayerId = null;
-        }
+            if (!isAwaitingCurseChoice()) {
+                selectedCurseTargetPlayerId = null;
+            }
 
-        renderMapVisual();
-        renderDiagnostics(latestPlayers, latestMap);
-        renderRoomXCounter(latestMap);
-        renderCurseRoomToss(latestMap);
-        renderCurseConfirmArea();
+            renderMapVisual();
+            renderDiagnostics(latestPlayers, latestMap);
+            renderRoomXCounter(latestMap);
+            renderCurseRoomToss(latestMap);
+            renderCurseConfirmArea();
 
-        const turn = latestMap?.turn || latestPlayers?.turn || null;
+            const turn = latestMap?.turn || latestPlayers?.turn || null;
 
-        if (turn?.mode === "fight") {
-            try {
-                const r = await fetch(gameApi("/fight/state"));
-                const data = await r.json();
+            if (turn?.mode === "fight") {
+                try {
+                    const r = await fetch(gameApi("/fight/state"));
+                    const data = await r.json();
 
-                if (r.ok) {
-                    renderFight(data);
-                } else {
-                    openFightModal();
+                    if (r.ok) {
+                        renderFight(data);
+                    } else {
+                        openFightModal();
 
-                    const box = document.getElementById("fight-box");
-                    if (box) {
-                        box.innerHTML = `
+                        const box = document.getElementById("fight-box");
+                        if (box) {
+                            box.innerHTML = `
                             <div class="message-box message-error">
                                 <b>Fight state unavailable</b>
                                 <pre>${data.detail || "Backend says turn is in fight mode, but fight/state could not be loaded."}</pre>
                             </div>
                         `;
+                        }
                     }
-                }
-            } catch (fightError) {
-                console.error("fight/state refresh failed:", fightError);
+                } catch (fightError) {
+                    console.error("fight/state refresh failed:", fightError);
 
-                openFightModal();
+                    openFightModal();
 
-                const box = document.getElementById("fight-box");
-                if (box) {
-                    box.innerHTML = `
+                    const box = document.getElementById("fight-box");
+                    if (box) {
+                        box.innerHTML = `
                         <div class="message-box message-error">
                             <b>Fight render failed</b>
                             <pre>${String(fightError)}</pre>
                         </div>
                     `;
+                    }
                 }
+            } else {
+                renderFight(null);
             }
-        } else {
-            renderFight(null);
+
+            showMessage("Phase 3 state refreshed.", "info", "Info");
+        } catch (e) {
+            console.error("refreshAll failed:", e);
+            showError(String(e));
         }
 
-        showMessage("Phase 3 state refreshed.", "info", "Info");
-    } catch (e) {
-        console.error("refreshAll failed:", e);
-        showError(String(e));
+        updateActionAvailability();
     }
-
-    updateActionAvailability();
-}
 
     async function confirmTeleport() {
         clearError();
@@ -1120,31 +1120,65 @@
                         ? "outline:2px solid #55cc55; background:#1f2a1f;"
                         : "outline:1px solid #333; background:#151515;";
 
+                    // --------------------------------------------------------
+                    // Combat scroll toggle buttons
+                    // --------------------------------------------------------
                     if (btn.action === "fight_toggle_scroll") {
                         const slotId = btn.payload?.slot_id || btn.button_id;
+
                         return `
-        <button
-            onclick="fightToggleScroll('${slotId}')"
-            ${btn.enabled ? "" : "disabled"}
-            style="margin-right:6px; ${activeStyle}"
-            title="${btn.label}"
-        >
-            ${btn.image_path
+                        <button
+                            onclick="fightToggleScroll('${slotId}')"
+                            ${btn.enabled ? "" : "disabled"}
+                            style="margin-right:6px; ${activeStyle}"
+                            title="${btn.label || slotId || ""}"
+                        >
+                            ${btn.image_path
                             ? `<img class="item-icon" src="${btn.image_path}" alt="${btn.label || slotId || ""}">`
-                            : btn.label}
-        </button>
-    `;
+                            : (btn.label || slotId || "scroll")}
+                        </button>
+                    `;
                     }
 
+                    // --------------------------------------------------------
+                    // Die reroll buttons
+                    // Currently used by:
+                    // - skill_swo_01
+                    // --------------------------------------------------------
+                    if (btn.action === "fight_reroll_die") {
+                        const dieIndex = btn.payload?.die_index;
+
+                        return `
+                        <button
+                            onclick="fightRerollDie(${dieIndex})"
+                            ${btn.enabled && dieIndex ? "" : "disabled"}
+                            style="margin-right:6px; ${activeStyle}"
+                            title="${btn.label || ("reroll die " + dieIndex)}"
+                        >
+                            ${btn.label || ("reroll die " + dieIndex)}
+                        </button>
+                    `;
+                    }
+
+                    // --------------------------------------------------------
+                    // Unknown / not-yet-wired row-button action
+                    // --------------------------------------------------------
                     return `
-    <button disabled style="margin-right:6px; ${activeStyle}">
-        ${btn.image_path
+                    <button
+                        disabled
+                        style="margin-right:6px; ${activeStyle}"
+                        title="Unsupported fight button action: ${btn.action || "-"}"
+                    >
+                        ${btn.image_path
                         ? `<img class="item-icon" src="${btn.image_path}" alt="${btn.label || btn.button_id || ""}">`
-                        : btn.label}
-    </button>
-`;
+                        : (btn.label || btn.button_id || "action")}
+                    </button>
+                `;
                 }).join("");
             } else if (row.button_label) {
+                // ------------------------------------------------------------
+                // Legacy single-button row action
+                // ------------------------------------------------------------
                 if (row.button_action === "fight_toss") {
                     actionHtml = `
                     <button onclick="fightToss()" ${row.button_enabled ? "" : "disabled"}>
@@ -1153,7 +1187,7 @@
                 `;
                 } else {
                     actionHtml = `
-                    <button disabled>
+                    <button disabled title="Unsupported row action: ${row.button_action || "-"}">
                         ${row.button_label}
                     </button>
                 `;
@@ -1163,7 +1197,12 @@
             html += `
             <tr style="border-bottom:1px solid #222; background:${bg};">
                 <td style="padding:6px;">${row.label || ""}</td>
-                <td style="padding:6px;">${row.text || ""}</td>
+                <td style="padding:6px;">
+                    <div>${row.text || ""}</div>
+                    ${row.note
+                ? `<div class="muted" style="font-size:11px; margin-top:3px;">${row.note}</div>`
+                : ""}
+                </td>
                 <td style="padding:6px;">${actionHtml}</td>
                 <td style="padding:6px; text-align:right;">${row.value ?? 0}</td>
             </tr>
@@ -1645,6 +1684,27 @@
         const data = await r.json();
         if (!r.ok) {
             showError(data.detail || "Fight toss failed.");
+            return;
+        }
+
+        renderFight(data);
+        await refreshAll();
+    }
+
+    async function fightRerollDie(dieIndex) {
+        clearError();
+
+        const r = await fetch(gameApi("/fight/reroll_die"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                die_index: dieIndex
+            })
+        });
+
+        const data = await r.json();
+        if (!r.ok) {
+            showError(data.detail || "Fight die reroll failed.");
             return;
         }
 

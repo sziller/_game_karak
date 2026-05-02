@@ -12,7 +12,7 @@ FightRole = Literal["initiator", "challenged"]
 ParticipantKind = Literal["player", "monster"]
 
 FightRowKind = Literal["info", "action_toss", "action_toggle", "summary"]
-FightActionKind = Literal["fight_toss", "fight_toggle_skill", "fight_toggle_scroll"]
+FightActionKind = Literal["fight_toss", "fight_toggle_skill", "fight_toggle_scroll", "fight_reroll_die"]
 
 
 # ============================================================
@@ -134,30 +134,50 @@ class DiceState:
     """
     Current dice state for one player-side fight table.
 
-    First version:
-    - a single 2d6 toss
-    - no reroll history yet
+    raw dice:
+    - die_1 / die_2 are the physical dice currently showing
 
-    Later:
-    - reroll bookkeeping
-    - die-specific lock / reroll flags
+    effective dice:
+    - effective_die_1 / effective_die_2 are the values used for strength calculation
+    - for most players these equal die_1 / die_2
+    - for Ranger, physical 1 may count as effective 6
+
+    transformations:
+    - records passive effective-value transformations
     """
     die_1: Optional[int] = None
     die_2: Optional[int] = None
+
+    effective_die_1: Optional[int] = None
+    effective_die_2: Optional[int] = None
+
     has_been_tossed: bool = False
+    transformations: list[dict[str, Any]] = field(default_factory=list)
+    reroll_history: list[dict[str, Any]] = field(default_factory=list)
 
     @property
-    def total(self) -> int:
+    def raw_total(self) -> int:
         if self.die_1 is None or self.die_2 is None:
             return 0
         return self.die_1 + self.die_2
+
+    @property
+    def total(self) -> int:
+        if self.effective_die_1 is None or self.effective_die_2 is None:
+            return self.raw_total
+        return self.effective_die_1 + self.effective_die_2
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "die_1": self.die_1,
             "die_2": self.die_2,
+            "effective_die_1": self.effective_die_1,
+            "effective_die_2": self.effective_die_2,
             "has_been_tossed": self.has_been_tossed,
+            "raw_total": self.raw_total,
             "total": self.total,
+            "transformations": list(self.transformations),
+            "reroll_history": list(self.reroll_history),
         }
 
 
@@ -263,12 +283,20 @@ class FightPrediction:
     - raw_outcome is calculated strictly from strengths
     - outcome_modifiers may reinterpret that raw outcome
     - predicted_outcome is the final pre-resolution outcome
+
+    is_resolvable:
+    - False while mandatory fight input is missing, e.g. dice not tossed
+    - True when resolve_fight_state may legally be called
     """
     initiator_total: int = 0
     challenged_total: int = 0
+    player_result: Optional[Literal["win", "loss", "tie"]] = None
 
     raw_outcome: Optional[Literal["initiator_win", "challenged_win", "draw"]] = None
     predicted_outcome: Optional[Literal["initiator_win", "challenged_win", "draw"]] = None
+
+    is_resolvable: bool = False
+    missing_inputs: list[str] = field(default_factory=list)
 
     outcome_modifiers: list[dict[str, Any]] = field(default_factory=list)
 
@@ -278,6 +306,9 @@ class FightPrediction:
             "challenged_total": self.challenged_total,
             "raw_outcome": self.raw_outcome,
             "predicted_outcome": self.predicted_outcome,
+            "player_result": self.player_result,
+            "is_resolvable": self.is_resolvable,
+            "missing_inputs": list(self.missing_inputs),
             "outcome_modifiers": self.outcome_modifiers,
         }
 
@@ -292,10 +323,26 @@ class FightState:
     - resolved
 
     outcome:
+    Internal side-based fight result:
     - initiator_win
     - challenged_win
     - draw
     - None before resolution
+
+    player_result:
+    Player-facing result for monster fights:
+    - win
+    - loss
+    - tie
+    - None before resolution, or for fight kinds where no player-facing
+      interpretation is available yet
+
+    IMPORTANT:
+    - In monster fights, the monster is the initiator and the player is challenged.
+    - Therefore:
+        initiator_win  -> player_result = loss
+        challenged_win -> player_result = win
+        draw           -> player_result = tie
     """
     context: FightContext
     initiator_side: FightSideState
@@ -304,6 +351,7 @@ class FightState:
 
     phase: str = "created"
     outcome: Optional[Literal["initiator_win", "challenged_win", "draw"]] = None
+    player_result: Optional[Literal["win", "loss", "tie"]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -313,6 +361,7 @@ class FightState:
             "prediction": self.prediction.to_dict(),
             "phase": self.phase,
             "outcome": self.outcome,
+            "player_result": self.player_result,
         }
 
 

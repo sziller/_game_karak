@@ -16,4 +16,9 @@ SKILL_RULES = {
     "skill_wiz_02": {
         "allow_blink_discovered_only": True,
     },
+    "skill_bar_02": {
+        "dmg_groups": {0: [5], 1: [4, 3], 2: [2, 1]}
+    }
 }
+
+ALLOW_FIGHT_RETOSS_FOR_TESTING = True

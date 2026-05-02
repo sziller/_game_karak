@@ -42,6 +42,9 @@ class ToggleSkillUiRequest(BaseModel):
 class SetSkillUiValueRequest(BaseModel):
     skill_id: str
     value: int
+    
+class FightRerollDieRequest(BaseModel):
+    die_index: int = Field(..., ge=1, le=2)
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
@@ -238,7 +241,18 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.toss_current_fight()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
+    @router.post(
+        "/fight/reroll_die",
+        summary="Reroll one die for current fight",
+        description="Rerolls one challenged-player die for skill-based fight reroll actions.",
+    )
+    def fight_reroll_die(req: FightRerollDieRequest):
+        try:
+            return graph.reroll_current_fight_die(req.die_index)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
     @router.post(
         "/fight/toggle_scroll",
         summary="Toggle one combat scroll for current fight",

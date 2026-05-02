@@ -13,7 +13,7 @@ from domain.game_entities import TILE_POOL as _TILE_POOL, MONSTER_POOL as _MONST
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
 
-from engine.fight_engine import resolve_fight_state, start_monster_fight_state, toggle_scroll_for_challenged_player_side, toss_for_challenged_player_side
+from engine.fight_engine import resolve_fight_state, start_monster_fight_state, reroll_die_for_challenged_player_side, toggle_scroll_for_challenged_player_side, toss_for_challenged_player_side
 from engine.fight_models import FightState
 
 # --------------------------
@@ -1924,6 +1924,22 @@ class DungeonGraph:
         """
         return self.execute_runtime_action(TossFightFreeAction())
 
+    def reroll_current_fight_die(self, die_index: int) -> dict:
+        if self.current_fight_state is None:
+            raise ValueError("No current fight state.")
+
+        active = self.get_active_player()
+        if active is None:
+            raise ValueError("No active player.")
+
+        self.current_fight_state = reroll_die_for_challenged_player_side(
+            fight_state=self.current_fight_state,
+            player=active,
+            die_index=die_index,
+        )
+
+        return self.current_fight_state.to_dict()
+    
     def toggle_current_fight_scroll(self, slot_id: str) -> dict:
         """
         Compatibility wrapper.
