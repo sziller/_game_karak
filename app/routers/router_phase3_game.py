@@ -43,8 +43,15 @@ class SetSkillUiValueRequest(BaseModel):
     skill_id: str
     value: int
     
+    
 class FightRerollDieRequest(BaseModel):
     die_index: int = Field(..., ge=1, le=2)
+    skill_id: str
+    
+    
+class FightRerollBothRequest(BaseModel):
+    skill_id: str
+
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
@@ -245,14 +252,28 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     @router.post(
         "/fight/reroll_die",
         summary="Reroll one die for current fight",
-        description="Rerolls one challenged-player die for skill-based fight reroll actions.",
     )
     def fight_reroll_die(req: FightRerollDieRequest):
         try:
-            return graph.reroll_current_fight_die(req.die_index)
+            return graph.reroll_current_fight_die(
+                die_index=req.die_index,
+                skill_id=req.skill_id,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         
+    @router.post(
+        "/fight/reroll_both",
+        summary="Reroll both dice for current fight",
+    )
+    def fight_reroll_both(req: FightRerollBothRequest):
+        try:
+            return graph.reroll_current_fight_both_dice(
+                skill_id=req.skill_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     @router.post(
         "/fight/toggle_scroll",
         summary="Toggle one combat scroll for current fight",
@@ -264,6 +285,17 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    @router.post(
+        "/fight/toggle_skill",
+        summary="Toggle one manual combat skill for current fight",
+        description="Toggles one manual combat skill on/off in the challenged player's fight table.",
+    )
+    def fight_toggle_skill(req: ToggleSkillUiRequest):
+        try:
+            return graph.toggle_current_fight_skill(req.skill_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
     @router.post(
         "/fight/resolve",
         summary="Resolve current fight",
@@ -285,6 +317,18 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.pickup_ground_treasure()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/itempickup/continue",
+        summary="Finish item pickup and continue turn",
+        description="Used by skill_swo_02 when post-combat item pickup may be followed by continued movement.",
+    )
+    def continue_itempickup():
+        try:
+            return graph.continue_after_item_pickup()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
     
     @router.post(
         "/itempickup/finish",
@@ -447,6 +491,9 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         summary="End current turn",
         description="Ends the current player's turn and advances to the next player's turn.",
     )
+    
+    
+    
     def end_turn():
         try:
             return graph.request_end_turn()

@@ -12,7 +12,8 @@ FightRole = Literal["initiator", "challenged"]
 ParticipantKind = Literal["player", "monster"]
 
 FightRowKind = Literal["info", "action_toss", "action_toggle", "summary"]
-FightActionKind = Literal["fight_toss", "fight_toggle_skill", "fight_toggle_scroll", "fight_reroll_die"]
+FightActionKind = Literal["fight_toss", "fight_toggle_skill", "fight_toggle_scroll",
+                          "fight_reroll_die", "fight_reroll_both"]
 
 
 # ============================================================
@@ -190,21 +191,24 @@ class PlayerFightChoices:
     """
     Fight-local choices for one player-side table.
 
-    First version:
-    - toggleable skill ids
-    - toggleable scroll slot ids
+    selected_skill_ids:
+    - toggleable/manual skill ids
 
-    Later:
-    - reroll requests
-    - ordered interaction history
+    selected_scroll_slot_ids:
+    - toggleable combat scroll slot ids
+
+    used_skill_ids:
+    - one-shot fight-local skills already consumed in this fight
     """
     selected_skill_ids: set[str] = field(default_factory=set)
     selected_scroll_slot_ids: set[str] = field(default_factory=set)
+    used_skill_ids: set[str] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "selected_skill_ids": sorted(self.selected_skill_ids),
             "selected_scroll_slot_ids": sorted(self.selected_scroll_slot_ids),
+            "used_skill_ids": sorted(self.used_skill_ids),
         }
 
 
@@ -255,14 +259,17 @@ class FightContext:
     initiator: FightParticipantRef
     challenged: FightParticipantRef
 
+    is_before_second_action: bool = False
+    monster_tile_discovered_this_turn: bool = False
+
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "fight_kind": self.fight_kind,
-            "tile_x": self.tile_x,
-            "tile_y": self.tile_y,
-            "initiator": self.initiator.to_dict(),
-            "challenged": self.challenged.to_dict(),
-        }
+        return {"fight_kind": self.fight_kind,
+                "tile_x": self.tile_x,
+                "tile_y": self.tile_y,
+                "initiator": self.initiator.to_dict(),
+                "challenged": self.challenged.to_dict(),
+                "is_before_second_action": self.is_before_second_action,
+                "monster_tile_discovered_this_turn": self.monster_tile_discovered_this_turn}
 
 
 # ============================================================

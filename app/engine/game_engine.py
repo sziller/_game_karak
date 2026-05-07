@@ -13,7 +13,10 @@ from domain.game_entities import TILE_POOL as _TILE_POOL, MONSTER_POOL as _MONST
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
 
-from engine.fight_engine import resolve_fight_state, start_monster_fight_state, reroll_die_for_challenged_player_side, toggle_scroll_for_challenged_player_side, toss_for_challenged_player_side
+from engine.fight_engine import (resolve_fight_state, start_monster_fight_state,
+                                 reroll_die_for_challenged_player_side, reroll_both_dice_for_challenged_player_side,
+                                 toggle_scroll_for_challenged_player_side, toggle_skill_for_challenged_player_side,
+                                 toss_for_challenged_player_side)
 from engine.fight_models import FightState
 
 # --------------------------
@@ -151,12 +154,19 @@ class TurnState:
     # Ground-item snapshot for reversible idle inventory manipulation.
     ground_snapshot_item_id: Optional[str] = None
     item_pickup_origin: Optional[Literal["idle_ground_changed", "post_combat", "chest"]] = None
-    
+
     # lightweight turn-local memory
     used_skill_ids: set[str] = field(default_factory=set)
     selected_skill_ids: set[str] = field(default_factory=set)
     skill_values: dict[str, int] = field(default_factory=dict)
 
+    discovered_tile_coords_this_turn: set[tuple[int, int]] = field(default_factory=set)
+
+    # Post-fight continuation bridge.
+    # Used by skill_swo_02 after a won fight where loot/item-pickup must still be resolved.
+    fight_continue_after_item_pickup: bool = False
+    fight_continue_skill_id: Optional[str] = None
+    
     def to_dict(self) -> dict:
         """=== export method ===========================================================================================
         returns dataclass as a dictionary
@@ -174,7 +184,14 @@ class TurnState:
                 "last_valid_safe_tile": self.last_valid_safe_tile,
                 "ground_snapshot_item_id": self.ground_snapshot_item_id,
                 "item_pickup_origin": self.item_pickup_origin,
-                "used_skill_ids": sorted(self.used_skill_ids)}
+                "used_skill_ids": sorted(self.used_skill_ids),
+                "discovered_tile_coords_this_turn": [
+                    {"x": x, "y": y}
+                    for x, y in sorted(self.discovered_tile_coords_this_turn)
+                ],
+                "fight_continue_after_item_pickup": self.fight_continue_after_item_pickup,
+                "fight_continue_skill_id": self.fight_continue_skill_id,
+                }
     
     
 # --------------------------
@@ -317,6 +334,11 @@ class SetSkillValueUiFreeAction(FreeAction):
     def execute(self, graph: "DungeonGraph") -> dict:
         return graph._execute_set_skill_value_ui_free_action(self)
 
+
+@dataclass
+class ContinueAfterItemPickupFreeAction(FreeAction):
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_continue_after_itempickup_free_action(self)
 # --------------------------
 # Engine
 # --------------------------
@@ -788,6 +810,7 @@ class DungeonGraph:
             raise ValueError(f"Invalid placement: no entry from {expected_entry_from}")
 
         self.add_tile(action.x, action.y, pending)
+        turn.discovered_tile_coords_this_turn.add((action.x, action.y))
         discovery_result = self._after_tile_discovered(pending)
         turn, active = self.ensure_active_player_owns_turn()
         entry_result = self._after_player_entered_tile(player=active,
@@ -946,6 +969,17 @@ class DungeonGraph:
             raise ValueError(f"Unknown item_id while scoring inventory: {item_id!r}")
 
         return float(feat.get("value") or 0.0)
+
+    def _is_fight_before_second_action(self, turn: TurnState) -> bool:
+        """
+        True if the fight starts before the player takes their second action.
+
+        Interpretation:
+        - At turn start: actions_left == actions_total
+        - After first action: actions_left == actions_total - 1
+        - Before second action therefore means actions_left >= actions_total - 1
+        """
+        return turn.actions_left >= (turn.actions_total - 1)
 
     def _get_player_inventory_value(self, player: Player) -> float:
         """
@@ -1174,11 +1208,17 @@ class DungeonGraph:
         if not tile.monster_id:
             raise ValueError("No monster on current tile.")
 
+        monster_tile_discovered_this_turn = (
+                (tile.x, tile.y) in turn.discovered_tile_coords_this_turn
+        )
+
         self.current_fight_state = start_monster_fight_state(
             player=active,
             monster_id=tile.monster_id,
             tile_x=tile.x,
             tile_y=tile.y,
+            is_before_second_action=self._is_fight_before_second_action(turn),
+            monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
         )
 
         self.set_turn_mode("fight")
@@ -1254,6 +1294,15 @@ class DungeonGraph:
         - transitions either into:
             - item_pickup mode on win
             - automatic retreat on loss/draw
+
+        skill_swo_02:
+        - if active, actions_left > 0, and any final physical die shows 6:
+            - on win: player may resolve loot/item pickup and still continue
+            - on loss/draw: player retreats but turn does not end
+
+        skill_bar_02:
+        - only applies on win when skill_swo_02 continuation is NOT available
+        - allows skipping loot and continuing
         """
         turn, active = self.ensure_active_player_owns_turn()
 
@@ -1273,32 +1322,91 @@ class DungeonGraph:
         monster_id = tile.monster_id
         monster = get_monster_by_id(monster_id)
 
-        self.current_fight_state = resolve_fight_state(self.current_fight_state)
-        fight_dict = self.current_fight_state.to_dict()
-        outcome = self.current_fight_state.outcome
+        fight_state = self.current_fight_state
+        if fight_state is None:
+            raise ValueError("No active fight state.")
 
-        selected_scroll_slot_ids = set(
-            self.current_fight_state.challenged_side.choices.selected_scroll_slot_ids
+        fight_state = resolve_fight_state(fight_state)
+        self.current_fight_state = fight_state
+
+        outcome = fight_state.outcome
+        if outcome is None:
+            raise ValueError("Resolved fight has no outcome.")
+
+        hp_consequence = self._apply_fight_hp_consequences(
+            player=active,
+            fight_state=fight_state,
+            outcome=outcome,
         )
 
-        for slot_id in selected_scroll_slot_ids:
-            if not slot_id.startswith("scroll_"):
-                continue
+        fight_dict = fight_state.to_dict()
 
-            try:
-                slot_index = int(slot_id.split("_", 1)[1])
-            except (ValueError, IndexError):
-                continue
+        may_continue_by_swo_02 = self._active_player_may_continue_after_fight_by_swo_02(
+            player=active,
+            fight_state=fight_state,
+        )
 
-            active.remove_scroll(slot_index)
+        continuation = {
+            "allowed": may_continue_by_swo_02,
+            "skill_id": "skill_swo_02" if may_continue_by_swo_02 else None,
+            "reason": "Final physical die shows 6." if may_continue_by_swo_02 else None,
+        }
+
+        selected_scroll_slot_ids = set(
+            fight_state.challenged_side.choices.selected_scroll_slot_ids
+        )
 
         # --------------------------------------------------
-        # CRITICAL: live fight state must be cleared now
+        # Scroll consumption
+        # --------------------------------------------------
+        # Normal rule:
+        # - selected combat scroll items are consumed after fight resolution.
+        #
+        # Important:
+        # - consumption depends on actual item_type == "scroll"
+        # - not on the fact that the item sits in a scroll slot
+        #
+        # skill_wiz_01:
+        # - selected combat scrolls are preserved.
+        #
+        # Acrobat safety:
+        # - dagger in scroll slot has item_type == "weapon"
+        # - therefore it is never consumed by this block
+        # --------------------------------------------------
+        if selected_scroll_slot_ids and not active.is_skill_active("skill_wiz_01"):
+            for slot_id in selected_scroll_slot_ids:
+                if not slot_id.startswith("scroll_"):
+                    continue
+
+                try:
+                    slot_index = int(slot_id.split("_", 1)[1])
+                except (ValueError, IndexError):
+                    continue
+
+                if slot_index < 0 or slot_index >= len(active.inventory.scroll_slots):
+                    continue
+
+                item_id = active.inventory.scroll_slots[slot_index]
+                if item_id is None:
+                    continue
+
+                item_feat = ITEM_FEATURES.get(item_id)
+                if item_feat is None:
+                    continue
+
+                if item_feat.get("item_type") != "scroll":
+                    continue
+
+                active.remove_scroll(slot_index)
+
+        # --------------------------------------------------
+        # CRITICAL: live fight state must be cleared now.
+        # We preserve fight_dict above for the response.
         # --------------------------------------------------
         self.current_fight_state = None
 
         # --------------------------------------------------
-        # Outcome consequences
+        # Outcome consequences: player wins
         # --------------------------------------------------
         if outcome == "challenged_win":
             killed_monster_id = monster_id
@@ -1307,6 +1415,13 @@ class DungeonGraph:
             tile.object_id = monster["loot_id"]
 
             turn.pending_retreat = False
+
+            if may_continue_by_swo_02:
+                turn.fight_continue_after_item_pickup = True
+                turn.fight_continue_skill_id = "skill_swo_02"
+            else:
+                turn.fight_continue_after_item_pickup = False
+                turn.fight_continue_skill_id = None
 
             if killed_monster_id == "Mummy":
                 turn.pending_curse_choice = True
@@ -1319,6 +1434,8 @@ class DungeonGraph:
                     "action_kind": action.kind,
                     "fight": fight_dict,
                     "outcome": outcome,
+                    "hp_consequence": hp_consequence,
+                    "continuation": continuation,
                     "tile": tile.to_dict(),
                     "active_player": active.to_dict(),
                     "turn": self.serialize_turn_state(),
@@ -1326,11 +1443,31 @@ class DungeonGraph:
 
             turn.pending_curse_choice = False
 
-            if active.is_skill_active("skill_bar_02"):
+            # --------------------------------------------------
+            # Post-win loot / continuation handling
+            # --------------------------------------------------
+            # Priority:
+            # 1. skill_swo_02 with final physical 6:
+            #    player may resolve item pickup and still continue.
+            #
+            # 2. skill_bar_02:
+            #    player may skip forced item pickup and continue,
+            #    but cannot take loot and continue.
+            #
+            # 3. Normal:
+            #    forced item pickup ends the turn.
+            # --------------------------------------------------
+            if may_continue_by_swo_02:
+                self.enter_forced_item_pickup(origin="post_combat")
+
+            elif active.is_skill_active("skill_bar_02"):
                 turn.pending_item_pickup = False
                 turn.item_pickup_origin = None
+                turn.fight_continue_after_item_pickup = False
+                turn.fight_continue_skill_id = None
                 self.set_turn_mode("idle")
                 self.snapshot_active_ground_item()
+
             else:
                 self.enter_forced_item_pickup(origin="post_combat")
 
@@ -1340,16 +1477,38 @@ class DungeonGraph:
                 "action_kind": action.kind,
                 "fight": fight_dict,
                 "outcome": outcome,
+                "hp_consequence": hp_consequence,
+                "continuation": continuation,
                 "tile": tile.to_dict(),
                 "active_player": active.to_dict(),
                 "turn": self.serialize_turn_state(),
             }
 
+        # --------------------------------------------------
+        # Outcome consequences: monster wins
+        # --------------------------------------------------
         if outcome == "initiator_win":
-            active.set_hp(active.hp - 1)
-
             turn.pending_item_pickup = False
             turn.pending_retreat = False
+            turn.fight_continue_after_item_pickup = False
+            turn.fight_continue_skill_id = None
+
+            if may_continue_by_swo_02:
+                retreat_result = self._perform_retreat_without_ending_turn()
+
+                return {
+                    "ok": True,
+                    "status": "fight_resolved_with_retreat_and_continue",
+                    "action_kind": action.kind,
+                    "fight": fight_dict,
+                    "outcome": outcome,
+                    "hp_consequence": hp_consequence,
+                    "continuation": continuation,
+                    "tile": tile.to_dict(),
+                    "active_player": active.to_dict(),
+                    "turn": self.serialize_turn_state(),
+                    "retreat_result": retreat_result,
+                }
 
             retreat_result = self._execute_retreat_turn_ending_free_action(
                 RetreatTurnEndingFreeAction()
@@ -1361,15 +1520,39 @@ class DungeonGraph:
                 "action_kind": action.kind,
                 "fight": fight_dict,
                 "outcome": outcome,
+                "hp_consequence": hp_consequence,
+                "continuation": continuation,
                 "tile": tile.to_dict(),
                 "active_player": active.to_dict(),
                 "turn": self.serialize_turn_state(),
                 "retreat_result": retreat_result,
             }
 
+        # --------------------------------------------------
+        # Outcome consequences: draw
+        # --------------------------------------------------
         if outcome == "draw":
             turn.pending_item_pickup = False
             turn.pending_retreat = False
+            turn.fight_continue_after_item_pickup = False
+            turn.fight_continue_skill_id = None
+
+            if may_continue_by_swo_02:
+                retreat_result = self._perform_retreat_without_ending_turn()
+
+                return {
+                    "ok": True,
+                    "status": "fight_resolved_with_retreat_and_continue",
+                    "action_kind": action.kind,
+                    "fight": fight_dict,
+                    "outcome": outcome,
+                    "hp_consequence": hp_consequence,
+                    "continuation": continuation,
+                    "tile": tile.to_dict(),
+                    "active_player": active.to_dict(),
+                    "turn": self.serialize_turn_state(),
+                    "retreat_result": retreat_result,
+                }
 
             retreat_result = self._execute_retreat_turn_ending_free_action(
                 RetreatTurnEndingFreeAction()
@@ -1381,6 +1564,8 @@ class DungeonGraph:
                 "action_kind": action.kind,
                 "fight": fight_dict,
                 "outcome": outcome,
+                "hp_consequence": hp_consequence,
+                "continuation": continuation,
                 "tile": tile.to_dict(),
                 "active_player": active.to_dict(),
                 "turn": self.serialize_turn_state(),
@@ -1388,6 +1573,198 @@ class DungeonGraph:
             }
 
         raise ValueError(f"Unexpected fight outcome: {outcome}")
+
+    def _apply_fight_hp_consequences(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+            outcome: str,
+    ) -> dict:
+        """
+        Apply HP-related fight consequences.
+
+        Current implemented HP effects:
+        - Normal monster-fight loss:
+            outcome == "initiator_win" means monster wins, player loses 1 HP.
+
+        - skill_wlk_01:
+            If selected in fight-local choices, player sacrifices 1 HP.
+            This applies regardless of win/loss/tie.
+
+        - skill_alc_01:
+            If player loses by 1 or 2 strength, the normal monster-damage HP loss is cancelled.
+            It does NOT cancel voluntary costs such as skill_wlk_01.
+
+        Returns a diagnostic dictionary for API/debug visibility.
+        """
+        hp_before = player.hp
+
+        hp_effects: list[dict[str, Any]] = []
+        total_delta = 0
+
+        selected_skill_ids = set(
+            fight_state.challenged_side.choices.selected_skill_ids
+        )
+
+        # --------------------------------------------------
+        # Normal monster damage on loss
+        # --------------------------------------------------
+        monster_damage_delta = 0
+
+        if outcome == "initiator_win":
+            monster_damage_delta = -1
+
+            hp_effects.append({
+                "kind": "monster_damage",
+                "delta": monster_damage_delta,
+                "reason": "Player lost the fight.",
+                "cancelled": False,
+            })
+
+            # --------------------------------------------------
+            # skill_alc_01:
+            # loss by 1 or 2 causes no monster-damage HP loss
+            # --------------------------------------------------
+            if player.is_skill_active("skill_alc_01"):
+                strength_diff = (
+                        fight_state.prediction.initiator_total
+                        - fight_state.prediction.challenged_total
+                )
+
+                if 1 <= strength_diff <= 2:
+                    monster_damage_delta = 0
+
+                    hp_effects[-1]["delta"] = 0
+                    hp_effects[-1]["cancelled"] = True
+                    hp_effects[-1]["cancelled_by"] = "skill_alc_01"
+                    hp_effects[-1]["strength_diff"] = strength_diff
+
+                    hp_effects.append({
+                        "kind": "skill_modifier",
+                        "skill_id": "skill_alc_01",
+                        "delta": 0,
+                        "reason": "Loss by 1 or 2 does not cause monster-damage HP loss.",
+                    })
+
+        total_delta += monster_damage_delta
+
+        # --------------------------------------------------
+        # skill_wlk_01:
+        # pending voluntary HP sacrifice
+        # --------------------------------------------------
+        if "skill_wlk_01" in selected_skill_ids:
+            total_delta -= 1
+
+            hp_effects.append({
+                "kind": "voluntary_cost",
+                "skill_id": "skill_wlk_01",
+                "delta": -1,
+                "reason": "Warlock sacrificed 1 HP for +1 combat strength.",
+            })
+
+        player.set_hp(player.hp + total_delta)
+
+        return {
+            "hp_before": hp_before,
+            "hp_after": player.hp,
+            "total_delta": player.hp - hp_before,
+            "raw_total_delta": total_delta,
+            "effects": hp_effects,
+            "is_conscious_after": player.is_conscious,
+        }
+    
+    def _fight_has_final_physical_six(self, fight_state: FightState) -> bool:
+        """
+        Return True if any final physical die shows 6.
+
+        Important:
+        - Uses physical dice, not effective dice.
+        - Ranger's effective 1=>6 does NOT count.
+        - Warrior/Princess/Swordsman rerolls mutate physical dice, so their
+          accepted final values are what matter.
+        """
+        dice = fight_state.challenged_side.dice_state
+
+        if dice is None:
+            return False
+
+        if not dice.has_been_tossed:
+            return False
+
+        return dice.die_1 == 6 or dice.die_2 == 6
+
+    def _active_player_may_continue_after_fight_by_swo_02(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+    ) -> bool:
+        """
+        skill_swo_02.
+
+        If any final physical die in combat shows 6,
+        the Swordsman may continue using remaining movement points.
+
+        Requires:
+        - skill_swo_02 active
+        - final physical die shows 6
+        - at least one Action left
+        """
+        turn = self.ensure_turn_active()
+
+        return (
+                player.is_skill_active("skill_swo_02")
+                and turn.actions_left > 0
+                and self._fight_has_final_physical_six(fight_state)
+        )
+
+    def _perform_retreat_without_ending_turn(self) -> dict:
+        """
+        Move the active player back to last_valid_safe_tile without ending the turn.
+
+        Used by:
+        - skill_swo_02 continuation after fight loss/draw.
+
+        Normal retreat still uses _execute_retreat_turn_ending_free_action().
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.last_valid_safe_tile is None:
+            raise ValueError("No last valid safe tile recorded for retreat.")
+
+        rx, ry = turn.last_valid_safe_tile
+        retreat_tile = self.get_tile(rx, ry)
+
+        if retreat_tile is None:
+            raise ValueError("Retreat target tile not found.")
+
+        active.x = rx
+        active.y = ry
+        self._sync_compat_player_position()
+
+        entry_result = self._after_player_entered_tile(
+            player=active,
+            tile=retreat_tile,
+            entry_cause="retreat",
+            is_turn_owner=True,
+        )
+
+        turn.pending_retreat = False
+        turn.pending_turn_end_cause = None
+
+        self.set_turn_mode("idle")
+        self.snapshot_active_ground_item()
+
+        return {
+            "ok": True,
+            "status": "retreated_without_turn_end",
+            "new_position": {"x": rx, "y": ry},
+            "tile": retreat_tile.to_dict(),
+            "entry": entry_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+        }
     
     def _execute_curse_free_action(self, action: CurseFreeAction) -> dict:
         """
@@ -1497,28 +1874,78 @@ class DungeonGraph:
         return finalize_result
 
     def _execute_itempickup_turn_ending_free_action(self, action: ItemPickUpTurnEndingFreeAction) -> dict:
+        """
+        Finish normal ItemPickup and end the turn.
+
+        This is used when ItemPickup is turn-ending.
+
+        Exception:
+        - If skill_swo_02 continuation is pending, this method refuses.
+          Use ContinueAfterItemPickupFreeAction instead.
+        """
         turn, active = self.ensure_active_player_owns_turn()
 
         if turn.mode != "item_pickup":
             raise ValueError(f"Cannot finish item pickup while turn mode is '{turn.mode}'.")
 
+        if turn.fight_continue_after_item_pickup:
+            raise ValueError(
+                "This item pickup can be followed by skill_swo_02 continuation. "
+                "Use the continuation action instead of ending the turn."
+            )
+
         turn.pending_item_pickup = False
+        turn.item_pickup_origin = None
         turn.pending_turn_end_cause = "item_pickup"
 
-        # --------------------------------------------------
-        # skill_swo_02 bridge placeholder
-        # --------------------------------------------------
-        # Later, this condition should check the real fight-result flag:
-        # "any final die showed 6 and skill_swo_02 continuation is available".
-        #
-        # For now, keep canonical behavior:
-        # FinishItemPickup ends the turn.
-        # --------------------------------------------------
-
-        turn.item_pickup_origin = None
         self.set_turn_mode("awaiting_turn_end_commit")
 
         return self._finalize_current_turn_and_advance(end_cause="item_pickup")
+
+    def _execute_continue_after_itempickup_free_action(self, action: ContinueAfterItemPickupFreeAction) -> dict:
+        """
+        skill_swo_02 continuation after a won fight.
+
+        This finishes the post-combat item pickup opportunity without ending the turn.
+
+        Allowed only when:
+        - turn.mode == "item_pickup"
+        - turn.fight_continue_after_item_pickup == True
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "item_pickup":
+            raise ValueError(f"Cannot continue after item pickup while turn mode is '{turn.mode}'.")
+
+        if not turn.fight_continue_after_item_pickup:
+            raise ValueError("No post-fight continuation is available.")
+
+        if turn.fight_continue_skill_id != "skill_swo_02":
+            raise ValueError("Post-fight continuation is not owned by skill_swo_02.")
+
+        if not active.is_skill_active("skill_swo_02"):
+            raise ValueError("skill_swo_02 is not active.")
+
+        turn.pending_item_pickup = False
+        turn.item_pickup_origin = None
+        turn.fight_continue_after_item_pickup = False
+        turn.fight_continue_skill_id = None
+        turn.pending_turn_end_cause = None
+
+        self.set_turn_mode("idle")
+        self.snapshot_active_ground_item()
+
+        active_tile = self.get_active_tile()
+
+        return {
+            "ok": True,
+            "status": "item_pickup_finished_turn_continues",
+            "action_kind": action.kind,
+            "continued_by": "skill_swo_02",
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "tile": active_tile.to_dict() if active_tile else None,
+        }
     
     def _execute_toggle_skill_ui_free_action(self, action: ToggleSkillUiFreeAction) -> dict:
         """
@@ -1763,15 +2190,57 @@ class DungeonGraph:
         Returns:
         - bool: whether the item may be placed into the slot
         - str: diagnostic reason
+
+        Important distinction:
+        - This method validates whether an item may be PLACED into a slot now.
+        - It does NOT validate whether an already existing item may remain there.
+
+        Base rules:
+        - weapon item_type -> weapon slot
+        - scroll item_type -> scroll slot
+        - key item_type    -> key slot
+
+        Skill exception:
+        - skill_acr_01:
+            Acrobat may place daggers into scroll slots.
+
+        Curse behavior:
+        - player.is_skill_active("skill_acr_01") returns False while cursed.
+        - Therefore cursed Acrobat cannot newly place daggers into scroll slots.
+        - Existing dagger-in-scroll-slot items are not touched here.
         """
-        if not player.is_item_type_compatible_with_slot(item_type, slot_group):
-            return False, "item_type_not_compatible_with_slot"
 
-        existing = player.get_slot_item(slot_group, slot_index)
-        if existing is None:
-            return True, "empty_slot_compatible"
+        # --------------------------------------------------
+        # Base/native compatibility
+        # --------------------------------------------------
+        if player.is_item_type_compatible_with_slot(item_type, slot_group):
+            existing = player.get_slot_item(slot_group, slot_index)
 
-        return True, "occupied_slot_compatible"
+            if existing is None:
+                return True, "empty_slot_compatible"
+
+            return True, "occupied_slot_compatible"
+
+        # --------------------------------------------------
+        # skill_acr_01:
+        # Acrobat may place daggers into scroll slots.
+        # --------------------------------------------------
+        if (
+                item_id == "dagger"
+                and item_type == "weapon"
+                and slot_group == "scroll"
+        ):
+            if not player.is_skill_active("skill_acr_01"):
+                return False, "dagger_into_scroll_slot_requires_active_skill_acr_01"
+
+            existing = player.get_slot_item(slot_group, slot_index)
+
+            if existing is None:
+                return True, "skill_acr_01_allows_dagger_into_empty_scroll_slot"
+
+            return True, "skill_acr_01_allows_dagger_swap_into_scroll_slot"
+
+        return False, "item_type_not_compatible_with_slot"
     
     def get_active_player_inventory(self) -> dict:
         active = self.get_active_player()
@@ -1924,7 +2393,7 @@ class DungeonGraph:
         """
         return self.execute_runtime_action(TossFightFreeAction())
 
-    def reroll_current_fight_die(self, die_index: int) -> dict:
+    def reroll_current_fight_die(self, die_index: int, skill_id: str) -> dict:
         if self.current_fight_state is None:
             raise ValueError("No current fight state.")
 
@@ -1932,10 +2401,46 @@ class DungeonGraph:
         if active is None:
             raise ValueError("No active player.")
 
-        self.current_fight_state = reroll_die_for_challenged_player_side(
+        self.current_fight_state = reroll_die_for_challenged_player_side(fight_state=self.current_fight_state,
+                                                                         player=active,
+                                                                         die_index=die_index,
+                                                                         skill_id=skill_id)
+        return self.current_fight_state.to_dict()
+
+    def reroll_current_fight_both_dice(self, skill_id: str) -> dict:
+        if self.current_fight_state is None:
+            raise ValueError("No current fight state.")
+
+        active = self.get_active_player()
+        if active is None:
+            raise ValueError("No active player.")
+
+        self.current_fight_state = reroll_both_dice_for_challenged_player_side(
             fight_state=self.current_fight_state,
             player=active,
-            die_index=die_index,
+            skill_id=skill_id,
+        )
+
+        return self.current_fight_state.to_dict()
+
+    def toggle_current_fight_skill(self, skill_id: str) -> dict:
+        """
+        Toggle one manual combat skill in the current fight.
+
+        Currently implemented:
+        - skill_wlk_01
+        """
+        if self.current_fight_state is None:
+            raise ValueError("No current fight state.")
+
+        active = self.get_active_player()
+        if active is None:
+            raise ValueError("No active player.")
+
+        self.current_fight_state = toggle_skill_for_challenged_player_side(
+            fight_state=self.current_fight_state,
+            player=active,
+            skill_id=skill_id,
         )
 
         return self.current_fight_state.to_dict()
@@ -2217,6 +2722,12 @@ class DungeonGraph:
             is_available = player.is_skill_active(skill_id)
             blocked_reason = None if is_available else "cursed"
 
+            # Separate concept:
+            # - is_available: skill is generally available, e.g. not cursed
+            # - is_usable_now: current UI control may be used in this exact game state
+            is_usable_now = is_available
+            unusable_reason = None
+
             ui_control = meta.get("ui_control", "passive")
             active_declared = bool(meta.get("active", False))
 
@@ -2227,27 +2738,56 @@ class DungeonGraph:
             value = turn.skill_values.get(skill_id) if turn else None
 
             if skill_id == "skill_bar_01":
-                if (
-                        is_available
-                        and on_fountain
-                        and self.turn_state
-                        and self.turn_state.mode == "awaiting_heal_choice"
-                ):
-                    control_type = "number_stepper"
-                    is_passive = False
-                    if value is None:
-                        value = getattr(player, "hp", 1) if isinstance(getattr(player, "hp", None), int) else None
-                else:
-                    control_type = "passive"
-                    is_passive = True
+                can_choose_heal_target = bool(
+                    is_available
+                    and on_fountain
+                    and self.turn_state
+                    and self.turn_state.owner_player_id == player.player_id
+                    and self.turn_state.mode == "awaiting_heal_choice"
+                )
+
+                control_type = "number_stepper"
+                is_passive = False
+
+                if value is None:
+                    value = getattr(player, "hp", 1) if isinstance(getattr(player, "hp", None), int) else None
+
+                if not can_choose_heal_target:
+                    is_usable_now = False
+                    unusable_reason = "not_awaiting_heal_choice"
+
+            if skill_id == "skill_swo_02":
+                can_continue_after_item_pickup = bool(
+                    is_available
+                    and self.turn_state
+                    and self.turn_state.owner_player_id == player.player_id
+                    and self.turn_state.mode == "item_pickup"
+                    and self.turn_state.fight_continue_after_item_pickup
+                    and self.turn_state.fight_continue_skill_id == "skill_swo_02"
+                )
+
+                control_type = "button"
+                is_passive = False
+                selected = False
+
+                if not can_continue_after_item_pickup:
+                    is_usable_now = False
+                    unusable_reason = "not_usable_in_current_turn_state"
 
             raw_skills.append({
                 "skill_id": skill_id,
                 "label": meta.get("name") or skill_id,
                 "is_passive": is_passive,
                 "control_type": control_type,
+
+                # General availability: skill is not blocked, e.g. not cursed.
                 "is_available": is_available,
                 "blocked_reason": blocked_reason,
+                
+                # Current-stage usability: whether the UI control should be enabled now.
+                "is_usable_now": is_usable_now,
+                "unusable_reason": unusable_reason,
+                
                 "active_declared": active_declared,
                 "scope": meta.get("scope"),
                 "description": meta.get("description"),
@@ -2344,10 +2884,32 @@ class DungeonGraph:
 
     def request_end_turn(self) -> dict:
         """
-        Compatibility wrapper.
-        Later endpoints may directly instantiate EndTurnTurnEndingFreeAction.
+        Compatibility wrapper for ending the current turn.
+
+        In normal item_pickup mode, finishing item pickup is equivalent to ending the turn.
+
+        Exception:
+        - If skill_swo_02 continuation is pending, End Turn is not allowed.
+          The player must use the skill_swo_02 continuation action instead.
         """
+        turn = self.ensure_turn_active()
+
+        if turn.mode == "item_pickup":
+            if turn.fight_continue_after_item_pickup:
+                raise ValueError(
+                    "Cannot end turn here: skill_swo_02 continuation is available. "
+                    "Use the Swordsman continuation action to finish item pickup and continue."
+                )
+
+            return self.execute_runtime_action(ItemPickUpTurnEndingFreeAction())
+
         return self.execute_runtime_action(EndTurnTurnEndingFreeAction())
+
+    def continue_after_item_pickup(self) -> dict:
+        """
+        Compatibility wrapper for skill_swo_02 post-combat continuation.
+        """
+        return self.execute_runtime_action(ContinueAfterItemPickupFreeAction())
     
     def finish_item_pickup(self) -> dict:
         """
@@ -2542,8 +3104,51 @@ class DungeonGraph:
 
         # fallback
         setattr(target, "is_cursed", True)
-    
+
     def _apply_fountain_healing_to_active_player(self, *, target_hp: Optional[int] = None) -> dict:
+        active = self.get_active_player()
+        if active is None:
+            raise ValueError("No active player.")
+
+        if not self._is_active_player_on_fountain():
+            raise ValueError("Active player is not on a fountain.")
+
+        max_hp = getattr(active, "max_hp", 5)
+
+        if active.is_skill_active("skill_bar_01"):
+            chosen_hp = max_hp if target_hp is None else int(target_hp)
+
+            if chosen_hp < 1 or chosen_hp > max_hp:
+                raise ValueError(
+                    f"Invalid target_hp. Must be between 1 and max HP ({max_hp})."
+                )
+
+            active.set_hp(chosen_hp)
+
+            return {
+                "mode": "barbarian_variable_heal",
+                "hp": active.hp,
+                "max_hp": max_hp,
+                "target_hp": chosen_hp,
+            }
+
+        active.set_hp(max_hp)
+
+        return {
+            "mode": "standard_full_heal",
+            "hp": active.hp,
+            "max_hp": max_hp,
+            "target_hp": max_hp,
+        }
+
+    def _apply_fountain_pre_healing_effects_to_active_player(self) -> dict:
+        """
+        Apply fountain effects that must happen before deciding the healing mode.
+
+        Important:
+        - Curse removal happens before checking whether skill_bar_01 is usable.
+        - This prevents a cursed Barbarian from getting stuck when ending turn on a fountain.
+        """
         active = self.get_active_player()
         if active is None:
             raise ValueError("No active player.")
@@ -2553,43 +3158,57 @@ class DungeonGraph:
 
         curse_removed = self._clear_active_player_curse_if_possible()
 
-        max_hp = getattr(active, "max_hp", 5)
-
-        if active.is_skill_active("skill_bar_01"):
-            chosen_hp = max_hp if target_hp is None else int(target_hp)
-            if chosen_hp < active.hp or chosen_hp > max_hp:
-                raise ValueError(f"Invalid target_hp. Must be between current HP ({active.hp}) and max HP ({max_hp}).")
-            active.set_hp(chosen_hp)
-        else:
-            active.set_hp(max_hp)
-
         return {
-            "hp": active.hp,
-            "max_hp": max_hp,
             "curse_removed": curse_removed,
+            "active_player_after_pre_healing": active.to_dict(),
         }
 
     def _finalize_current_turn_and_advance(self, *, end_cause: str, heal_target_hp: Optional[int] = None) -> dict:
         turn, active = self.ensure_active_player_owns_turn()
 
         if self._is_active_player_on_fountain():
-            if "skill_bar_01" in active.skills and heal_target_hp is None:
+            # --------------------------------------------------
+            # Fountain pre-effects
+            # --------------------------------------------------
+            # Curse removal must happen BEFORE deciding whether
+            # Barbarian variable healing is available.
+            # --------------------------------------------------
+            pre_healing_result = self._apply_fountain_pre_healing_effects_to_active_player()
+
+            # --------------------------------------------------
+            # Variable Barbarian healing gate
+            # --------------------------------------------------
+            # After curse removal, skill_bar_01 may become active.
+            # If no target HP was supplied yet, pause the turn ending
+            # and ask the UI for the target HP.
+            # --------------------------------------------------
+            if active.is_skill_active("skill_bar_01") and heal_target_hp is None:
                 turn.pending_turn_end_cause = end_cause
                 self.set_turn_mode("awaiting_heal_choice")
+
                 return {
                     "ok": True,
                     "status": "awaiting_heal_choice",
                     "turn": self.serialize_turn_state(),
                     "active_player": self.serialize_active_player(),
+                    "fountain_pre_healing": pre_healing_result,
                     "healing": {
                         "required": True,
                         "skill_id": "skill_bar_01",
                         "current_hp": active.hp,
                         "max_hp": getattr(active, "max_hp", 5),
+                        "curse_removed_before_choice": bool(pre_healing_result.get("curse_removed")),
                     },
                 }
 
+            # --------------------------------------------------
+            # Resolve healing immediately.
+            # For non-Barbarian: heal to max.
+            # For Barbarian with target_hp supplied: heal to chosen target.
+            # --------------------------------------------------
             healing_result = self._apply_fountain_healing_to_active_player(target_hp=heal_target_hp)
+            healing_result["pre_healing"] = pre_healing_result
+
         else:
             healing_result = None
 
@@ -2598,14 +3217,16 @@ class DungeonGraph:
 
         next_turn = self.advance_to_next_player_turn()
 
-        return {"ok": True,
-                "status": "turn_ended",
-                "end_cause": end_cause,
-                "ended_turn": finished_turn,
-                "ended_player": finished_player,
-                "healing": healing_result,
-                "next_turn": next_turn["turn"],
-                "active_player": next_turn["active_player"]}
+        return {
+            "ok": True,
+            "status": "turn_ended",
+            "end_cause": end_cause,
+            "ended_turn": finished_turn,
+            "ended_player": finished_player,
+            "healing": healing_result,
+            "next_turn": next_turn["turn"],
+            "active_player": next_turn["active_player"],
+        }
     
 
     def execute_runtime_action(self, action: RuntimeAction) -> dict:

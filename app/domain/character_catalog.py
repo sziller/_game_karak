@@ -356,12 +356,14 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
     "skill_swo_02": {"value": 2,
                      "name": None,
                      "scope": "move",
-                     "active": False,
-                     "ui_control": "passive",
+                     "active": True,
+                     "ui_control": "button",
+                     "availability_mode": "always",
+                     "reset_mode": "after_resolution",
+                     "requires_confirmation": True,
                      "description": "If any final die in a combat is 6,"
-                                    "may use moves left after a fight"
+                                    "may use moves left after a fight "
                                     "regardless of outcome."},
-
     "skill_sco_02": {"value": 2,
                      "name": None,
                      "scope": "move",

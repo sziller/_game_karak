@@ -53,9 +53,6 @@
                 <button id="fight-start-btn" onclick="fightStart()">⚔️ Start Fight</button>
             </div>
             <div>
-                <button id="finish-itempickup-btn" onclick="finishItemPickup()">Finish Item Pickup</button>
-            </div>
-            <div>
                 <button id="end-turn-btn" onclick="endTurn()">End Turn</button>
             </div>
         </div>
@@ -370,6 +367,8 @@
             : prettySkillLabel(skill.skill_id);
 
         const isAvailable = skill.is_available !== false;
+        const isUsableNow = skill.is_usable_now !== false;
+
         const isPassive = !!skill.is_passive;
         const controlType = skill.control_type || "passive";
         const description = skill.description || "";
@@ -380,9 +379,14 @@
         const border = isAvailable ? (isSelected ? "#88ff88" : "#55cc55") : "#cc5555";
         const text = isAvailable ? "#d8ffd8" : "#ffd8d8";
 
-        let stateText = isAvailable ? "active" : "inactive";
-        if (isPassive) {
-            stateText = isAvailable ? "passive" : "blocked";
+        let stateText = "active";
+
+        if (!isAvailable) {
+            stateText = "blocked";
+        } else if (!isUsableNow && !isPassive) {
+            stateText = "not usable now";
+        } else if (isPassive) {
+            stateText = "passive";
         }
 
         let controlHtml = "";
@@ -393,7 +397,7 @@
                 <input
                     type="checkbox"
                     ${isSelected ? "checked" : ""}
-                    ${isAvailable ? "" : "disabled"}
+                    ${isUsableNow ? "" : "disabled"}
                     onchange="toggleSkillUiSelection(${playerId}, '${skill.skill_id}')"
                 >
                 <span>toggle</span>
@@ -404,29 +408,39 @@
             <div style="margin-top:4px;">
                 <button
                     type="button"
-                    ${isAvailable ? "" : "disabled"}
+                    ${isUsableNow ? "" : "disabled"}
                     onclick="pulseSkillUiButton(${playerId}, '${skill.skill_id}')"
                 >use</button>
             </div>
         `;
         } else if (controlType === "number_stepper") {
             const shownValue = (value != null) ? value : "?";
+            const confirmHtml = skill.skill_id === "skill_bar_01"
+                ? `
+            <button
+                type="button"
+                ${isUsableNow ? "" : "disabled"}
+                onclick="confirmHealingChoice()"
+            >confirm</button>
+        `
+                : "";
 
             controlHtml = `
-            <div style="display:flex; align-items:center; gap:4px; margin-top:4px;">
-                <button
-                    type="button"
-                    ${isAvailable ? "" : "disabled"}
-                    onclick="stepSkillUiValue(${playerId}, '${skill.skill_id}', -1)"
-                >-</button>
-                <span style="min-width:24px; text-align:center;">${shownValue}</span>
-                <button
-                    type="button"
-                    ${isAvailable ? "" : "disabled"}
-                    onclick="stepSkillUiValue(${playerId}, '${skill.skill_id}', 1)"
-                >+</button>
-            </div>
-        `;
+        <div style="display:flex; align-items:center; gap:4px; margin-top:4px;">
+            <button
+                type="button"
+                ${isUsableNow ? "" : "disabled"}
+                onclick="stepSkillUiValue(${playerId}, '${skill.skill_id}', -1)"
+            >-</button>
+            <span style="min-width:24px; text-align:center;">${shownValue}</span>
+            <button
+                type="button"
+                ${isUsableNow ? "" : "disabled"}
+                onclick="stepSkillUiValue(${playerId}, '${skill.skill_id}', 1)"
+            >+</button>
+            ${confirmHtml}
+        </div>
+    `;
         } else if (controlType === "choice_set") {
             controlHtml = `
             <div style="margin-top:4px; opacity:${isAvailable ? "1" : "0.6"};">
@@ -887,6 +901,48 @@
         updateActionAvailability();
     }
 
+    async function confirmHealingChoice() {
+        clearError();
+
+        const activePlayer = latestPlayers?.active_player || null;
+        const skillsUi = activePlayer?.skills_ui || [];
+
+        let barSkill = null;
+
+        for (const row of skillsUi) {
+            for (const skill of row) {
+                if (skill.skill_id === "skill_bar_01") {
+                    barSkill = skill;
+                    break;
+                }
+            }
+            if (barSkill) break;
+        }
+
+        const targetHp = barSkill?.value;
+
+        if (targetHp == null) {
+            showError("No Barbarian healing target selected.");
+            return;
+        }
+
+        const r = await fetch(gameApi("/healing/choose_target"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({target_hp: targetHp})
+        });
+
+        const data = await r.json();
+
+        if (!r.ok) {
+            showError(data.detail || "Healing choice failed.");
+            return;
+        }
+
+        await refreshAll();
+        showMessage("Healing choice confirmed. Turn ended.", "info", "Info");
+    }
+
     async function confirmTeleport() {
         clearError();
 
@@ -1141,21 +1197,64 @@
                     }
 
                     // --------------------------------------------------------
-                    // Die reroll buttons
+                    // Manual combat skill toggle buttons
                     // Currently used by:
-                    // - skill_swo_01
+                    // - skill_wlk_01
                     // --------------------------------------------------------
-                    if (btn.action === "fight_reroll_die") {
-                        const dieIndex = btn.payload?.die_index;
+                    if (btn.action === "fight_toggle_skill") {
+                        const skillId = btn.payload?.skill_id || btn.button_id;
+                        const warning = btn.payload?.warning || btn.label || skillId || "";
 
                         return `
                         <button
-                            onclick="fightRerollDie(${dieIndex})"
-                            ${btn.enabled && dieIndex ? "" : "disabled"}
+                            onclick="fightToggleSkill('${skillId}')"
+                            ${btn.enabled && skillId ? "" : "disabled"}
+                            style="margin-right:6px; ${activeStyle}"
+                            title="${warning}"
+                        >
+                            ${btn.label || skillId || "skill"}
+                        </button>
+                    `;
+                    }
+
+                    // --------------------------------------------------------
+                    // One-die reroll buttons
+                    // Currently used by:
+                    // - skill_swo_01
+                    // - skill_pri_01
+                    // --------------------------------------------------------
+                    if (btn.action === "fight_reroll_die") {
+                        const dieIndex = btn.payload?.die_index;
+                        const skillId = btn.payload?.skill_id;
+
+                        return `
+                        <button
+                            onclick="fightRerollDie(${dieIndex}, '${skillId}')"
+                            ${btn.enabled && dieIndex && skillId ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || ("reroll die " + dieIndex)}"
                         >
                             ${btn.label || ("reroll die " + dieIndex)}
+                        </button>
+                    `;
+                    }
+
+                    // --------------------------------------------------------
+                    // Both-dice reroll buttons
+                    // Currently used by:
+                    // - skill_wrr_01
+                    // --------------------------------------------------------
+                    if (btn.action === "fight_reroll_both") {
+                        const skillId = btn.payload?.skill_id;
+
+                        return `
+                        <button
+                            onclick="fightRerollBoth('${skillId}')"
+                            ${btn.enabled && skillId ? "" : "disabled"}
+                            style="margin-right:6px; ${activeStyle}"
+                            title="${btn.label || "reroll both dice"}"
+                        >
+                            ${btn.label || "reroll both dice"}
                         </button>
                     `;
                     }
@@ -1421,7 +1520,7 @@
         const maxHp = activePlayer?.hp?.max ?? 5;
 
         const currentValue = currentSkill?.value ?? currentHp;
-        const nextValue = Math.max(currentHp, Math.min(maxHp, currentValue + delta));
+        const nextValue = Math.max(1, Math.min(maxHp, currentValue + delta));
 
         const r = await fetch(gameApi("/skills/set_value"), {
             method: "POST",
@@ -1441,10 +1540,36 @@
         await refreshAll();
     }
 
-    function pulseSkillUiButton(playerId, skillId) {
+    async function pulseSkillUiButton(playerId, skillId) {
         const activePlayerId = latestPlayers?.active_player?.player_id;
+
         if (playerId !== activePlayerId) {
             showError("Only the active player's skill UI can be changed.");
+            return;
+        }
+
+        const turn =
+            latestMap?.turn ||
+            latestPlayers?.turn ||
+            null;
+
+        // --------------------------------------------------------
+        // skill_swo_02:
+        // Finish post-combat item pickup without ending the turn.
+        // --------------------------------------------------------
+        if (skillId === "skill_swo_02") {
+            const canContinue =
+                !!turn &&
+                turn.mode === "item_pickup" &&
+                !!turn.fight_continue_after_item_pickup &&
+                turn.fight_continue_skill_id === "skill_swo_02";
+
+            if (!canContinue) {
+                showError("Swordsman continuation is not available now.");
+                return;
+            }
+
+            await continueAfterItemPickup();
             return;
         }
 
@@ -1485,6 +1610,29 @@
         }
 
         await refreshAll();
+    }
+
+    async function continueAfterItemPickup() {
+        clearError();
+
+        const r = await fetch(gameApi("/itempickup/continue"), {
+            method: "POST"
+        });
+
+        const data = await r.json();
+
+        if (!r.ok) {
+            showError(data.detail || "Continue after item pickup failed.");
+            return;
+        }
+
+        await refreshAll();
+
+        showMessage(
+            "Swordsman continuation used. Turn continues.",
+            "info",
+            "Info"
+        );
     }
 
     async function endTurn() {
@@ -1547,26 +1695,52 @@
         const isAwaitingCurse = mode === "awaiting_curse_choice";
         const isAwaitingHeal = mode === "awaiting_heal_choice";
 
+        // --------------------------------------------------------
+        // Special item pickup state:
+        // Swordsman won a fight with a final physical 6.
+        //
+        // In this state:
+        // - normal End Turn must be disabled
+        // - skill_swo_02 button is used to continue after item pickup
+        // --------------------------------------------------------
+        const isSwoContinueItemPickup =
+            isItemPickup &&
+            !!turn?.fight_continue_after_item_pickup &&
+            turn?.fight_continue_skill_id === "skill_swo_02";
+
         const canStartFight =
             !!currentTile?.monster_id &&
             !!turn &&
-            (isIdle || isPendingTile);
+            isIdle;
 
         if (fightBtn) {
             fightBtn.disabled = !canStartFight;
         }
 
+        // Old button: no longer part of the normal UI.
+        // Keep disabled/hidden until removed from HTML.
         if (finishItemPickupBtn) {
-            finishItemPickupBtn.disabled = !isItemPickup;
+            finishItemPickupBtn.disabled = true;
+            finishItemPickupBtn.style.display = "none";
         }
 
+        // --------------------------------------------------------
+        // End Turn behavior:
+        //
+        // Normal item_pickup:
+        //   End Turn is allowed and backend maps it to ItemPickUpTurnEndingFreeAction.
+        //
+        // Swordsman continuation item_pickup:
+        //   End Turn is disabled because the player may continue.
+        //   The skill_swo_02 button resolves the item pickup instead.
+        // --------------------------------------------------------
         if (endTurnBtn) {
             endTurnBtn.disabled =
                 isPendingTile ||
                 isFight ||
-                isItemPickup ||
                 isAwaitingCurse ||
-                isAwaitingHeal;
+                isAwaitingHeal ||
+                isSwoContinueItemPickup;
         }
 
         if (teleportBtn) {
@@ -1691,20 +1865,42 @@
         await refreshAll();
     }
 
-    async function fightRerollDie(dieIndex) {
+    async function fightRerollDie(dieIndex, skillId) {
         clearError();
 
         const r = await fetch(gameApi("/fight/reroll_die"), {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
-                die_index: dieIndex
+                die_index: dieIndex,
+                skill_id: skillId
             })
         });
 
         const data = await r.json();
         if (!r.ok) {
             showError(data.detail || "Fight die reroll failed.");
+            return;
+        }
+
+        renderFight(data);
+        await refreshAll();
+    }
+
+    async function fightRerollBoth(skillId) {
+        clearError();
+
+        const r = await fetch(gameApi("/fight/reroll_both"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                skill_id: skillId
+            })
+        });
+
+        const data = await r.json();
+        if (!r.ok) {
+            showError(data.detail || "Fight both-dice reroll failed.");
             return;
         }
 
@@ -1726,6 +1922,27 @@
         }
 
         renderFight(null);
+        await refreshAll();
+    }
+
+    async function fightToggleSkill(skillId) {
+        clearError();
+
+        const r = await fetch(gameApi("/fight/toggle_skill"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                skill_id: skillId
+            })
+        });
+
+        const data = await r.json();
+        if (!r.ok) {
+            showError(data.detail || "Fight skill toggle failed.");
+            return;
+        }
+
+        renderFight(data);
         await refreshAll();
     }
 

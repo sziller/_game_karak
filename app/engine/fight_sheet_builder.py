@@ -53,6 +53,8 @@ def build_player_side_state(
     participant: FightParticipantRef,
     player: Player,
     monster_id: Optional[str] = None,
+    is_before_second_action: bool = False,
+    monster_tile_discovered_this_turn: bool = False,
     existing_dice_state: Optional[DiceState] = None,
     existing_choices: Optional[PlayerFightChoices] = None,
 ) -> FightSideState:
@@ -72,10 +74,13 @@ def build_player_side_state(
 
     rows: list[FightRow] = []
 
-    rows.append(_build_toss_row(dice_state, player=player))
+    rows.append(_build_toss_row(dice_state, player=player, choices=choices))
     rows.append(_build_weapon_row(player, monster_id=monster_id))
-    rows.append(_build_skill_auto_row(player, dice_state=dice_state))
-    rows.append(_build_skill_manual_row(player))
+    rows.append(_build_skill_auto_row(player,
+                                      dice_state=dice_state,
+                                      is_before_second_action=is_before_second_action,
+                                      monster_tile_discovered_this_turn=monster_tile_discovered_this_turn))
+    rows.append(_build_skill_manual_row(player, choices))
     rows.append(_build_scroll_manual_row(player, choices))
     rows.append(_build_result_row(rows))
 
@@ -90,6 +95,44 @@ def build_player_side_state(
 # ============================================================
 # Public state mutator (first version: toss only)
 # ============================================================
+
+def toggle_manual_fight_skill_for_player_side(
+    side: FightSideState,
+    *,
+    player: Player,
+    skill_id: str,
+) -> FightSideState:
+    """
+    Toggle one manual combat skill in the fight-local choice state.
+
+    Implemented:
+    - skill_wlk_01:
+        Pending +1 strength / -1 HP-on-resolution modifier.
+
+    IMPORTANT:
+    - This does NOT mutate player HP.
+    - This only changes fight-local selected_skill_ids.
+    """
+    if side.participant.participant_kind != "player":
+        raise ValueError("Manual fight skills can only be toggled for player sides.")
+
+    if not player.is_skill_active(skill_id):
+        raise ValueError(f"Player does not have active skill: {skill_id}")
+
+    supported_skill_ids = {"skill_wlk_01"}
+
+    if skill_id not in supported_skill_ids:
+        raise ValueError(f"Unsupported manual fight skill: {skill_id}")
+
+    if skill_id == "skill_wlk_01" and player.hp <= 0:
+        raise ValueError("Unconscious player cannot use skill_wlk_01.")
+
+    if skill_id in side.choices.selected_skill_ids:
+        side.choices.selected_skill_ids.remove(skill_id)
+    else:
+        side.choices.selected_skill_ids.add(skill_id)
+
+    return side
 
 def apply_toss_to_player_side(side: FightSideState, *, player: Player) -> FightSideState:
     """
@@ -180,7 +223,12 @@ def _recalculate_effective_dice(*, dice_state: DiceState, player: Player) -> Non
 # Row builders
 # ============================================================
 
-def _build_toss_row(dice_state: DiceState, *, player: Player) -> FightRow:
+def _build_toss_row(
+    dice_state: DiceState,
+    *,
+    player: Player,
+    choices: PlayerFightChoices,
+) -> FightRow:
     """
     Toss row.
 
@@ -195,8 +243,16 @@ def _build_toss_row(dice_state: DiceState, *, player: Player) -> FightRow:
 
     Implemented skill-specific buttons:
     - skill_swo_01:
-        If the player has the skill and a physical die shows 1,
-        expose a die-specific reroll button.
+        Swordsman may reroll a physical die currently showing 1.
+        This is repeatable while a rerolled die still shows 1.
+
+    - skill_pri_01:
+        Warrior Princess may reroll one selected die once per fight.
+        Must accept the new value.
+
+    - skill_wrr_01:
+        Warrior may reroll both dice once per fight.
+        Must accept the new values.
     """
     if not dice_state.has_been_tossed:
         return FightRow(
@@ -237,18 +293,21 @@ def _build_toss_row(dice_state: DiceState, *, player: Player) -> FightRow:
 
     # --------------------------------------------------------
     # Optional skill-specific reroll buttons.
-    # skill_swo_01:
-    # - may reroll dice currently showing physical value 1
-    # - deliberately not automatic
     # --------------------------------------------------------
     buttons: list[FightRowButton] = []
 
+    # --------------------------------------------------------
+    # skill_swo_01:
+    # - may reroll physical dice currently showing 1
+    # - deliberately not automatic
+    # - repeatable while rerolled die still shows 1
+    # --------------------------------------------------------
     if player.is_skill_active("skill_swo_01"):
         if dice_state.die_1 == 1:
             buttons.append(
                 FightRowButton(
                     button_id="skill_swo_01_die_1",
-                    label="reroll die 1",
+                    label="swordsman reroll die 1",
                     action="fight_reroll_die",
                     enabled=True,
                     is_active=False,
@@ -263,7 +322,7 @@ def _build_toss_row(dice_state: DiceState, *, player: Player) -> FightRow:
             buttons.append(
                 FightRowButton(
                     button_id="skill_swo_01_die_2",
-                    label="reroll die 2",
+                    label="swordsman reroll die 2",
                     action="fight_reroll_die",
                     enabled=True,
                     is_active=False,
@@ -274,6 +333,68 @@ def _build_toss_row(dice_state: DiceState, *, player: Player) -> FightRow:
                 )
             )
 
+    # --------------------------------------------------------
+    # skill_pri_01:
+    # - may reroll one selected die once per fight
+    # - must accept the new value
+    # --------------------------------------------------------
+    if (
+        player.is_skill_active("skill_pri_01")
+        and "skill_pri_01" not in choices.used_skill_ids
+    ):
+        buttons.append(
+            FightRowButton(
+                button_id="skill_pri_01_die_1",
+                label="princess reroll die 1",
+                action="fight_reroll_die",
+                enabled=True,
+                is_active=False,
+                payload={
+                    "skill_id": "skill_pri_01",
+                    "die_index": 1,
+                },
+            )
+        )
+
+        buttons.append(
+            FightRowButton(
+                button_id="skill_pri_01_die_2",
+                label="princess reroll die 2",
+                action="fight_reroll_die",
+                enabled=True,
+                is_active=False,
+                payload={
+                    "skill_id": "skill_pri_01",
+                    "die_index": 2,
+                },
+            )
+        )
+
+    # --------------------------------------------------------
+    # skill_wrr_01:
+    # - may reroll both dice once per fight
+    # - must accept the new values
+    # --------------------------------------------------------
+    if (
+        player.is_skill_active("skill_wrr_01")
+        and "skill_wrr_01" not in choices.used_skill_ids
+    ):
+        buttons.append(
+            FightRowButton(
+                button_id="skill_wrr_01_both",
+                label="warrior reroll both",
+                action="fight_reroll_both",
+                enabled=True,
+                is_active=False,
+                payload={
+                    "skill_id": "skill_wrr_01",
+                },
+            )
+        )
+
+    # --------------------------------------------------------
+    # Notes / diagnostics.
+    # --------------------------------------------------------
     notes: list[str] = [
         "Development/testing mode: re-toss is currently allowed."
     ]
@@ -288,15 +409,33 @@ def _build_toss_row(dice_state: DiceState, *, player: Player) -> FightRow:
     for rr in dice_state.reroll_history:
         skill_id = rr.get("skill_id")
         effect = rr.get("effect")
-        die_index = rr.get("die_index")
-        old_value = rr.get("old_value")
-        new_value = rr.get("new_value")
 
-        if skill_id and effect:
+        if not skill_id or not effect:
+            continue
+
+        if effect == "reroll_one_die":
+            die_index = rr.get("die_index")
+            old_value = rr.get("old_value")
+            new_value = rr.get("new_value")
+
             notes.append(
                 f"{skill_id}: {effect} "
                 f"(die {die_index}: {old_value} -> {new_value})"
             )
+
+        elif effect == "reroll_both_dice":
+            old_die_1 = rr.get("old_die_1")
+            old_die_2 = rr.get("old_die_2")
+            new_die_1 = rr.get("new_die_1")
+            new_die_2 = rr.get("new_die_2")
+
+            notes.append(
+                f"{skill_id}: {effect} "
+                f"({old_die_1} + {old_die_2} -> {new_die_1} + {new_die_2})"
+            )
+
+        else:
+            notes.append(f"{skill_id}: {effect}")
 
     return FightRow(
         row_id="dice_toss",
@@ -355,19 +494,35 @@ def _get_weapon_strength_for_fight(
 
     return value, note
 
+
 def _build_weapon_row(player: Player, *, monster_id: Optional[str] = None) -> FightRow:
     """
-    Sum all equipped weapon modifiers.
+    Sum weapon-like combat modifiers.
+
+    Native weapon slots:
+    - all weapon-slot items are counted normally
 
     Implemented combat effects:
-    - skill_bat_01: swords give +3 instead of +2
-    - kris: +1 against LIV monsters
-    - hammer: +1 against UND monsters
+    - skill_bat_01:
+        swords give +3 instead of +2
+    - kris:
+        +1 against LIV monsters
+    - hammer:
+        +1 against UND monsters
+    - skill_acr_01:
+        daggers in scroll slots count as +1 each
+
+    Curse behavior:
+    - native weapon-slot weapons still count while cursed
+    - Acrobat scroll-slot daggers only count if skill_acr_01 is active
     """
     weapon_parts: list[str] = []
     notes: list[str] = []
     total = 0
 
+    # --------------------------------------------------
+    # Native weapon slots
+    # --------------------------------------------------
     for item_id in player.inventory.weapon_slots:
         if item_id is None:
             continue
@@ -384,6 +539,16 @@ def _build_weapon_row(player: Player, *, monster_id: Optional[str] = None) -> Fi
         if note:
             notes.append(note)
 
+    # --------------------------------------------------
+    # skill_acr_01:
+    # scroll-slot daggers count as weapon-like contributors
+    # --------------------------------------------------
+    acrobat_bonus, acrobat_parts = _get_acrobat_scroll_slot_dagger_bonus(player)
+    if acrobat_bonus:
+        total += acrobat_bonus
+        weapon_parts.extend(acrobat_parts)
+        notes.append("skill_acr_01: daggers in scroll slots count as +1 each")
+
     if weapon_parts:
         txt = " + ".join(weapon_parts)
     else:
@@ -398,6 +563,75 @@ def _build_weapon_row(player: Player, *, monster_id: Optional[str] = None) -> Fi
         is_active=True,
         note="; ".join(notes) if notes else None,
     )
+
+
+def _get_beasthunter_context_bonus(
+    player: Player,
+    *,
+    monster_tile_discovered_this_turn: bool,
+) -> int:
+    """
+    skill_bea_01.
+
+    Beasthunter receives +1 strength if the monster's tile was NOT discovered
+    during the current player's current turn.
+    """
+    if not player.is_skill_active("skill_bea_01"):
+        return 0
+
+    if not monster_tile_discovered_this_turn:
+        return 1
+
+    return 0
+
+
+def _get_acrobat_scroll_slot_dagger_bonus(player: Player) -> tuple[int, list[str]]:
+    """
+    skill_acr_01.
+
+    Acrobat rule:
+    - Daggers may be placed into scroll slots.
+    - Each dagger on the inventory board adds +1 to combat strength.
+    - A dagger in a normal weapon slot is already counted by the normal weapon row.
+    - This helper counts only daggers sitting in scroll slots.
+
+    Curse behavior:
+    - player.is_skill_active("skill_acr_01") returns False while cursed.
+    - existing daggers in scroll slots remain there, but do not count.
+    """
+    if not player.is_skill_active("skill_acr_01"):
+        return 0, []
+
+    total = 0
+    parts: list[str] = []
+
+    for idx, item_id in enumerate(player.inventory.scroll_slots):
+        if item_id != "dagger":
+            continue
+
+        total += 1
+        parts.append(f"scroll_{idx}:dagger(+1)")
+
+    return total, parts
+
+
+def _get_oracle_context_bonus(
+    player: Player,
+    *,
+    is_before_second_action: bool,
+) -> int:
+    """
+    skill_ora_01.
+
+    Oracle receives +1 strength if the fight happens before the second action.
+    """
+    if not player.is_skill_active("skill_ora_01"):
+        return 0
+
+    if is_before_second_action:
+        return 1
+
+    return 0
 
 def _get_barbarian_strength_bonus(player: Player) -> int:
     """
@@ -464,15 +698,24 @@ def _get_scout_dice_bonus(player: Player, dice_state: DiceState) -> int:
 
     return 0
 
-def _build_skill_auto_row(player: Player, *, dice_state: DiceState) -> FightRow:
+def _build_skill_auto_row(
+    player: Player,
+    *,
+    dice_state: DiceState,
+    is_before_second_action: bool = False,
+    monster_tile_discovered_this_turn: bool = False,
+) -> FightRow:
     """
     Automatic passive combat skill modifiers.
 
     Implemented:
     - skill_bar_01: Barbarian HP-based strength bonus
     - skill_sco_01: Scout close-dice bonus
+    - skill_ora_01: Oracle +1 before second action
+    - skill_bea_01: Beasthunter +1 if monster tile was not discovered this turn
     """
     parts: list[str] = []
+    notes: list[str] = []
     total = 0
 
     barbarian_bonus = _get_barbarian_strength_bonus(player)
@@ -485,43 +728,101 @@ def _build_skill_auto_row(player: Player, *, dice_state: DiceState) -> FightRow:
         total += scout_bonus
         parts.append(f"skill_sco_01({scout_bonus:+d})")
 
+    oracle_bonus = _get_oracle_context_bonus(
+        player,
+        is_before_second_action=is_before_second_action,
+    )
+    if oracle_bonus:
+        total += oracle_bonus
+        parts.append(f"skill_ora_01({oracle_bonus:+d})")
+        notes.append("Oracle bonus: fight happened before the second action.")
+
+    beasthunter_bonus = _get_beasthunter_context_bonus(
+        player,
+        monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
+    )
+    if beasthunter_bonus:
+        total += beasthunter_bonus
+        parts.append(f"skill_bea_01({beasthunter_bonus:+d})")
+        notes.append("Beasthunter bonus: monster tile was not discovered this turn.")
+
     if parts:
-        txt = " + ".join(parts)
-        note = None
-        is_placeholder = False
+        text = " + ".join(parts)
     else:
-        txt = "no automatic skill effects"
-        note = "No implemented automatic combat skill applies."
-        is_placeholder = False
+        text = "no automatic skill effects"
 
     return FightRow(
         row_id="skill_auto",
         kind="info",
         label="skill auto",
-        text=txt,
+        text=text,
         value=total,
         is_active=True,
-        is_placeholder=is_placeholder,
-        note=note,
+        is_placeholder=False,
+        note="; ".join(notes) if notes else None,
     )
 
 
-def _build_skill_manual_row(player: Player) -> FightRow:
+def _build_skill_manual_row(player: Player, choices: PlayerFightChoices) -> FightRow:
     """
-    Placeholder row for manually toggled skill modifiers.
+    Manual combat skill modifiers.
+
+    Implemented:
+    - skill_wlk_01:
+        Warlock may sacrifice 1 HP for +1 strength.
+        HP is NOT mutated here.
+        This row only records the selected pending modifier.
     """
+    buttons: list[FightRowButton] = []
+    selected_parts: list[str] = []
+    notes: list[str] = []
+    total = 0
+
+    # --------------------------------------------------------
+    # skill_wlk_01
+    # --------------------------------------------------------
+    if player.is_skill_active("skill_wlk_01"):
+        skill_id = "skill_wlk_01"
+        is_selected = skill_id in choices.selected_skill_ids
+
+        if is_selected:
+            total += 1
+            selected_parts.append("skill_wlk_01(+1)")
+            notes.append("⚠ pending cost: -1 HP on fight resolution")
+
+        buttons.append(
+            FightRowButton(
+                button_id="skill_wlk_01",
+                label="⚠ Warlock +1",
+                action="fight_toggle_skill",
+                enabled=player.hp > 0,
+                is_active=is_selected,
+                payload={
+                    "skill_id": skill_id,
+                    "strength_bonus": 1,
+                    "pending_hp_cost": 1,
+                    "warning": "HP will be reduced by 1 when the fight is resolved.",
+                },
+            )
+        )
+
+    if selected_parts:
+        text = "selected: " + " + ".join(selected_parts)
+    elif buttons:
+        text = "available manual combat skills"
+    else:
+        text = "no manual combat skills"
+
     return FightRow(
         row_id="skill_manual",
         kind="action_toggle",
         label="skill manual",
-        text="manual skill effects",
-        value=0,
-        button_label="toggle",
-        button_enabled=True,
-        button_action="fight_toggle_skill",
-        is_active=False,
-        is_placeholder=True,
-        note="Placeholder row. Manual skill toggles not implemented yet.",
+        text=text,
+        value=total,
+        buttons=buttons,
+        is_active=bool(buttons),
+        is_placeholder=False,
+        note="; ".join(notes) if notes else None,
     )
 
 
@@ -618,36 +919,57 @@ def _build_result_row(rows: list[FightRow]) -> FightRow:
         is_active=True,
     )
 
-def apply_swordsman_reroll_one_to_player_side(
+def apply_reroll_one_die_to_player_side(
     side: FightSideState,
     *,
     player: Player,
     die_index: int,
+    skill_id: str,
 ) -> FightSideState:
     """
-    skill_swo_01.
+    Reroll one physical die using a skill-specific rule.
 
-    Reroll one physical die that is currently showing 1.
+    Supported:
+    - skill_swo_01:
+        May reroll one die only if it currently shows 1.
+        May repeat while the die continues to show 1.
 
-    This is deliberately NOT automatic:
-    - the player may choose whether to use this reroll
-    - after rerolling, if the new value is again 1, the action may be offered again
+    - skill_pri_01:
+        May reroll one chosen die once per fight.
+        Must accept the result.
     """
-    if not player.is_skill_active("skill_swo_01"):
-        raise ValueError("Player does not have active skill_swo_01.")
-
     if side.dice_state is None or not side.dice_state.has_been_tossed:
-        raise ValueError("Dice must be tossed before using skill_swo_01.")
+        raise ValueError("Dice must be tossed before rerolling.")
 
     if die_index not in (1, 2):
         raise ValueError("die_index must be 1 or 2.")
 
+    if not player.is_skill_active(skill_id):
+        raise ValueError(f"Player does not have active {skill_id}.")
+
     dice = side.dice_state
+    choices = side.choices
 
     current_value = dice.die_1 if die_index == 1 else dice.die_2
 
-    if current_value != 1:
-        raise ValueError(f"skill_swo_01 may only reroll dice showing 1. die_{die_index}={current_value}")
+    if current_value is None:
+        raise ValueError(f"die_{die_index} has no value.")
+
+    if skill_id == "skill_swo_01":
+        if current_value != 1:
+            raise ValueError(
+                f"skill_swo_01 may only reroll dice showing 1. "
+                f"die_{die_index}={current_value}"
+            )
+
+    elif skill_id == "skill_pri_01":
+        if "skill_pri_01" in choices.used_skill_ids:
+            raise ValueError("skill_pri_01 has already been used in this fight.")
+
+        choices.used_skill_ids.add("skill_pri_01")
+
+    else:
+        raise ValueError(f"Unsupported one-die reroll skill: {skill_id}")
 
     new_value = random.randint(1, 6)
 
@@ -657,8 +979,8 @@ def apply_swordsman_reroll_one_to_player_side(
         dice.die_2 = new_value
 
     dice.reroll_history.append({
-        "skill_id": "skill_swo_01",
-        "effect": "reroll_one_die_showing_1",
+        "skill_id": skill_id,
+        "effect": "reroll_one_die",
         "die_index": die_index,
         "old_value": current_value,
         "new_value": new_value,
@@ -666,7 +988,7 @@ def apply_swordsman_reroll_one_to_player_side(
 
     dice.transformations.append({
         "stage": "manual_reroll",
-        "skill_id": "skill_swo_01",
+        "skill_id": skill_id,
         "die_index": die_index,
         "old_value": current_value,
         "new_value": new_value,
@@ -676,6 +998,70 @@ def apply_swordsman_reroll_one_to_player_side(
 
     return side
 
+def apply_reroll_both_dice_to_player_side(
+    side: FightSideState,
+    *,
+    player: Player,
+    skill_id: str,
+) -> FightSideState:
+    """
+    Reroll both physical dice using a skill-specific rule.
+
+    Supported:
+    - skill_wrr_01:
+        May reroll both dice once per fight.
+        Must accept the new values.
+    """
+    if side.dice_state is None or not side.dice_state.has_been_tossed:
+        raise ValueError("Dice must be tossed before rerolling.")
+
+    if not player.is_skill_active(skill_id):
+        raise ValueError(f"Player does not have active {skill_id}.")
+
+    if skill_id != "skill_wrr_01":
+        raise ValueError(f"Unsupported both-dice reroll skill: {skill_id}")
+
+    choices = side.choices
+    dice = side.dice_state
+
+    if "skill_wrr_01" in choices.used_skill_ids:
+        raise ValueError("skill_wrr_01 has already been used in this fight.")
+
+    old_die_1 = dice.die_1
+    old_die_2 = dice.die_2
+
+    if old_die_1 is None or old_die_2 is None:
+        raise ValueError("Both dice must have values before rerolling.")
+
+    new_die_1 = random.randint(1, 6)
+    new_die_2 = random.randint(1, 6)
+
+    dice.die_1 = new_die_1
+    dice.die_2 = new_die_2
+
+    choices.used_skill_ids.add("skill_wrr_01")
+
+    dice.reroll_history.append({
+        "skill_id": skill_id,
+        "effect": "reroll_both_dice",
+        "old_die_1": old_die_1,
+        "old_die_2": old_die_2,
+        "new_die_1": new_die_1,
+        "new_die_2": new_die_2,
+    })
+
+    dice.transformations.append({
+        "stage": "manual_reroll",
+        "skill_id": skill_id,
+        "old_die_1": old_die_1,
+        "old_die_2": old_die_2,
+        "new_die_1": new_die_1,
+        "new_die_2": new_die_2,
+    })
+
+    _recalculate_effective_dice(dice_state=dice, player=player)
+
+    return side
 
 if __name__ == "__main__":
     from fight_models import FightParticipantRef

@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from engine.fight_models import FightContext, FightParticipantRef, FightState
-from engine.fight_sheet_builder import apply_toss_to_player_side, apply_swordsman_reroll_one_to_player_side, build_monster_side_state, build_player_side_state
+from engine.fight_sheet_builder import (
+    apply_reroll_both_dice_to_player_side,
+    apply_reroll_one_die_to_player_side,
+    apply_toss_to_player_side,
+    build_monster_side_state,
+    build_player_side_state,
+    toggle_manual_fight_skill_for_player_side)
 from domain.game_entities import get_monster_by_id
 from domain.player import Player
 
@@ -122,7 +128,9 @@ def start_monster_fight_state(*,
                               player: Player,
                               monster_id: str,
                               tile_x: int,
-                              tile_y: int) -> FightState:
+                              tile_y: int,
+                              is_before_second_action: bool = False,
+                              monster_tile_discovered_this_turn: bool = False) -> FightState:
     """
     Build a monster-vs-player fight state.
 
@@ -148,12 +156,16 @@ def start_monster_fight_state(*,
                            tile_x=tile_x,
                            tile_y=tile_y,
                            initiator=initiator,
-                           challenged=challenged)
+                           challenged=challenged,
+                           is_before_second_action=is_before_second_action,
+                           monster_tile_discovered_this_turn=monster_tile_discovered_this_turn)
     initiator_side = build_monster_side_state(participant=initiator,
                                               monster_id=monster_id)
     challenged_side = build_player_side_state(participant=challenged,
                                               player=player,
-                                              monster_id=monster_id)
+                                              monster_id=monster_id,
+                                              is_before_second_action=context.is_before_second_action,
+                                              monster_tile_discovered_this_turn=context.monster_tile_discovered_this_turn)
     fight_state = FightState(context=context,
                              initiator_side=initiator_side,
                              challenged_side=challenged_side,
@@ -167,33 +179,38 @@ def start_monster_fight_state(*,
 # ============================================================
 # Fight state rebuild helpers
 # ============================================================
+
 def reroll_die_for_challenged_player_side(
     *,
     fight_state: FightState,
     player: Player,
     die_index: int,
-) -> FightState:
+    skill_id: str) -> FightState:
     """
     Reroll one die for the challenged player side.
 
-    Currently implemented:
-    - skill_swo_01: may reroll dice showing 1
+    Supported:
+    - skill_swo_01
+    - skill_pri_01
     """
     side = fight_state.challenged_side
 
     if side.participant.participant_kind != "player":
         raise ValueError("Challenged side is not a player.")
 
-    apply_swordsman_reroll_one_to_player_side(
+    apply_reroll_one_die_to_player_side(
         side,
         player=player,
         die_index=die_index,
+        skill_id=skill_id,
     )
 
     rebuilt = build_player_side_state(
         participant=side.participant,
         player=player,
         monster_id=fight_state.context.initiator.monster_id,
+        is_before_second_action=fight_state.context.is_before_second_action,
+        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
         existing_dice_state=side.dice_state,
         existing_choices=side.choices,
     )
@@ -207,6 +224,50 @@ def reroll_die_for_challenged_player_side(
     )
 
     return fight_state
+
+def reroll_both_dice_for_challenged_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    skill_id: str,
+) -> FightState:
+    """
+    Reroll both dice for the challenged player side.
+
+    Supported:
+    - skill_wrr_01
+    """
+    side = fight_state.challenged_side
+
+    if side.participant.participant_kind != "player":
+        raise ValueError("Challenged side is not a player.")
+
+    apply_reroll_both_dice_to_player_side(
+        side,
+        player=player,
+        skill_id=skill_id,
+    )
+
+    rebuilt = build_player_side_state(
+        participant=side.participant,
+        player=player,
+        monster_id=fight_state.context.initiator.monster_id,
+        is_before_second_action=fight_state.context.is_before_second_action,
+        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
+        existing_dice_state=side.dice_state,
+        existing_choices=side.choices,
+    )
+
+    fight_state.challenged_side = rebuilt
+    fight_state.phase = "ready"
+
+    fight_state = _rebuild_fight_prediction(
+        fight_state=fight_state,
+        player=player,
+    )
+
+    return fight_state
+
 
 def toss_for_challenged_player_side(*,
                                     fight_state: FightState,
@@ -229,6 +290,51 @@ def toss_for_challenged_player_side(*,
         participant=side.participant,
         player=player,
         monster_id=fight_state.context.initiator.monster_id,
+        is_before_second_action=fight_state.context.is_before_second_action,
+        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
+        existing_dice_state=side.dice_state,
+        existing_choices=side.choices,
+    )
+
+    fight_state.challenged_side = rebuilt
+    fight_state.phase = "ready"
+
+    fight_state = _rebuild_fight_prediction(
+        fight_state=fight_state,
+        player=player,
+    )
+
+    return fight_state
+
+def toggle_skill_for_challenged_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    skill_id: str,
+) -> FightState:
+    """
+    Toggle one manual combat skill on the challenged player side.
+
+    Currently implemented:
+    - skill_wlk_01
+    """
+    side = fight_state.challenged_side
+
+    if side.participant.participant_kind != "player":
+        raise ValueError("Challenged side is not a player.")
+
+    toggle_manual_fight_skill_for_player_side(
+        side,
+        player=player,
+        skill_id=skill_id,
+    )
+
+    rebuilt = build_player_side_state(
+        participant=side.participant,
+        player=player,
+        monster_id=fight_state.context.initiator.monster_id,
+        is_before_second_action=fight_state.context.is_before_second_action,
+        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
         existing_dice_state=side.dice_state,
         existing_choices=side.choices,
     )
@@ -286,6 +392,8 @@ def toggle_scroll_for_challenged_player_side(
     rebuilt = build_player_side_state(participant=side.participant,
                                       player=player,
                                       monster_id=fight_state.context.initiator.monster_id,
+                                      is_before_second_action=fight_state.context.is_before_second_action,
+                                      monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
                                       existing_dice_state=side.dice_state,
                                       existing_choices=side.choices)
 
