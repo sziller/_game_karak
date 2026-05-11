@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from typing import Optional
+
 from dto import (
     MoveRequest,
     TeleportRequest,
@@ -25,6 +27,14 @@ class FightToggleScrollRequest(BaseModel):
 class InventorySlotActionRequest(BaseModel):
     slot_group: str
     slot_index: int = Field(..., ge=0)
+    
+
+class UseInventoryItemRequest(BaseModel):
+    slot_group: str
+    slot_index: int = Field(..., ge=0)
+    target_player_id: Optional[int] = Field(default=None, ge=0)
+    target_x: Optional[int] = None
+    target_y: Optional[int] = None
 
 
 class HealingChoiceRequest(BaseModel):
@@ -34,6 +44,11 @@ class HealingChoiceRequest(BaseModel):
 class CurseChoiceRequest(BaseModel):
     target_player_id: int = Field(..., ge=0)
 
+
+class PoisonChoiceRequest(BaseModel):
+    target_player_id: int = Field(..., ge=0)
+    target_skill_id: str
+    
 
 class ToggleSkillUiRequest(BaseModel):
     skill_id: str
@@ -52,6 +67,19 @@ class FightRerollDieRequest(BaseModel):
 class FightRerollBothRequest(BaseModel):
     skill_id: str
 
+
+class SkillTeleportPlayerRequest(BaseModel):
+    target_player_id: int = Field(..., ge=0)
+
+
+class SkillTeleportMonsterTileRequest(BaseModel):
+    x: int
+    y: int
+
+
+class KoReactionFountainChoiceRequest(BaseModel):
+    x: int
+    y: int
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
@@ -140,6 +168,26 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def inventory_slot_action(req: InventorySlotActionRequest):
         try:
             return graph.item_to_slot(req.slot_group, req.slot_index)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @router.post(
+        "/inventory/use_item",
+        summary="Use active inventory item",
+        description=(
+                "Uses an active item from an inventory slot. "
+                "For now this supports healing scroll / TP_HEAL."
+        ),
+    )
+    def inventory_use_item(req: UseInventoryItemRequest):
+        try:
+            return graph.use_inventory_item(
+                slot_group=req.slot_group,
+                slot_index=req.slot_index,
+                target_player_id=req.target_player_id,
+                target_x=req.target_x,
+                target_y=req.target_y,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     
@@ -351,6 +399,20 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.choose_curse_target(req.target_player_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/poison/choose_target",
+        summary="Choose poison target after killing a GiantSnake",
+        description="Applies poison to one selected skill of one selected player, then continues to ItemPickUp flow.",
+    )
+    def choose_poison_target(req: PoisonChoiceRequest):
+        try:
+            return graph.choose_poison_target(
+                target_player_id=req.target_player_id,
+                target_skill_id=req.target_skill_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     
     @router.post(
         "/healing/choose_target",
@@ -360,6 +422,20 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def choose_healing_target(req: HealingChoiceRequest):
         try:
             return graph.choose_fountain_heal_target(req.target_hp)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/ko_reaction/choose_fountain",
+        summary="Choose fountain for pending KO reaction",
+        description="Resolves a pending skill_wrr_02 knockout reaction by teleporting the affected player to a selected fountain.",
+    )
+    def choose_ko_reaction_fountain(req: KoReactionFountainChoiceRequest):
+        try:
+            return graph.resolve_ko_reaction_fountain_choice(
+                target_x=req.x,
+                target_y=req.y,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     
@@ -435,7 +511,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.teleport_player(tx=request.x, ty=request.y)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+        
     @router.post(
         "/skills/toggle",
         summary="Toggle turn-local skill UI selection",
@@ -455,6 +531,39 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def set_skill_ui_value(req: SetSkillUiValueRequest):
         try:
             return graph.set_skill_ui_value(req.skill_id, req.value)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/skills/bea_02/teleport",
+        summary="Use Beasthunter teleport",
+        description="Teleports the active Beasthunter to another player and heals that player by 1 HP.",
+    )
+    def beasthunter_teleport(req: SkillTeleportPlayerRequest):
+        try:
+            return graph.teleport_beasthunter_to_player(req.target_player_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/skills/wlk_02/teleport",
+        summary="Use Warlock swap teleport",
+        description="Swaps the active Warlock with another player. Costs ALL Actions.",
+    )
+    def warlock_swap_teleport(req: SkillTeleportPlayerRequest):
+        try:
+            return graph.teleport_warlock_swap_player(req.target_player_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/skills/bat_02/teleport",
+        summary="Use Battlemage monster teleport",
+        description="Teleports the active Battlemage onto a revealed monster tile and starts a fight. Costs ALL Actions.",
+    )
+    def battlemage_monster_teleport(req: SkillTeleportMonsterTileRequest):
+        try:
+            return graph.teleport_battlemage_to_monster_tile(tx=req.x, ty=req.y)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     
@@ -509,11 +618,4 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     #     return fight_start()
     
     return router
-    
-    
-    
-    
-    
-    
-    
-    
+

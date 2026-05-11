@@ -1,0 +1,703 @@
+= Karak Engine Refactoring / Outsourcing Decision Protocol
+:author: Ladányi Szilárd / ChatGPT working protocol
+:toc:
+:toclevels: 3
+:sectnums:
+
+== Purpose
+
+This document defines a lightweight working protocol for deciding whether a recently discussed / implemented topic in the Karak engine should remain inside the current module or be locally refactored into a dedicated sub-module.
+
+The goal is *not* refactoring for its own sake.
+
+The goal is to keep the codebase understandable, maintainable, and testable while preserving efficient cooperation between Szilárd and ChatGPT during the active development phase.
+
+During development, seamless cooperation with ChatGPT is a major value. Therefore, a refactor that makes the project theoretically cleaner but practically harder to discuss, paste, debug, or reason about should be postponed.
+
+== Core principle
+
+[source,text]
+----
+Refactor only when it improves the next development step.
+
+Do not outsource logic merely because the file is large.
+Do not split code merely because a clean architecture diagram suggests it.
+Do not hide unstable rules behind abstractions too early.
+
+A local refactor is justified only if it makes the code easier to:
+- understand,
+- test,
+- discuss,
+- extend,
+- debug,
+- or safely reuse.
+----
+
+== Cooperation-first constraint
+
+At the current development stage, ChatGPT-assisted iteration is part of the workflow.
+
+Therefore, every refactor decision must consider not only software architecture, but also the practical question:
+
+[source,text]
+----
+Will the new structure make it easier or harder for the next ChatGPT instance
+to continue working on this exact topic?
+----
+
+A good refactor should allow Szilárd to paste a small set of files such as:
+
+[source,text]
+----
+game_engine.py entrypoint method
+actions/<topic>.py
+systems/<topic>_system.py
+relevant runtime/dataclass definitions
+----
+
+A bad refactor creates a situation where understanding one behavior requires reading many weakly-related files.
+
+== Preferred architecture direction
+
+The engine should gradually move toward the following dependency direction:
+
+[source,text]
+----
+domain/
+  -> engine/runtime.py
+  -> engine/systems/*
+  -> engine/actions/*
+  -> engine/game_engine.py
+  -> routers/*
+----
+
+Meaning:
+
+- `domain/` defines entities and static catalogs.
+- `runtime.py` defines runtime state containers.
+- `systems/` contain concrete state mutation and rule execution helpers.
+- `actions/` represent user-triggered or engine-triggered actions.
+- `game_engine.py` remains the public façade / orchestration surface.
+- routers call `GameEngine`, not deep system internals.
+
+== Important rule: keep GameEngine as façade
+
+Even if logic is outsourced, `GameEngine` should remain the stable entrypoint used by routers and by development discussions.
+
+Example:
+
+[source,python]
+----
+class GameEngine:
+    def move_player(self, direction):
+        return MoveAction(direction=direction).execute(self.state)
+
+    def end_turn(self):
+        return EndTurnTurnEndingFreeAction().execute(self.state)
+
+    def start_fight(self):
+        return StartFightFreeAction().execute(self.state)
+----
+
+The implementation may move out, but the public method should stay visible.
+
+This preserves a stable shared surface for:
+
+- frontend/router integration,
+- manual testing,
+- Swagger/API debugging,
+- ChatGPT discussions,
+- and future refactors.
+
+== Refactor decision checklist
+
+At the end of each substantial topic, ask the following questions.
+
+=== 1. Is the rule now stable?
+
+Refactor only if the topic is reasonably stable.
+
+Stable enough:
+
+[source,text]
+----
+- direction helpers
+- tile key helpers
+- action budget helpers
+- basic movement
+- basic turn start/end logic
+- serializer helpers
+- runtime dataclasses
+----
+
+Probably not stable enough yet:
+
+[source,text]
+----
+- item pickup edge cases
+- Barbarian fountain healing edge cases
+- Swordsman post-fight continuation override
+- Warrior knockout teleport
+- Dragonfall / collapse / escape phase
+- Evil character / X-room mechanics
+- newly invented skill interactions
+----
+
+If the rule is still actively changing, keeping it local and visible may be better.
+
+=== 2. Did the current topic create a coherent responsibility?
+
+A topic is a good extraction candidate if it has a clear single responsibility.
+
+Good candidates:
+
+[source,text]
+----
+teleport_system.py
+- validates teleport target
+- validates teleport cost
+- applies teleport mutation
+- handles portal/skill teleport differences
+
+item_system.py
+- tracks ground item snapshot
+- detects item pickup mode
+- resolves item-pickup turn-ending behavior
+
+healing_system.py
+- handles fountain healing
+- handles Barbarian chosen HP value
+- handles curse removal before healing choice
+----
+
+Bad candidates:
+
+[source,text]
+----
+misc_helpers.py
+engine_utils.py
+skill_stuff.py
+game_logic.py
+----
+
+Avoid vague module names. They become dumping grounds.
+
+=== 3. Will extraction reduce repeated logic?
+
+Refactor if the same logic is starting to appear in multiple places.
+
+Examples:
+
+[source,text]
+----
+Teleport action cost appears in portal, Warlock, Beasthunter, Battlemage.
+=> Extract teleport cost validation.
+
+Skill suppression due to curse appears in combat, movement, healing, UI availability.
+=> Extract skill availability / curse check.
+
+Item slot legality appears in pickup, swap, loot, chest, Acrobat exception.
+=> Extract inventory slot validation.
+----
+
+If the logic is used only once and still changing, extraction may be premature.
+
+=== 4. Does the behavior need isolated tests?
+
+If the behavior is complex enough to deserve unit tests, it is often a good module candidate.
+
+Examples:
+
+[source,text]
+----
+- teleport target validation
+- Barbarian healing choice
+- curse removal on fountain
+- item pickup mode enter/exit
+- ground item snapshot comparison
+- action budget consumption
+- Swordsman fight continuation override
+----
+
+A module with a small public API is easier to test than a giant engine method.
+
+=== 5. Will the next ChatGPT instance understand the result?
+
+Before extracting, imagine the next conversation.
+
+Good:
+
+[source,text]
+----
+"Here is GameEngine.teleport().
+Here is actions/teleport.py.
+Here is systems/teleport_system.py.
+Please fix the Beasthunter target validation."
+----
+
+Bad:
+
+[source,text]
+----
+"Here are 12 files. Somewhere in these, teleport interacts with turn state,
+skill state, action state, cursed state, UI state, and map state."
+----
+
+If understanding the topic requires too many files, the refactor is not cooperation-friendly.
+
+== When to postpone refactor
+
+Postpone refactor when:
+
+[source,text]
+----
+- the rule was just invented,
+- multiple exceptions are still being debated,
+- the current code is ugly but understandable,
+- extraction would create many small files with unclear ownership,
+- the logic depends on unfinished adjacent systems,
+- or the next likely task is still conceptual design rather than implementation.
+----
+
+In such cases, prefer:
+
+[source,text]
+----
+- comments,
+- local helper functions,
+- clearer method names,
+- temporary TODO markers,
+- and short documentation notes.
+----
+
+== When to refactor immediately
+
+Refactor immediately when:
+
+[source,text]
+----
+- a function becomes too long to reason about,
+- several unrelated responsibilities are mixed,
+- circular decisions appear inside one method,
+- the same rule is duplicated,
+- adding a new skill requires editing unrelated code,
+- a bug fix requires understanding too much of game_engine.py,
+- or the current structure blocks testing.
+----
+
+== Refactor styles
+
+=== Safe local extraction
+
+This is the preferred first step.
+
+Before:
+
+[source,python]
+----
+def move_player(...):
+    # 80 lines of movement logic
+----
+
+After:
+
+[source,python]
+----
+def move_player(...):
+    return movement_system.move_player(...)
+----
+
+This keeps the entrypoint stable while reducing local complexity.
+
+=== Vertical slice extraction
+
+Preferred for larger topics.
+
+Extract one complete behavior at a time.
+
+Example:
+
+[source,text]
+----
+Topic: movement
+
+Move:
+- MoveAction
+- movement validation
+- adjacent tile lookup
+- door passability
+- discovered/undiscovered tile entry handling
+
+Do not simultaneously refactor:
+- item pickup
+- fight start
+- curse
+- teleport
+----
+
+=== Mechanical folder split
+
+Avoid this unless absolutely necessary.
+
+Bad pattern:
+
+[source,text]
+----
+Create 20 files first, then distribute code.
+----
+
+Better pattern:
+
+[source,text]
+----
+Extract one working behavior.
+Run/test it.
+Then extract the next behavior.
+----
+
+== Recommended extraction order
+
+If no urgent topic-specific extraction exists, use this order:
+
+[source,text]
+----
+1. constants.py
+   - DIRECTION
+   - DIR_ORDER
+   - TurnMode literals
+   - shared small constants
+
+2. utils/directions.py
+   - direction_to_delta
+   - opposite direction helper
+   - rotate_doors_clockwise
+   - ensure_doors_typed
+
+3. runtime.py
+   - DungeonGraph
+   - TileNode
+   - TurnState
+   - GameRuntimeState, if introduced
+
+4. actions/base.py
+   - RuntimeAction
+   - Action
+   - FreeAction
+   - TurnEndingFreeAction
+   - ActionResult / ValidationResult, if used
+
+5. systems/turn_system.py
+   - consume action
+   - consume all actions
+   - set mode
+   - start/end turn
+   - unconscious turn handling
+
+6. actions/movement.py + systems/movement_system.py
+   - MoveAction
+   - ConfirmTileFreeAction
+   - movement validation
+   - tile entry mode handling
+
+7. systems/inventory_system.py
+   - slot legality
+   - swaps
+   - overflow
+   - Acrobat exception
+
+8. systems/item_system.py
+   - ground snapshot
+   - item pickup mode
+   - post-combat loot pickup
+   - chest pickup flow
+
+9. systems/teleport_system.py + actions/teleport.py
+   - portal teleport
+   - skill teleport
+   - teleport action cost
+   - target validation
+
+10. systems/curse_system.py
+    - apply/remove curse
+    - skill suppression
+    - fountain removal trigger
+
+11. systems/healing_system.py
+    - start-turn fountain healing
+    - end-turn fountain handling
+    - Barbarian HP target selection
+
+12. serializers/
+    - map serializer
+    - player serializer
+    - turn serializer
+    - fight serializer
+    - full game state serializer
+----
+
+== Topic-closing protocol for ChatGPT instances
+
+At the end of any implementation discussion, the acting ChatGPT instance should decide whether a local refactor is useful.
+
+Use this closing structure:
+
+[source,text]
+----
+Refactor recommendation for this topic:
+
+1. Should we extract anything now?
+   - yes / no / postpone
+
+2. If yes, proposed target module(s):
+   - app/engine/systems/...
+   - app/engine/actions/...
+   - app/engine/rules/...
+
+3. Reason:
+   - duplicated logic / too large / stable rule / needed for tests / etc.
+
+4. Keep in GameEngine:
+   - public wrapper method(s)
+   - router-facing API
+   - compatibility aliases, if needed
+
+5. Files the next instance should ask for:
+   - ...
+----
+
+== Example: closing recommendation for teleport
+
+[source,text]
+----
+Refactor recommendation for this topic:
+
+1. Should we extract anything now?
+   - yes
+
+2. Proposed target modules:
+   - app/engine/systems/teleport_system.py
+   - app/engine/actions/teleport.py
+   - optionally app/engine/rules/teleport_rules.py
+
+3. Reason:
+   - teleport now appears in portal movement and several skills
+   - all teleport types must consume action budget consistently
+   - cost rules differ by teleport kind
+   - target validation differs by skill
+
+4. Keep in GameEngine:
+   - GameEngine.teleport(...)
+   - GameEngine.use_skill_teleport(...), if already router-facing
+
+5. Files the next instance should ask for:
+   - game_engine.py teleport-related methods
+   - TurnState definition
+   - skill catalog entries for teleport skills
+   - current portal teleport implementation
+----
+
+== Example: closing recommendation for unstable Dragonfall logic
+
+[source,text]
+----
+Refactor recommendation for this topic:
+
+1. Should we extract anything now?
+   - postpone
+
+2. Proposed target modules later:
+   - app/engine/systems/collapse_system.py
+   - app/engine/systems/escape_system.py
+   - app/engine/actions/escape.py
+
+3. Reason:
+   - rules are still conceptual
+   - collapse propagation mode is undecided
+   - exit gate pre-dragon behavior is undecided
+   - premature extraction would create churn
+
+4. Keep in GameEngine for now:
+   - no hard implementation yet
+   - maybe only TODO comments or config placeholders
+
+5. Files the next instance should ask for:
+   - current Dragonfall design notes
+   - tile deletion/permadelete logic, once implemented
+   - object HP/damage handling, once implemented
+----
+
+== Module naming rules
+
+Prefer concrete names:
+
+[source,text]
+----
+turn_system.py
+movement_system.py
+teleport_system.py
+inventory_system.py
+item_system.py
+curse_system.py
+healing_system.py
+retreat_system.py
+skill_system.py
+----
+
+Avoid vague names:
+
+[source,text]
+----
+helpers.py
+misc.py
+engine_utils.py
+logic.py
+manager.py
+processor.py
+stuff.py
+----
+
+A module name should answer:
+
+[source,text]
+----
+"What responsibility lives here?"
+----
+
+== File size guideline
+
+This is only a heuristic, not a strict rule.
+
+[source,text]
+----
+< 150 lines:
+  Usually fine.
+
+150-300 lines:
+  Fine if responsibility is coherent.
+
+300-500 lines:
+  Review whether the file has multiple responsibilities.
+
+500+ lines:
+  Strong candidate for extraction.
+
+1000+ lines:
+  Likely too large unless it is mostly static data.
+----
+
+But responsibility is more important than line count.
+
+A 400-line coherent `fight_engine.py` may be acceptable.
+
+A 180-line function mixing movement, item pickup, curse, UI flags, and turn ending is not acceptable.
+
+== Public API preservation
+
+When extracting code, avoid breaking router-facing methods immediately.
+
+Recommended:
+
+[source,python]
+----
+class GameEngine:
+    def move_player(self, direction):
+        return MoveAction(direction=direction).execute(self.state)
+----
+
+If older code uses another method name, keep an alias temporarily:
+
+[source,python]
+----
+class GameEngine:
+    def perform_move(self, direction):
+        return self.move_player(direction)
+----
+
+Remove aliases only after the frontend/router code is adjusted and tested.
+
+== Testing recommendation
+
+Every extracted system should ideally support small direct tests.
+
+Examples:
+
+[source,text]
+----
+tests/test_turn_system.py
+tests/test_movement_system.py
+tests/test_teleport_system.py
+tests/test_item_system.py
+tests/test_healing_system.py
+----
+
+The goal is not full test coverage immediately.
+
+The goal is that tricky rules become testable without booting the whole FastAPI app.
+
+== Current high-value extraction candidates
+
+Based on the current Karak engine discussions, the following are likely good candidates once their immediate implementation stabilizes:
+
+[source,text]
+----
+1. teleport_system.py
+   Because portal and skill teleports must share action-cost and target-validation logic.
+
+2. item_system.py
+   Because ground-item snapshot, post-combat loot, chest pickup, and idle inventory manipulation interact subtly.
+
+3. healing_system.py
+   Because fountain healing, curse removal, and Barbarian chosen HP value create circular turn-ending logic.
+
+4. curse_system.py
+   Because curse suppresses skills globally and interacts with combat, movement, healing, and UI availability.
+
+5. turn_system.py
+   Because action budget, modes, terminal actions, and continuation overrides are central to almost everything.
+----
+
+== Current likely postpone candidates
+
+[source,text]
+----
+1. Dragonfall collapse / escape phase
+   Still partly conceptual.
+
+2. Evil character / X-room advanced behavior
+   Rule structure still likely to evolve.
+
+3. Full skill execution framework
+   Too early to create a universal skill engine. Prefer extracting specific skill families only.
+
+4. Full event bus / ECS-like architecture
+   Unnecessary at this stage and likely to reduce cooperation efficiency.
+----
+
+== Final decision rule
+
+At the end of a topic, use this final question:
+
+[source,text]
+----
+Would outsourcing this topic make the next concrete change easier?
+----
+
+If yes: refactor locally.
+
+If no: keep it visible, maybe improve names/comments, and postpone extraction.
+
+If unsure: postpone.
+
+During active development, stable cooperation and clear shared context are more valuable than architectural purity.
+
+
+
+
+---
+Topic to close next:
+- item use / item pickup / inventory-ground interaction
+
+Likely refactor decision after that:
+- decide whether `item_system.py` and/or `inventory_system.py` is now justified
+- keep `GameEngine` wrapper methods intact
+- avoid outsourcing if item rules are still shifting

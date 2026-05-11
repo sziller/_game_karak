@@ -381,7 +381,7 @@ def toggle_scroll_for_challenged_player_side(
         raise ValueError(f"Scroll slot index out of range: {slot_index}")
 
     item_id = player.inventory.scroll_slots[slot_index]
-    if item_id not in {"fist", "fireball"}:
+    if item_id not in {"fist", "fireball", "p_bomb"}:
         raise ValueError(f"Slot {slot_id!r} does not contain a supported combat scroll.")
 
     if slot_id in side.choices.selected_scroll_slot_ids:

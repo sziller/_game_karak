@@ -223,7 +223,7 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "requires_target": "monster_tile",
                      "requires_confirmation": True,
                      "description": "May teleport onto a revealed monster"
-                                    "then fight it. Costs 1 Action."},
+                                    "then fight it. Costs ALL Actions."},
 
     "skill_acr_02": {"value": 1,
                      "name": None,
@@ -309,7 +309,7 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "requires_target": "player",
                      "requires_confirmation": True,
                      "description": "Once per turn may swap places with"
-                                    "another character. Costs 1 Action"},
+                                    "another character. Costs ALL Actions."},
 
     "skill_thi_02": {"value": 2,
                      "name": None,

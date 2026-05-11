@@ -1,274 +1,138 @@
 /* =========================================================
-   1. PAGE FOUNDATION
+   0. ALPHA FIXED 16:9 LAYOUT OVERRIDE
+   Put this block at the VERY TOP of phase3_game.css.
    ========================================================= */
 
+/* basic page reset */
+html,
 body {
-    font-family: monospace;
-    background: #111;
-    color: #888899;
-    text-align: center;
-    padding: 24px;
+    width: 100%;
+    height: 100%;
     margin: 0;
+    padding: 0;
 }
 
-pre {
-    text-align: left;
-    white-space: pre-wrap;
-    background: #1a1a1a;
-    color: #ddd;
-    padding: 12px;
-    overflow-x: auto;
-}
-
-button {
+/* body is now only the black background around the game screen */
+body.karak-page {
     font-family: monospace;
-    margin: 4px;
-    padding: 6px 10px;
-}
-
-/* =========================================================
-   2. LAYOUT
-   ========================================================= */
-
-.panel {
-    max-width: 2000px;
-    margin: 12px auto;
-    padding: 12px;
-    background: #0b0b0b;
-    border: 1px solid #333;
-    box-sizing: border-box;
-}
-
-.two-col {
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
-    justify-content: center;
-    flex-wrap: wrap;
-}
-
-.three-col {
-    display: grid;
-    grid-template-columns: 320px minmax(600px, 1fr) 320px;
-    gap: 16px;
-    align-items: start;
-}
-
-.controls-grid {
-    display: grid;
-    grid-template-columns:  400px 160px 220px minmax(280px, 1fr) 220px;
-    gap: 24px;
-    align-items: stretch;
-    justify-content: center;
-}
-
-.col {
-    min-width: 0;
-}
-
-.game-main {
-    max-width: 2000px;
-    min-height: 70vh;
-    display: flex;
-    flex-direction: row;
-    align-items: stretch;
-    gap: 16px;
-}
-
-.game-side {
-    width: 600px;
-    flex: 0 0 412px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.side-box {
-    background: #0b0b0b;
-    border: 1px solid #333;
-    padding: 12px;
-    box-sizing: border-box;
-}
-
-.game-map {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-}
-
-#map.image {
-    white-space: normal;
-    width: 100%;
-    flex: 1 1 auto;
-    min-height: 420px;
-    position: relative;
-    overflow: hidden;
-    margin: 0 auto;
-}
-
-.item-icon {
-    display: block;
-    max-width: 48px;
-    max-height: 48px;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    image-rendering: auto;
-}
-
-.map-content-icon {
-    position: absolute;
-    width: 48px;
-    height: 48px;
-    max-width: 70%;
-    max-height: 70%;
-    object-fit: contain;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-    image-rendering: auto;
-}
-
-.tile-base-img {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    left: 0;
-    top: 0;
-    display: block;
-    transform-origin: 50% 50%;
-}
-/* =========================================================
-   3. PLAYERS
-   ========================================================= */
-
-.player-row {
-    display: flex;
-    justify-content: flex-start;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 8px;
-    border-bottom: 1px solid #222;
-    text-align: left;
-    box-sizing: border-box;
-    overflow: hidden;
-}
-
-.player-left {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    min-width: 0;
-    flex: 0 0 auto;
-}
-
-.player-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 0 0 auto;
-    width: max-content;
-    max-width: 100%;
-    overflow-wrap: normal;
-    word-break: normal;
-}
-
-.player-row:hover {
-    background: #182218;
-}
-
-.player-row.active {
-    background: #112211;
-    outline: 2px solid #445544;
-}
-
-.player-portrait {
-    width: 56px;
-    height: 56px;
-    background: #151515;
-    border: 1px solid #333;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    flex: 0 0 56px;
-}
-
-.player-portrait img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    image-rendering: pixelated;
-}
-
-.player-portrait-placeholder {
-    color: #777;
-    font-size: 10px;
-}
-
-.player-row.curse-selected {
-    background: #2a2211;
-    outline: 2px solid #ccaa44;
-}
-
-.player-portrait-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex: 0 0 64px;
-}
-
-.player-hp-under-portrait {
-    margin-top: 4px;
-    font-size: 16px;
-    font-weight: bold;
-    color: #ddd;
-    line-height: 1;
-    text-align: center;
-}
-
-.player-hp-under-portrait::after {
-    content: " HP";
-    font-size: 10px;
-    font-weight: normal;
+    background: #050505;
     color: #888899;
-    margin-left: 2px;
-}
-
-.player-topline {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-    width: 100%;
-    white-space: nowrap;
-}
-
-.player-title-text {
-    flex: 1 1 auto;
-    min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+
+    width: 100vw;
+    height: 100vh;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    text-align: initial;
 }
 
-.player-coordinates {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    text-align: right;
-    color: #aaa;
+/* the actual fixed 16:9 game screen */
+.karak-shell {
+    width: min(100vw, calc(100vh * 16 / 9));
+    aspect-ratio: 16 / 9;
+
+    display: grid;
+    grid-template-rows: 15% 70% 15%;
+
+    background: #111;
+    border: 2px solid #333;
+    overflow: hidden;
 }
 
-/* =========================================================
-   4. MAP
-   ========================================================= */
+/* all 3 large rows must be allowed to shrink inside the fixed screen */
+.karak-row {
+    min-width: 0;
+    min-height: 0;
+}
 
+/* ROW 1: encounter / map-state displays / ground.
+   Uses same vertical divisions as ROW 2 and ROW 3. */
+.karak-top-row {
+    display: grid;
+    grid-template-columns: 26% 48% 26%;
+    gap: 10px;
+
+    padding: 10px;
+    border-bottom: 1px solid #333;
+    background: #090909;
+
+    min-height: 0;
+}
+
+/* ROW 2: players / map / inventory */
+.karak-main-row {
+    display: grid;
+    grid-template-columns: 26% 48% 26%;
+    gap: 10px;
+
+    padding: 10px;
+    min-height: 0;
+}
+
+/* ROW 3: targeting / navigation / messages */
+.karak-bottom-row {
+    display: grid;
+    grid-template-columns: 26% 48% 26%;
+    gap: 10px;
+
+    padding: 10px;
+    border-top: 1px solid #333;
+    background: #090909;
+
+    min-height: 0;
+}
+
+/* generic dark panel */
+.ui-panel {
+    min-width: 0;
+    min-height: 0;
+
+    border: 1px solid #333;
+    background: #0b0b0b;
+
+    padding: 8px;
+    overflow: hidden;
+}
+
+.panel-title {
+    color: #ddd;
+    font-weight: bold;
+    text-align: left;
+    margin-bottom: 6px;
+}
+
+/* middle row panels */
+.players-panel,
+.inventory-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.players-box,
+.inventory-box {
+    min-height: 0;
+    overflow: auto;
+}
+
+/* map must fill its panel */
+.map-panel {
+    padding: 8px;
+}
+
+.map-frame,
+#map.image,
 #map {
-    margin: 20px auto;
-    min-height: 320px;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
     position: relative;
+    overflow: hidden;
+    background: #050505;
 }
 
 #mapCanvas {
@@ -278,66 +142,459 @@ button {
     min-height: 100%;
 }
 
-#map,
-#mapCanvas {
-    outline: 2px solid #ff5555;
+/* bottom controls */
+.targeting-panel,
+.navigation-panel,
+.message-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.teleport-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.teleport-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.bottom-controls-layout {
+    display: grid;
+    grid-template-columns: 1fr 160px;
+    gap: 10px;
+    min-height: 0;
+}
+
+.move-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    max-width: 180px;
+    margin: 0 auto;
+}
+
+.turn-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.message-panel .message-box {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/*
+.system-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+*/
+
+/* buttons and inputs inside bottom panels should fit the panel */
+.targeting-panel button,
+.targeting-panel input,
+.navigation-panel button,
+.message-panel button {
+    width: 100%;
+    min-width: 0;
+}
+
+/* selection boxes reserve stable space */
+.selection-box {
+    min-height: 34px;
+    border: 1px solid #222;
+    background: #101010;
+    padding: 6px;
+    text-align: left;
+    overflow: hidden;
+}
+
+.selection-box:empty::before {
+    content: "No pending selection.";
+    color: #666;
+}
+
+/* placeholder box for not-yet-implemented encounter display */
+.panel-placeholder {
+    color: #777;
+    text-align: left;
+    font-size: 12px;
 }
 
 /* =========================================================
-   5. FEEDBACK / UTILITY
+   2. BASIC CONTROLS
+   ========================================================= */
+
+button {
+    font-family: monospace;
+    margin: 0;
+    padding: 6px 10px;
+
+    border: 1px solid #444;
+    background: #1a1a1a;
+    color: #ddd;
+
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    background: #222822;
+}
+
+button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+input {
+    font-family: monospace;
+    padding: 6px 8px;
+
+    border: 1px solid #444;
+    background: #101010;
+    color: #ddd;
+
+    min-width: 0;
+}
+
+pre {
+    margin: 0;
+    padding: 0;
+
+    white-space: pre-wrap;
+    background: transparent;
+    color: inherit;
+
+    overflow-x: auto;
+}
+
+/* =========================================================
+   10. MAP IMAGE LAYERS
+   ========================================================= */
+
+.tile-base-img {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+
+    display: block;
+    transform-origin: 50% 50%;
+}
+
+.map-content-icon {
+    position: absolute;
+    width: 48px;
+    height: 48px;
+    max-width: 70%;
+    max-height: 70%;
+
+    object-fit: contain;
+
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+
+    pointer-events: none;
+    image-rendering: auto;
+}
+
+.item-icon {
+    display: block;
+    max-width: 48px;
+    max-height: 48px;
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* =========================================================
+   11. PLAYERS PANEL / PLAYER ROWS
+   ========================================================= */
+
+/* The scrollable area containing all player rows. */
+.players-box {
+    min-width: 0;
+    min-height: 0;
+
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    padding-right: 4px;
+}
+
+/* One player card / row. JS creates this with class="player-row". */
+.player-row {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+
+    gap: 8px;
+
+    padding: 8px;
+    margin-bottom: 6px;
+
+    background: #101010;
+    border: 1px solid #222;
+
+    text-align: left;
+    overflow: hidden;
+
+    box-sizing: border-box;
+}
+
+/* Small hover feedback. Useful on touchscreen too, but not critical. */
+.player-row:hover {
+    background: #182218;
+}
+
+/* Active player highlight. JS adds class "active". */
+.player-row.active {
+    background: #112211;
+    border-color: #557755;
+    outline: 2px solid #445544;
+}
+
+/* Selection highlight.
+   Currently reused for curse / poison / teleport / item targeting. */
+.player-row.curse-selected {
+    background: #2a2211;
+    border-color: #ccaa44;
+    outline: 2px solid #ccaa44;
+}
+
+/* Left content wrapper generated by JS. */
+.player-left {
+    display: flex;
+    align-items: flex-start;
+
+    gap: 10px;
+
+    min-width: 0;
+    flex: 1 1 auto;
+    width: auto;
+}
+
+/* Portrait + HP wrapper. */
+.player-portrait-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    flex: 0 0 64px;
+}
+
+/* Character portrait frame. */
+.player-portrait {
+    width: 56px;
+    height: 56px;
+
+    flex: 0 0 56px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #151515;
+    border: 1px solid #333;
+
+    overflow: hidden;
+}
+
+/* Character portrait image. */
+.player-portrait img {
+    width: 100%;
+    height: 100%;
+
+    object-fit: contain;
+    image-rendering: pixelated;
+}
+
+/* Fallback if no portrait exists. */
+.player-portrait-placeholder {
+    color: #777;
+    font-size: 10px;
+    text-align: center;
+}
+
+/* HP text below portrait. */
+.player-hp-under-portrait {
+    margin-top: 4px;
+
+    font-size: 16px;
+    font-weight: bold;
+    line-height: 1;
+
+    color: #ddd;
+    text-align: center;
+}
+
+.player-hp-under-portrait::after {
+    content: " HP";
+
+    margin-left: 2px;
+
+    font-size: 10px;
+    font-weight: normal;
+
+    color: #888899;
+}
+
+/* Player text area: title/status/skills. */
+.player-text {
+    display: flex;
+    flex-direction: column;
+
+    gap: 4px;
+
+    min-width: 0;
+    flex: 1 1 auto;
+
+    overflow: hidden;
+}
+
+/* Top line: name/status on left, coordinates on right. */
+.player-topline {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+
+    gap: 12px;
+
+    width: 100%;
+
+    white-space: nowrap;
+}
+
+/* Player name/status text. */
+.player-title-text {
+    flex: 1 1 auto;
+    min-width: 0;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Coordinates on right side. */
+.player-coordinates {
+    flex: 0 0 auto;
+
+    color: #aaa;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* =========================================================
+   12. PLAYER SKILL CHIP SUPPORT
+   ========================================================= */
+
+/* Skill rows are currently generated mostly with inline JS styles.
+   These rules only prevent overflow and keep them compact. */
+
+.player-text > div {
+    min-width: 0;
+}
+
+.player-text button {
+    font-size: 11px;
+    padding: 3px 6px;
+}
+
+.player-text input[type="checkbox"] {
+    width: auto;
+}
+
+/* Prevent skill rows from forcing the whole player panel wider. */
+.player-row * {
+    max-width: 100%;
+}
+
+/* Keep skill chip text compact. */
+.player-row b {
+    overflow-wrap: anywhere;
+}
+
+/* =========================================================
+   13. MESSAGE BOX
    ========================================================= */
 
 .message-box {
-    font-family: monospace;
-    font-size: 14px;
+    width: 100%;
+    height: 100%;
+
     padding: 8px;
     margin: 0;
-    width: 100%;
-    display: block;
+
     box-sizing: border-box;
+
+    font-family: monospace;
+    font-size: 14px;
+
     text-align: left;
+    overflow: hidden;
 }
 
-.header-message-box {
-    min-width: 0;
-    width: 100%;
-    height: 100%;
-    display: flex;
+.message-box pre {
+    margin: 6px 0 0 0;
+    padding: 0;
+
+    background: transparent;
+    color: inherit;
+
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-x: auto;
 }
 
-.header-message-box .message-box {
-    min-height: 118px;
-    height: 100%;
-    flex: 1 1 auto;
+.message-info {
+    background: #001a00;
+    color: #77ff77;
+    border: 2px solid #00aa00;
 }
 
-/* ---------------------------------------------------------
-   Header numeric status boxes
-   Used by:
-   - RED / X-room counter
-   - Manual curse-room toss display
+.message-error {
+    background: #220000;
+    color: #ff7777;
+    border: 2px solid #ff0000;
+}
 
-   State classes:
-   - counter-neutral
-   - counter-triggered
-   --------------------------------------------------------- */
+/* =========================================================
+   14. TOP STATUS COUNTERS
+   ========================================================= */
 
 .room-x-counter-box,
 .curse-toss-box {
-    border: 2px solid #555;
-    background: #151515;
+    width: 100%;
+    height: 100%;
+
     padding: 8px;
-    min-width: 100px;
-    text-align: center;
+
+    border: 2px solid #555;
     border-radius: 6px;
+
+    background: #151515;
+
+    text-align: center;
     box-sizing: border-box;
+    overflow: hidden;
 }
 
 .room-x-counter-title,
 .curse-toss-title {
+    margin-bottom: 4px;
+
     font-size: 12px;
     color: #aaa;
-    margin-bottom: 4px;
 }
 
 .room-x-counter-value,
@@ -345,6 +602,7 @@ button {
     font-size: 44px;
     font-weight: bold;
     line-height: 1.0;
+
     color: #ddd;
 }
 
@@ -366,7 +624,7 @@ button {
 }
 
 /* Backward-tolerant aliases.
-   Safe to remove once no JS uses these class names anymore. */
+   Safe to keep while JS names are still evolving. */
 
 .curse-toss-box.curse-triggered {
     border-color: #cc3333;
@@ -382,54 +640,268 @@ button {
     background: #151515;
 }
 
-.message-box pre {
-    margin: 6px 0 0 0;
-    text-align: left;
-    white-space: pre-wrap;
-    overflow-x: auto;
-    background: transparent;
-    padding: 0;
-}
+/* =========================================================
+   15. GROUND ITEM BLOCK
+   ========================================================= */
 
-.message-info {
-    background: #001a00;
-    color: #77ff77;
-    outline: 2px solid #00aa00;
-}
+.ground-box {
+    width: 100%;
+    height: 100%;
 
-.message-error {
-    background: #220000;
-    color: #ff7777;
-    outline: 2px solid #ff0000;
-}
+    padding: 8px;
 
-.visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
+    border: 1px solid #444;
+    border-radius: 6px;
+
+    background: #101010;
+
+    box-sizing: border-box;
+    text-align: center;
+
     overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
 }
 
-.muted {
+.ground-title {
+    margin-bottom: 6px;
+
+    font-weight: bold;
+    color: #ddd;
+}
+
+.ground-slot {
+    height: calc(100% - 22px);
+    min-height: 0;
+
+    padding: 6px;
+
+    display: grid;
+    grid-template-rows: 1fr auto;
+    justify-items: center;
+
+    border: 1px solid #333;
+    background: #151515;
+
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.ground-image {
+    width: 56px;
+    height: 56px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 0;
+}
+
+.ground-image img {
+    display: block;
+}
+
+.ground-id {
+    margin-top: 4px;
+
+    min-height: 16px;
+
+    font-size: 12px;
     color: #aaa;
+
+    overflow-wrap: anywhere;
 }
 
 /* =========================================================
-   5/B. FIGHT MODAL
+   16. MAP IMAGE LAYERS / ITEM ICONS
+   ========================================================= */
+
+.tile-base-img {
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    width: 100%;
+    height: 100%;
+
+    display: block;
+
+    transform-origin: 50% 50%;
+}
+
+.item-icon {
+    display: block;
+
+    max-width: 48px;
+    max-height: 48px;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* =========================================================
+   17. ACTIVE INVENTORY
+   Three equal columns, fixed-size cards, stable button areas.
+   ========================================================= */
+
+.inventory-box {
+    min-width: 0;
+    min-height: 0;
+
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    padding-right: 4px;
+
+    text-align: left;
+}
+
+/* One inventory section, for example:
+   - weapon + key row
+   - scroll row */
+.inventory-section {
+    margin-bottom: 10px;
+}
+
+/* The inventory area is divided into 3 equal columns. */
+.inventory-card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+
+    width: 100%;
+}
+
+/* One fixed item slot card. */
+.inventory-card {
+    min-width: 0;
+
+    display: grid;
+    grid-template-rows: 64px 28px 28px;
+    gap: 4px;
+
+    padding: 6px;
+
+    border: 1px solid #333;
+    background: #151515;
+
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.inventory-card-filled {
+    border-color: #555;
+}
+
+.inventory-card-empty {
+    border-color: #252525;
+    background: #101010;
+}
+
+/* Fixed icon area. Empty slots still keep this area. */
+.inventory-card-image {
+    width: 100%;
+    height: 64px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #0f0f0f;
+    border: 1px solid #222;
+
+    overflow: hidden;
+}
+
+.inventory-card-img {
+    display: block;
+
+    max-width: 56px;
+    max-height: 56px;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* USE and inventory-manipulation buttons. */
+.inventory-use-btn,
+.inventory-action-btn,
+.inventory-treasure-btn {
+    width: 100%;
+    min-width: 0;
+
+    height: 28px;
+
+    padding: 3px 4px;
+
+    font-size: 11px;
+    line-height: 1;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Disabled placeholder button:
+   Exists spatially, but is visually quiet and has no text. */
+.inventory-btn-placeholder {
+    color: transparent;
+    background: #101010;
+    border-color: #1d1d1d;
+    cursor: default;
+}
+
+.inventory-btn-placeholder:disabled {
+    opacity: 1;
+}
+
+/* Treasure row also uses the 3-column logic visually. */
+.inventory-treasure-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+
+    margin-top: 10px;
+}
+
+.inventory-treasure-value {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    height: 28px;
+
+    border: 1px solid #333;
+    background: #151515;
+
+    font-weight: bold;
+    color: #ddd;
+}
+
+.inventory-treasure-btn {
+    grid-column: span 2;
+}
+
+/* =========================================================
+   18. FIGHT MODAL
    ========================================================= */
 
 .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.72);
+
     display: flex;
     align-items: center;
     justify-content: center;
+
+    background: rgba(0, 0, 0, 0.72);
+
     z-index: 9999;
 }
 
@@ -440,10 +912,14 @@ button {
 .modal-window {
     width: min(1200px, 94vw);
     max-height: 88vh;
+
+    padding: 16px;
+
     overflow-y: auto;
+
     background: #0b0b0b;
     border: 1px solid #444;
-    padding: 16px;
+
     box-sizing: border-box;
     text-align: left;
 }
@@ -452,6 +928,7 @@ button {
     display: flex;
     justify-content: space-between;
     align-items: center;
+
     gap: 12px;
     margin-bottom: 12px;
 }
@@ -460,160 +937,470 @@ button {
     margin: 0;
 }
 
+.fight-modal-actions {
+    display: flex;
+    gap: 8px;
+
+    margin-bottom: 10px;
+}
+
 /* =========================================================
-   6. RESPONSIVE
+   19. GENERIC UTILITY CLASSES
    ========================================================= */
 
-@media (max-width: 900px) {
-    .two-col {
-        flex-direction: column;
-        align-items: center;
-    }
-
-    .game-main {
-        flex-direction: column;
-    }
-
-    .game-side {
-        width: 100%;
-        flex: 1 1 auto;
-    }
-
-    .controls-grid {
-        grid-template-columns: 1fr;
-    }
+.muted {
+    color: #aaa;
 }
 
-/* ==========================================================
-   7. INVENTORY
-   ========================================================== */
+.visually-hidden {
+    position: absolute;
 
-.inventory-grid {
+    width: 1px;
+    height: 1px;
+
+    padding: 0;
+    margin: -1px;
+
+    overflow: hidden;
+
+    clip: rect(0, 0, 0, 0);
+
+    white-space: nowrap;
+    border: 0;
+}
+
+.two-col {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    align-items: start;
+    grid-template-columns: 1fr 1fr;
+
+    gap: 16px;
+    align-items: flex-start;
 }
 
-.inv-slot {
-    padding: 8px 10px;
-    border: 1px solid #444;
-    background: #1a1a1a;
-    color: #ddd;
-    font-family: monospace;
-    text-align: left;
-    min-height: 40px;
+.col {
+    min-width: 0;
+}
+
+/* =========================================================
+   21. ACTION COUNTER
+   ========================================================= */
+
+.action-counter-box {
+    width: 100%;
+    height: 100%;
+
+    padding: 8px;
+
+    border: 2px solid #555;
+    border-radius: 6px;
+
+    background: #151515;
+
+    text-align: center;
     box-sizing: border-box;
+    overflow: hidden;
 }
 
-.inv-slot.weapon,
-.inv-slot.key {
-    font-weight: 600;
+.action-counter-title {
+    margin-bottom: 4px;
+
+    font-size: 12px;
+    color: #aaa;
 }
 
-.inv-slot.treasure {
-    grid-column: 1 / -1;
+.action-counter-value {
+    font-size: 34px;
+    font-weight: bold;
+    line-height: 1.1;
+
+    color: #ddd;
 }
 
-.inventory-section {
-    margin-bottom: 10px;
-    text-align: left;
+.action-counter-box.action-low {
+    border-color: #ccaa44;
+    background: #2a2211;
 }
 
-.inventory-row {
+.action-counter-box.action-empty {
+    border-color: #cc3333;
+    background: #2a1010;
+}
+
+.action-counter-box.action-empty .action-counter-value {
+    color: #ff4444;
+}
+
+/* =========================================================
+   22. COMPACT PLAYER INVENTORY
+   Read-only inventory column on the right side of each player row.
+   Uses fixed-size mini icon slots.
+   ========================================================= */
+
+/* The whole right-side inventory column wrapper. */
+.player-mini-inventory-wrap {
+    flex: 0 0 126px;
+
+    min-width: 126px;
+    max-width: 126px;
+
+    align-self: stretch;
+
     display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 6px;
+    align-items: center;
 }
 
-.inventory-card {
+/* Inner inventory column. */
+.player-mini-inventory {
+    width: 100%;
+
+    display: grid;
+    grid-template-rows: repeat(4, 22px);
+    gap: 2px;
+
+    font-size: 11px;
+    line-height: 1.2;
+
+    color: #bbb;
+}
+
+.player-mini-inventory-empty {
+    color: #666;
+}
+
+/* One inventory row: W / K / S / T. */
+.mini-inv-row {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 4px;
+
+    min-width: 0;
+    min-height: 0;
+
     border: 1px solid #333;
     background: #151515;
-    padding: 8px;
-    min-width: 100px;
-    width: 100px;
-    box-sizing: border-box;
-    text-align: center;
+
+    padding: 1px 3px;
+
+    overflow: hidden;
 }
 
-.inventory-card-ground {
-    border-color: #555;
-    background: #121212;
-}
-
-.inventory-card-image {
-    height: 56px;
+/* W, K, S, T label. */
+.mini-inv-label {
     display: flex;
     align-items: center;
     justify-content: center;
-}
 
-.inventory-card-img {
-    max-width: 48px;
-    max-height: 48px;
-    image-rendering: pixelated;
-}
+    font-weight: bold;
+    color: #888899;
 
-.inventory-card-slot {
-    margin-top: 6px;
-    font-size: 12px;
-}
-
-.inventory-card-id {
-    font-size: 12px;
-    color: #aaa;
-    min-height: 16px;
-    overflow-wrap: anywhere;
-}
-
-/* ==========================================================
-   7/B. GROUND BLOCK
-   ========================================================== */
-
-.header-panel {
-    max-width: 2000px;
-}
-
-.ground-box {
-    border: 1px solid #444;
-    background: #101010;
-    padding: 8px;
-    box-sizing: border-box;
-    min-height: 118px;
     text-align: center;
 }
 
-.ground-title {
+/* Fixed slot row. */
+.mini-inv-slots {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Every inventory slot has fixed size.
+   Empty slots keep the same space as filled slots. */
+.mini-inv-slot {
+    flex: 0 0 18px;
+
+    width: 18px;
+    height: 18px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid #2a2a2a;
+    background: #0f0f0f;
+
+    overflow: hidden;
+}
+
+/* Mini icon inside fixed slot. */
+.mini-inv-icon {
+    display: block;
+
+    max-width: 16px;
+    max-height: 16px;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* Empty slot placeholder. */
+.mini-inv-slot-empty {
+    opacity: 0.55;
+}
+
+.mini-inv-empty-dot {
+    color: #555;
+    font-size: 12px;
+    line-height: 1;
+}
+
+/* Missing item ref placeholder. */
+.mini-inv-slot-missing {
+    color: #ccaa44;
+    font-size: 11px;
     font-weight: bold;
-    margin-bottom: 6px;
+}
+
+/* Treasure row keeps numeric display. */
+.mini-inv-row-treasure {
+    align-items: center;
+}
+
+.mini-inv-treasure-value {
+    display: flex;
+    align-items: center;
+
+    min-width: 0;
+
     color: #ddd;
+    font-weight: bold;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* =========================================================
+   23. ALPHA TITLE SUPPRESSION
+   Hide visible field titles to save space in the fixed alpha layout.
+   ========================================================= */
+
+.panel-title,
+.action-counter-title,
+.room-x-counter-title,
+.curse-toss-title,
+.ground-title {
+    display: none;
+}
+
+/* Tighten boxes after title suppression. */
+
+.action-counter-value,
+.room-x-counter-value,
+.curse-toss-die {
+    height: 100%;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 38px;
+    font-weight: bold;
+    line-height: 1;
 }
 
 .ground-slot {
-    border: 1px solid #333;
-    background: #151515;
-    padding: 8px;
-    box-sizing: border-box;
-    min-height: 86px;
+    height: 100%;
 }
 
-.ground-image {
-    width: 56px;
-    height: 56px;
-    display: flex;
+/* =========================================================
+   24. TOP ROW REORGANIZATION
+   Top row aligns with main row:
+   left = encounter, center = map-state, right = ground.
+   ========================================================= */
+
+.top-mapstate-panel {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+
+    min-width: 0;
+    min-height: 0;
+}
+
+/* The three center-top displays fill their slots. */
+.top-mapstate-panel .action-counter-box,
+.top-mapstate-panel .room-x-counter-box,
+.top-mapstate-panel .curse-toss-box {
+    width: 100%;
+    height: 100%;
+}
+
+/* Encounter and ground should also fill their top cells. */
+.top-monster-panel,
+.top-ground-panel {
+    min-width: 0;
+    min-height: 0;
+}
+
+.top-ground-panel .ground-box {
+    width: 100%;
+    height: 100%;
+}
+
+/* =========================================================
+   25. TOP-RIGHT GROUND ITEM HORIZONTAL LAYOUT
+   Ground item sits above the active inventory.
+   ========================================================= */
+
+.top-ground-panel .ground-slot {
+    height: 100%;
+
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    grid-template-rows: 1fr;
+
+    gap: 8px;
     align-items: center;
+    justify-items: stretch;
+
+    padding: 6px;
+}
+
+.top-ground-panel .ground-image {
+    width: 64px;
+    height: 64px;
+
+    justify-self: center;
+    align-self: center;
+}
+
+.top-ground-panel .ground-id {
+    margin-top: 0;
+
+    text-align: left;
+    align-self: center;
+
+    font-size: 13px;
+}
+
+/* =========================================================
+   26. GROUND ITEM DESCRIPTION
+   Shows item_id + desc next to the ground item icon.
+   ========================================================= */
+
+.top-ground-panel .ground-text {
+    min-width: 0;
+
+    display: flex;
+    flex-direction: column;
     justify-content: center;
+
+    text-align: left;
+    overflow: hidden;
 }
 
-.ground-image img {
-    display: block;
+.top-ground-panel .ground-id {
+    font-size: 13px;
+    font-weight: bold;
+    color: #ddd;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.ground-id {
-    margin-top: 6px;
-    font-size: 12px;
+.top-ground-panel .ground-desc {
+    margin-top: 3px;
+
+    font-size: 11px;
+    line-height: 1.2;
+
     color: #aaa;
-    min-height: 16px;
-    overflow-wrap: anywhere;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+/* =========================================================
+   27. GROUND TEXT LEFT ALIGNMENT
+   Align item title/id and description to the left.
+   ========================================================= */
+
+.top-ground-panel .ground-text,
+.top-ground-panel .ground-id,
+.top-ground-panel .ground-desc {
+    text-align: left;
+}
+
+.top-ground-panel .ground-text {
+    align-items: flex-start;
+}
+
+/* =========================================================
+   28. GROUND TEXT STRETCH FIX
+   Make the right-side text column fill its grid cell.
+   ========================================================= */
+
+.top-ground-panel .ground-text {
+    width: 100%;
+    min-width: 0;
+
+    justify-self: stretch;
+    align-self: center;
+
+    align-items: flex-start;
+    text-align: left;
+}
+
+.top-ground-panel .ground-id,
+.top-ground-panel .ground-desc {
+    width: 100%;
+    text-align: left;
+}
+
+/* =========================================================
+   29. MESSAGE PANEL FRAME FIX
+   Use borders inside the allocated box; prevent right-edge clipping.
+   ========================================================= */
+
+.message-panel {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.message-panel .message-box {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+
+    box-sizing: border-box;
+
+    overflow: hidden;
+}
+
+.message-info {
+    outline: none;
+    border: 2px solid #00aa00;
+}
+
+.message-error {
+    outline: none;
+    border: 5px solid #ff0000;
+}
+
+/* =========================================================
+   30. MESSAGE BOX INNER INSET
+   Give the message frame breathing room inside its panel.
+   ========================================================= */
+
+.message-panel .message-box {
+    flex: 1 1 auto;
+    min-height: 0;
+
+    width: calc(100% - 4px);
+    max-width: calc(100% - 4px);
+
+    margin: 2px;
+
+    box-sizing: border-box;
 }

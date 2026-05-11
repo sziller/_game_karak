@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES
 from domain.character_catalog import SKILL_CATALOG
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Literal, Tuple, Any
+from typing import Dict, Optional, Literal, Tuple, Any, TypeAlias
 
 import copy
 import random
@@ -26,6 +26,9 @@ DIRECTION = Literal["N", "S", "E", "W"]
 DIR_ORDER: tuple[DIRECTION, DIRECTION, DIRECTION, DIRECTION] = ("N", "E", "S", "W")
 ROOM_X_KARAK_LIMIT = 5
 CURSE_ROOM_RELOCATE_CHANCE = 0.5
+TeleportKind: TypeAlias = Literal["portal", "skill_bea_02", "skill_wlk_02", "skill_bat_02"]
+
+ActionPrice: TypeAlias = int | Literal["all", "remaining"]
 
 def direction_to_delta(direction: DIRECTION) -> Tuple[int, int]:
     return {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0)}[direction]
@@ -126,11 +129,12 @@ TurnMode = Literal[ "idle",
                     "pending_tile",
                     "fight",
                     "awaiting_curse_choice",
+                    "awaiting_poison_choice",
                     "item_pickup",
                     "retreat",
                     "awaiting_turn_end_commit",
-                    "awaiting_heal_choice"]
-
+                    "awaiting_heal_choice",
+                    "awaiting_ko_reaction_choice"]
 
 @dataclass
 class TurnState:
@@ -148,6 +152,13 @@ class TurnState:
     pending_item_pickup: bool = False
     pending_retreat: bool = False
     pending_curse_choice: bool = False
+    pending_poison_choice: Optional[dict[str, Any]] = None
+    pending_ko_reaction: Optional[dict[str, Any]] = None
+    # Item-use lock:
+    # Once a fight is entered, active costless items are blocked for the rest of the turn,
+    # unless the turn explicitly continues after combat by a continuation rule
+    # such as skill_swo_02 or skill_bar_02.
+    item_use_locked_by_combat: bool = False
 
     last_valid_safe_tile: Optional[tuple[int, int]] = None
 
@@ -181,6 +192,9 @@ class TurnState:
                 "pending_item_pickup": self.pending_item_pickup,
                 "pending_retreat": self.pending_retreat,
                 "pending_curse_choice": self.pending_curse_choice,
+                "pending_poison_choice": self.pending_poison_choice,
+                "pending_ko_reaction": self.pending_ko_reaction,
+                "item_use_locked_by_combat": self.item_use_locked_by_combat,
                 "last_valid_safe_tile": self.last_valid_safe_tile,
                 "ground_snapshot_item_id": self.ground_snapshot_item_id,
                 "item_pickup_origin": self.item_pickup_origin,
@@ -235,6 +249,7 @@ class TurnEndingFreeAction(FreeAction):
     does_end_turn: bool = True
     kind: str = "turn_ending_free_action"
 
+
 @dataclass
 class MoveAction(Action):
     direction: DIRECTION
@@ -242,6 +257,17 @@ class MoveAction(Action):
 
     def execute(self, graph: "DungeonGraph") -> dict:
         return graph._execute_move_action(self)
+
+
+@dataclass
+class TeleportAction(Action):
+    teleport_kind: TeleportKind
+    tx: Optional[int] = None
+    ty: Optional[int] = None
+    target_player_id: Optional[int] = None
+
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_teleport_action(self)
 
     
 @dataclass
@@ -277,7 +303,16 @@ class CurseFreeAction(FreeAction):
     def execute(self, graph: "DungeonGraph") -> dict:
         return graph._execute_curse_free_action(self)
     
+    
+@dataclass
+class PoisonSkillFreeAction(FreeAction):
+    target_player_id: int
+    target_skill_id: str
 
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_poison_skill_free_action(self)
+    
+    
 @dataclass
 class CombatFreeAction(FreeAction):
     def execute(self, graph: "DungeonGraph") -> dict:
@@ -339,6 +374,27 @@ class SetSkillValueUiFreeAction(FreeAction):
 class ContinueAfterItemPickupFreeAction(FreeAction):
     def execute(self, graph: "DungeonGraph") -> dict:
         return graph._execute_continue_after_itempickup_free_action(self)
+    
+    
+@dataclass
+class ResolveKoReactionFreeAction(FreeAction):
+    target_x: int
+    target_y: int
+
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_resolve_ko_reaction_free_action(self)
+
+
+@dataclass
+class UseInventoryItemAction(FreeAction):
+    slot_group: SlotGroup
+    slot_index: int
+    target_player_id: Optional[int] = None
+    target_x: Optional[int] = None
+    target_y: Optional[int] = None
+
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_use_inventory_item_action(self)
 # --------------------------
 # Engine
 # --------------------------
@@ -542,8 +598,102 @@ class DungeonGraph:
         Later endpoints may directly instantiate ConfirmTileFreeAction.
         """
         return self.execute_runtime_action(ConfirmTileFreeAction(x=x, y=y))
-    
 
+    def get_action_price_for_teleport(self, teleport_kind: TeleportKind) -> ActionPrice:
+        prices = self.rules_turn.get("teleport_action_prices", {})
+
+        if teleport_kind not in prices:
+            raise ValueError(f"No teleport action price configured for: {teleport_kind}")
+
+        price = prices[teleport_kind]
+
+        if price in ("all", "remaining"):
+            return price
+
+        if isinstance(price, int) and price >= 0:
+            return price
+
+        raise ValueError(f"Invalid teleport action price for {teleport_kind}: {price!r}")
+
+    def spend_action_price(self, price: ActionPrice) -> TurnState:
+        turn, _active = self.ensure_active_player_owns_turn()
+
+        if price == "all":
+            if turn.actions_left != turn.actions_total:
+                raise ValueError("This action can only be used as the first Action of the turn.")
+            turn.actions_left = 0
+            return turn
+
+        if price == "remaining":
+            if turn.actions_left <= 0:
+                raise ValueError("This action requires at least 1 remaining Action.")
+            turn.actions_left = 0
+            return turn
+
+        if turn.actions_left < price:
+            raise ValueError("Not enough actions left in this turn.")
+
+        turn.actions_left -= price
+        return turn
+    
+    def teleport_player(self, *, tx: int, ty: int) -> dict:
+        """
+        Compatibility wrapper for portal teleport.
+        """
+        return self.execute_runtime_action(
+            TeleportAction(
+                teleport_kind="portal",
+                tx=tx,
+                ty=ty,
+            )
+        )
+
+    def validate_teleport_base(self, *, teleport_kind: TeleportKind) -> tuple[TurnState, Player, ActionPrice]:
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "idle":
+            raise ValueError(f"Cannot teleport while turn mode is '{turn.mode}'.")
+
+        price = self.get_action_price_for_teleport(teleport_kind)
+
+        if price == "all":
+            if turn.actions_left != turn.actions_total:
+                raise ValueError("This teleport can only be used as the first Action of the turn.")
+        elif price == "remaining":
+            if turn.actions_left <= 0:
+                raise ValueError("This teleport requires at least 1 remaining Action.")
+        else:
+            if turn.actions_left < price:
+                raise ValueError("Not enough actions left for this teleport.")
+
+        return turn, active, price
+
+    def teleport_beasthunter_to_player(self, target_player_id: int) -> dict:
+        return self.execute_runtime_action(
+            TeleportAction(
+                teleport_kind="skill_bea_02",
+                target_player_id=target_player_id,
+            )
+        )
+
+    def teleport_warlock_swap_player(self, target_player_id: int) -> dict:
+        return self.execute_runtime_action(
+            TeleportAction(
+                teleport_kind="skill_wlk_02",
+                target_player_id=target_player_id,
+            )
+        )
+
+    def teleport_battlemage_to_monster_tile(self, *, tx: int, ty: int) -> dict:
+        return self.execute_runtime_action(
+            TeleportAction(
+                teleport_kind="skill_bat_02",
+                tx=tx,
+                ty=ty,
+            )
+        )
+    
+    """
     def teleport_player(self, *, tx: int, ty: int) -> dict:
         active = self.get_active_player()
 
@@ -593,7 +743,8 @@ class DungeonGraph:
             "entry": entry_result,
             "turn": self.serialize_turn_state(),
         }
-    
+    """
+
     def move(self, direction: DIRECTION, is_mage: bool = False) -> dict:
         """
         Compatibility wrapper.
@@ -774,6 +925,344 @@ class DungeonGraph:
             "tile": new_tile.to_dict(),
             "pending": True,
             "turn": self.serialize_turn_state(),
+        }
+
+    def _execute_teleport_action(self, action: TeleportAction) -> dict:
+        turn, active, price = self.validate_teleport_base(teleport_kind=action.teleport_kind)
+
+        if action.teleport_kind == "portal":
+            return self._execute_portal_teleport(action=action, active=active, price=price)
+
+        if action.teleport_kind == "skill_bea_02":
+            return self._execute_beasthunter_teleport(action=action, active=active, price=price)
+
+        if action.teleport_kind == "skill_wlk_02":
+            return self._execute_warlock_swap_teleport(action=action, active=active, price=price)
+
+        if action.teleport_kind == "skill_bat_02":
+            return self._execute_battlemage_monster_teleport(action=action, active=active, price=price)
+
+        raise ValueError(f"Unsupported teleport kind: {action.teleport_kind}")
+
+    def _execute_portal_teleport(
+            self,
+            *,
+            action: TeleportAction,
+            active: Player,
+            price: ActionPrice,
+    ) -> dict:
+        if action.tx is None or action.ty is None:
+            raise ValueError("Portal teleport requires target coordinates.")
+
+        current = self.get_tile(active.x, active.y)
+        if current is None:
+            raise ValueError("Player position invalid.")
+
+        if current.feature != "teleport":
+            raise ValueError("You can only teleport from a teleport tile.")
+
+        target = self.get_tile(action.tx, action.ty)
+        if target is None:
+            raise ValueError("Target tile does not exist.")
+
+        if target.feature != "teleport":
+            raise ValueError("You can only teleport onto teleport tiles.")
+
+        self.register_last_valid_safe_tile_from_active_player()
+        self.spend_action_price(price)
+
+        active.x = action.tx
+        active.y = action.ty
+        self._sync_compat_player_position()
+
+        entry_result = self._after_player_entered_tile(
+            player=active,
+            tile=target,
+            entry_cause="teleport_portal",
+            is_turn_owner=True,
+        )
+
+        self.set_turn_mode("idle")
+        self.snapshot_active_ground_item()
+        self.current_fight_state = None
+
+        return {
+            "ok": True,
+            "status": "teleported",
+            "teleport_kind": action.teleport_kind,
+            "action_kind": action.kind,
+            "price": price,
+            "new_position": {"x": action.tx, "y": action.ty},
+            "tile": target.to_dict(),
+            "entry": entry_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+        }
+
+    def _execute_beasthunter_teleport(
+            self,
+            *,
+            action: TeleportAction,
+            active: Player,
+            price: ActionPrice,
+    ) -> dict:
+        skill_id = "skill_bea_02"
+
+        if not active.is_skill_active(skill_id):
+            raise ValueError("skill_bea_02 is not active.")
+
+        turn = self.ensure_turn_active()
+
+        if skill_id in turn.used_skill_ids:
+            raise ValueError("skill_bea_02 has already been used this turn.")
+
+        if action.target_player_id is None:
+            raise ValueError("Beasthunter teleport requires target_player_id.")
+
+        target_player = self._find_player_by_player_id(action.target_player_id)
+        if target_player is None:
+            raise ValueError("Target player not found.")
+
+        if target_player.player_id == active.player_id:
+            raise ValueError("Cannot target yourself with skill_bea_02.")
+
+        # if not target_player.is_conscious:
+        #     raise ValueError("Cannot teleport to an unconscious player with skill_bea_02.")
+
+        allow_wounded_only = bool(
+            self.rules_skill
+            .get("skill_bea_02", {})
+            .get("allow_wounded_only", False)
+        )
+
+        allow_wounded_only = bool(
+            self.rules_skill
+            .get("skill_bea_02", {})
+            .get("allow_wounded_only", False)
+        )
+
+        if allow_wounded_only:
+            raw_target_hp = getattr(target_player, "hp", None)
+
+            if not isinstance(raw_target_hp, int):
+                raise ValueError("Target player has invalid hp state.")
+
+            target_hp = raw_target_hp
+
+            raw_target_max_hp = getattr(target_player, "max_hp", None)
+
+            if isinstance(raw_target_max_hp, int) and raw_target_max_hp > 0:
+                target_max_hp = raw_target_max_hp
+            else:
+                raw_default_max_hp = self.rules_player.get("max_hp", 5)
+
+                if not isinstance(raw_default_max_hp, int) or raw_default_max_hp <= 0:
+                    raise ValueError("Invalid player max_hp rule configuration.")
+
+                target_max_hp = raw_default_max_hp
+
+            if target_hp >= target_max_hp:
+                raise ValueError("skill_bea_02 can only target a wounded player.")
+        
+        target_tile = self.get_tile(target_player.x, target_player.y)
+        if target_tile is None:
+            raise ValueError("Target player is not standing on a committed tile.")
+
+        self.register_last_valid_safe_tile_from_active_player()
+        self.spend_action_price(price)
+
+        active.x = target_player.x
+        active.y = target_player.y
+        self._sync_compat_player_position()
+
+        hp_before = target_player.hp
+        target_player.set_hp(target_player.hp + 1)
+
+        turn.used_skill_ids.add(skill_id)
+
+        entry_result = self._after_player_entered_tile(
+            player=active,
+            tile=target_tile,
+            entry_cause="teleport_skill_bea_02",
+            is_turn_owner=True,
+        )
+
+        self.set_turn_mode("idle")
+        self.snapshot_active_ground_item()
+        self.current_fight_state = None
+
+        return {
+            "ok": True,
+            "status": "teleported_and_healed_player",
+            "teleport_kind": action.teleport_kind,
+            "action_kind": action.kind,
+            "price": price,
+            "target_player_id": target_player.player_id,
+            "healing": {
+                "hp_before": hp_before,
+                "hp_after": target_player.hp,
+                "delta": target_player.hp - hp_before,
+            },
+            "new_position": {"x": active.x, "y": active.y},
+            "tile": target_tile.to_dict(),
+            "entry": entry_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "target_player": target_player.to_dict(),
+        }
+
+    def _execute_warlock_swap_teleport(
+            self,
+            *,
+            action: TeleportAction,
+            active: Player,
+            price: ActionPrice,
+    ) -> dict:
+        skill_id = "skill_wlk_02"
+
+        if not active.is_skill_active(skill_id):
+            raise ValueError("skill_wlk_02 is not active.")
+
+        turn = self.ensure_turn_active()
+
+        if skill_id in turn.used_skill_ids:
+            raise ValueError("skill_wlk_02 has already been used this turn.")
+
+        if action.target_player_id is None:
+            raise ValueError("Warlock swap requires target_player_id.")
+
+        target_player = self._find_player_by_player_id(action.target_player_id)
+        if target_player is None:
+            raise ValueError("Target player not found.")
+
+        if target_player.player_id == active.player_id:
+            raise ValueError("Cannot swap with yourself.")
+
+        if not target_player.is_conscious:
+            raise ValueError("Cannot swap with an unconscious player.")
+
+        active_old = (active.x, active.y)
+        target_old = (target_player.x, target_player.y)
+
+        target_tile = self.get_tile(*target_old)
+        active_old_tile = self.get_tile(*active_old)
+
+        if target_tile is None:
+            raise ValueError("Target player is not standing on a committed tile.")
+
+        if active_old_tile is None:
+            raise ValueError("Active player is not standing on a committed tile.")
+
+        self.register_last_valid_safe_tile_from_active_player()
+        self.spend_action_price(price)
+
+        active.x, active.y = target_old
+        target_player.x, target_player.y = active_old
+
+        self._sync_compat_player_position()
+        turn.used_skill_ids.add(skill_id)
+
+        # Only the active Warlock is treated as having performed a teleport action.
+        # The swapped target is relocated, but does not receive entry effects.
+        entry_result = self._after_player_entered_tile(
+            player=active,
+            tile=target_tile,
+            entry_cause="teleport_skill_wlk_02",
+            is_turn_owner=True,
+        )
+
+        self.set_turn_mode("idle")
+        self.snapshot_active_ground_item()
+        self.current_fight_state = None
+
+        return {
+            "ok": True,
+            "status": "players_swapped",
+            "teleport_kind": action.teleport_kind,
+            "action_kind": action.kind,
+            "price": price,
+            "active_player_from": {"x": active_old[0], "y": active_old[1]},
+            "active_player_to": {"x": active.x, "y": active.y},
+            "target_player_id": target_player.player_id,
+            "target_player_from": {"x": target_old[0], "y": target_old[1]},
+            "target_player_to": {"x": target_player.x, "y": target_player.y},
+            "entry": entry_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "target_player": target_player.to_dict(),
+        }
+
+    def _execute_battlemage_monster_teleport(
+            self,
+            *,
+            action: TeleportAction,
+            active: Player,
+            price: ActionPrice,
+    ) -> dict:
+        skill_id = "skill_bat_02"
+
+        if not active.is_skill_active(skill_id):
+            raise ValueError("skill_bat_02 is not active.")
+
+        turn = self.ensure_turn_active()
+
+        if skill_id in turn.used_skill_ids:
+            raise ValueError("skill_bat_02 has already been used this turn.")
+
+        if action.tx is None or action.ty is None:
+            raise ValueError("Battlemage teleport requires target coordinates.")
+
+        target = self.get_tile(action.tx, action.ty)
+        if target is None:
+            raise ValueError("Battlemage may only teleport to a revealed committed tile.")
+
+        if not target.monster_id:
+            raise ValueError("Battlemage teleport target must contain a monster.")
+
+        # Capture this before payment. For ALL-cost teleports, actions_left becomes 0,
+        # but the fight still started as the player's first Action.
+        is_before_second_action = self._is_fight_before_second_action(turn)
+
+        self.register_last_valid_safe_tile_from_active_player()
+        self.spend_action_price(price)
+
+        active.x = action.tx
+        active.y = action.ty
+        self._sync_compat_player_position()
+
+        turn.used_skill_ids.add(skill_id)
+
+        entry_result = self._after_player_entered_tile(
+            player=active,
+            tile=target,
+            entry_cause="teleport_skill_bat_02",
+            is_turn_owner=True,
+        )
+
+        self.current_fight_state = start_monster_fight_state(
+            player=active,
+            monster_id=target.monster_id,
+            tile_x=target.x,
+            tile_y=target.y,
+            is_before_second_action=is_before_second_action,
+            monster_tile_discovered_this_turn=False,
+        )
+
+        turn.item_use_locked_by_combat = True
+        self.set_turn_mode("fight")
+
+        return {
+            "ok": True,
+            "status": "teleported_to_monster_and_fight_started",
+            "teleport_kind": action.teleport_kind,
+            "action_kind": action.kind,
+            "price": price,
+            "new_position": {"x": active.x, "y": active.y},
+            "tile": target.to_dict(),
+            "entry": entry_result,
+            "fight": self.current_fight_state.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
         }
     
     def _execute_confirm_tile_free_action(self, action: ConfirmTileFreeAction) -> dict:
@@ -1008,6 +1497,175 @@ class DungeonGraph:
 
         return total
 
+    def _get_player_max_hp(self, player: Player) -> int:
+        raw_max_hp = getattr(player, "max_hp", None)
+
+        if isinstance(raw_max_hp, int) and raw_max_hp > 0:
+            return raw_max_hp
+
+        raw_default_max_hp = self.rules_player.get("max_hp", 5)
+
+        if not isinstance(raw_default_max_hp, int) or raw_default_max_hp <= 0:
+            raise ValueError("Invalid player max_hp rule configuration.")
+
+        return raw_default_max_hp
+
+
+    def _apply_forced_fountain_arrival_effect_to_player(
+            self,
+            *,
+            player: Player,
+            source: str,
+    ) -> dict:
+        """
+        Forced fountain arrival effect.
+
+        Used by:
+        - skill_wrr_02
+        - healing scroll, later
+
+        Important:
+        This is NOT normal end-turn fountain use.
+        It does not invoke skill_bar_01 variable healing.
+        """
+        hp_before = player.hp
+
+        curse_removed = self._clear_curse_for_player(player)
+        poison_removed = self._clear_poison_for_player(player)
+
+        max_hp = self._get_player_max_hp(player)
+        player.set_hp(max_hp)
+
+        return {
+            "source": source,
+            "mode": "forced_fountain_arrival",
+            "curse_removed": curse_removed,
+            "poison_removed": poison_removed,
+            "hp_before": hp_before,
+            "hp_after": player.hp,
+            "max_hp": max_hp,
+            "player": player.to_dict(),
+        }
+
+    def _perform_forced_fountain_teleport(
+            self,
+            *,
+            player: Player,
+            target_x: int,
+            target_y: int,
+            source: str,
+    ) -> dict:
+        target_tile = self.get_tile(target_x, target_y)
+
+        if target_tile is None:
+            raise ValueError("Target fountain tile does not exist.")
+
+        if target_tile.feature != "fountain":
+            raise ValueError("Target tile is not a fountain.")
+
+        old_position = {"x": player.x, "y": player.y}
+
+        player.x = target_x
+        player.y = target_y
+
+        self._sync_compat_player_position()
+
+        entry_result = self._after_player_entered_tile(
+            player=player,
+            tile=target_tile,
+            entry_cause=source,
+            is_turn_owner=(
+                    self.turn_state is not None
+                    and self.turn_state.owner_player_id == player.player_id
+            ),
+        )
+
+        forced_fountain_result = self._apply_forced_fountain_arrival_effect_to_player(
+            player=player,
+            source=source,
+        )
+
+        return {
+            "ok": True,
+            "status": "forced_fountain_teleport_resolved",
+            "source": source,
+            "player_id": player.player_id,
+            "from": old_position,
+            "to": {"x": target_x, "y": target_y},
+            "tile": target_tile.to_dict(),
+            "entry": entry_result,
+            "forced_fountain_arrival": forced_fountain_result,
+            "player": player.to_dict(),
+        }
+
+    def _player_has_available_skill_wrr_02(self, player: Player) -> bool:
+        return player.is_skill_active("skill_wrr_02")
+
+    def _maybe_enter_wrr_02_ko_reaction(
+            self,
+            *,
+            player: Player,
+            hp_before: int,
+            hp_after: int,
+            source: str,
+    ) -> Optional[dict]:
+        """
+        Detect skill_wrr_02 after HP reaches zero.
+
+        This method only creates the pending reaction.
+        It does not resolve the fountain target.
+        """
+        if hp_before <= 0:
+            return None
+
+        if hp_after > 0:
+            return None
+
+        if not self._player_has_available_skill_wrr_02(player):
+            return None
+
+        turn = self.ensure_turn_active()
+
+        reaction = {
+            "reaction_id": "skill_wrr_02",
+            "affected_player_id": player.player_id,
+            "requires_target": "fountain",
+            "source": source,
+            "affected_player_is_turn_owner": player.player_id == turn.owner_player_id,
+        }
+
+        turn.pending_ko_reaction = reaction
+        self.set_turn_mode("awaiting_ko_reaction_choice")
+
+        return reaction
+
+    def apply_hp_delta_to_player(
+            self,
+            *,
+            player: Player,
+            delta: int,
+            source: str,
+    ) -> dict:
+        hp_before = player.hp
+        player.set_hp(player.hp + delta)
+        hp_after = player.hp
+
+        ko_reaction = self._maybe_enter_wrr_02_ko_reaction(
+            player=player,
+            hp_before=hp_before,
+            hp_after=hp_after,
+            source=source,
+        )
+
+        return {
+            "player_id": player.player_id,
+            "source": source,
+            "delta": delta,
+            "hp_before": hp_before,
+            "hp_after": hp_after,
+            "ko_reaction": ko_reaction,
+        }
+    
     def _select_karak_target_player(self) -> Optional[Player]:
         """
         Select who turns Karak/Evil.
@@ -1178,6 +1836,9 @@ class DungeonGraph:
         
         if turn.pending_curse_choice:
             raise ValueError("Cannot end turn before resolving curse choice.")
+
+        if turn.pending_poison_choice:
+            raise ValueError("Cannot end turn before resolving poison choice.")
         
         if turn.pending_retreat:
             raise ValueError("Cannot end turn before resolving retreat.")
@@ -1186,13 +1847,13 @@ class DungeonGraph:
             raise ValueError("Cannot end turn before resolving forced fight.")
 
         return self._finalize_current_turn_and_advance(end_cause="manual_end_turn")
-        
+
     def _execute_start_fight_free_action(self, action: StartFightFreeAction) -> dict:
         """
         Backend implementation for starting a fight on the active player's current tile.
 
         Current Phase-3 semantics:
-        - only allowed in turn mode = "idle" or "pending_tile"
+        - only allowed in turn mode = "idle"
         - requires a monster on the active tile
         - enters turn mode = "fight"
         """
@@ -1221,6 +1882,7 @@ class DungeonGraph:
             monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
         )
 
+        turn.item_use_locked_by_combat = True
         self.set_turn_mode("fight")
 
         return {
@@ -1230,7 +1892,7 @@ class DungeonGraph:
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
-    
+
     def _execute_toss_fight_free_action(self, action: TossFightFreeAction) -> dict:
         """
         Backend implementation for tossing dice in the current fight.
@@ -1255,7 +1917,7 @@ class DungeonGraph:
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
-    
+
     def _execute_toggle_fight_scroll_free_action(self, action: ToggleFightScrollFreeAction) -> dict:
         """
         Backend implementation for toggling one combat scroll in the current fight.
@@ -1281,7 +1943,7 @@ class DungeonGraph:
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
-
+    
     def _execute_resolve_fight_free_action(self, action: ResolveFightFreeAction) -> dict:
         """
         Backend implementation for resolving the current fight.
@@ -1338,6 +2000,15 @@ class DungeonGraph:
             fight_state=fight_state,
             outcome=outcome,
         )
+        ko_reaction = hp_consequence.get("ko_reaction")
+
+        p_bomb_consequence = self._apply_p_bomb_blast_consequences(
+            player=active,
+            fight_state=fight_state,
+        )
+
+        if p_bomb_consequence.get("ko_reaction") and not ko_reaction:
+            ko_reaction = p_bomb_consequence["ko_reaction"]
 
         fight_dict = fight_state.to_dict()
 
@@ -1352,9 +2023,12 @@ class DungeonGraph:
             "reason": "Final physical die shows 6." if may_continue_by_swo_02 else None,
         }
 
-        selected_scroll_slot_ids = set(
-            fight_state.challenged_side.choices.selected_scroll_slot_ids
+        selected_scroll_items = self._get_selected_fight_scroll_items(
+            player=active,
+            fight_state=fight_state,
         )
+
+        consumed_scrolls: list[dict[str, Any]] = []
 
         # --------------------------------------------------
         # Scroll consumption
@@ -1362,48 +2036,97 @@ class DungeonGraph:
         # Normal rule:
         # - selected combat scroll items are consumed after fight resolution.
         #
-        # Important:
-        # - consumption depends on actual item_type == "scroll"
-        # - not on the fact that the item sits in a scroll slot
-        #
-        # skill_wiz_01:
-        # - selected combat scrolls are preserved.
+        # Wizard exception:
+        # - skill_wiz_01 preserves only normal wizard combat scrolls.
+        # - p_bomb / AOE_2 is always consumed.
         #
         # Acrobat safety:
         # - dagger in scroll slot has item_type == "weapon"
         # - therefore it is never consumed by this block
         # --------------------------------------------------
-        if selected_scroll_slot_ids and not active.is_skill_active("skill_wiz_01"):
-            for slot_id in selected_scroll_slot_ids:
-                if not slot_id.startswith("scroll_"):
-                    continue
+        for selected_item in selected_scroll_items:
+            slot_index = int(selected_item["slot_index"])
+            item_id = str(selected_item["item_id"])
+            item_feat = selected_item["item_feat"]
 
-                try:
-                    slot_index = int(slot_id.split("_", 1)[1])
-                except (ValueError, IndexError):
-                    continue
+            if item_feat.get("item_type") != "scroll":
+                continue
 
-                if slot_index < 0 or slot_index >= len(active.inventory.scroll_slots):
-                    continue
+            effect = item_feat.get("effect")
 
-                item_id = active.inventory.scroll_slots[slot_index]
-                if item_id is None:
-                    continue
+            wizard_preserves = (
+                    active.is_skill_active("skill_wiz_01")
+                    and item_id in {"fist", "fireball"}
+                    and effect != "AOE_2"
+            )
 
-                item_feat = ITEM_FEATURES.get(item_id)
-                if item_feat is None:
-                    continue
+            if wizard_preserves:
+                consumed_scrolls.append({
+                    "slot_index": slot_index,
+                    "item_id": item_id,
+                    "consumed": False,
+                    "reason": "preserved_by_skill_wiz_01",
+                })
+                continue
 
-                if item_feat.get("item_type") != "scroll":
-                    continue
+            should_consume = bool(item_feat.get("consumed", False))
 
-                active.remove_scroll(slot_index)
+            if not should_consume:
+                consumed_scrolls.append({
+                    "slot_index": slot_index,
+                    "item_id": item_id,
+                    "consumed": False,
+                    "reason": "item_not_configured_as_consumed",
+                })
+                continue
+
+            removed_item_id = active.remove_scroll(slot_index)
+
+            consumed_scrolls.append({
+                "slot_index": slot_index,
+                "item_id": item_id,
+                "consumed": removed_item_id == item_id,
+                "removed_item_id": removed_item_id,
+                "reason": "consumed_after_fight",
+            })
+
+        # --------------------------------------------------
+        # Shared fight-resolution response template.
+        # --------------------------------------------------
+        def base_fight_response(*, status: str) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "status": status,
+                "action_kind": action.kind,
+                "fight": fight_dict,
+                "outcome": outcome,
+                "hp_consequence": hp_consequence,
+                "p_bomb_consequence": p_bomb_consequence,
+                "consumed_scrolls": consumed_scrolls,
+                "active_player": active.to_dict(),
+                "turn": self.serialize_turn_state(),
+            }
+
+        def fight_response_with_tile(*, status: str) -> dict[str, Any]:
+            response = base_fight_response(status=status)
+            response.update({
+                "continuation": continuation,
+                "tile": tile.to_dict(),
+            })
+            return response
 
         # --------------------------------------------------
         # CRITICAL: live fight state must be cleared now.
         # We preserve fight_dict above for the response.
         # --------------------------------------------------
         self.current_fight_state = None
+
+        if ko_reaction:
+            response = base_fight_response(
+                status="fight_resolved_awaiting_ko_reaction"
+            )
+            response["ko_reaction"] = ko_reaction
+            return response
 
         # --------------------------------------------------
         # Outcome consequences: player wins
@@ -1425,23 +2148,30 @@ class DungeonGraph:
 
             if killed_monster_id == "Mummy":
                 turn.pending_curse_choice = True
+                turn.pending_poison_choice = None
                 turn.pending_item_pickup = False
                 self.set_turn_mode("awaiting_curse_choice")
 
-                return {
-                    "ok": True,
-                    "status": "fight_resolved_awaiting_curse",
-                    "action_kind": action.kind,
-                    "fight": fight_dict,
-                    "outcome": outcome,
-                    "hp_consequence": hp_consequence,
-                    "continuation": continuation,
-                    "tile": tile.to_dict(),
-                    "active_player": active.to_dict(),
-                    "turn": self.serialize_turn_state(),
+                return fight_response_with_tile(
+                    status="fight_resolved_awaiting_curse"
+                )
+
+            if killed_monster_id == "GiantSnake":
+                turn.pending_curse_choice = False
+                turn.pending_poison_choice = {
+                    "source": "GiantSnake",
+                    "requires_target": "player_skill",
+                    "killed_monster_id": killed_monster_id,
                 }
+                turn.pending_item_pickup = False
+                self.set_turn_mode("awaiting_poison_choice")
+
+                return fight_response_with_tile(
+                    status="fight_resolved_awaiting_poison"
+                )
 
             turn.pending_curse_choice = False
+            turn.pending_poison_choice = None
 
             # --------------------------------------------------
             # Post-win loot / continuation handling
@@ -1465,24 +2195,16 @@ class DungeonGraph:
                 turn.item_pickup_origin = None
                 turn.fight_continue_after_item_pickup = False
                 turn.fight_continue_skill_id = None
+                turn.item_use_locked_by_combat = False
                 self.set_turn_mode("idle")
                 self.snapshot_active_ground_item()
 
             else:
                 self.enter_forced_item_pickup(origin="post_combat")
 
-            return {
-                "ok": True,
-                "status": "fight_resolved",
-                "action_kind": action.kind,
-                "fight": fight_dict,
-                "outcome": outcome,
-                "hp_consequence": hp_consequence,
-                "continuation": continuation,
-                "tile": tile.to_dict(),
-                "active_player": active.to_dict(),
-                "turn": self.serialize_turn_state(),
-            }
+            return fight_response_with_tile(
+                status="fight_resolved"
+            )
 
         # --------------------------------------------------
         # Outcome consequences: monster wins
@@ -1496,37 +2218,21 @@ class DungeonGraph:
             if may_continue_by_swo_02:
                 retreat_result = self._perform_retreat_without_ending_turn()
 
-                return {
-                    "ok": True,
-                    "status": "fight_resolved_with_retreat_and_continue",
-                    "action_kind": action.kind,
-                    "fight": fight_dict,
-                    "outcome": outcome,
-                    "hp_consequence": hp_consequence,
-                    "continuation": continuation,
-                    "tile": tile.to_dict(),
-                    "active_player": active.to_dict(),
-                    "turn": self.serialize_turn_state(),
-                    "retreat_result": retreat_result,
-                }
+                response = fight_response_with_tile(
+                    status="fight_resolved_with_retreat_and_continue"
+                )
+                response["retreat_result"] = retreat_result
+                return response
 
             retreat_result = self._execute_retreat_turn_ending_free_action(
                 RetreatTurnEndingFreeAction()
             )
 
-            return {
-                "ok": True,
-                "status": "fight_resolved_with_retreat",
-                "action_kind": action.kind,
-                "fight": fight_dict,
-                "outcome": outcome,
-                "hp_consequence": hp_consequence,
-                "continuation": continuation,
-                "tile": tile.to_dict(),
-                "active_player": active.to_dict(),
-                "turn": self.serialize_turn_state(),
-                "retreat_result": retreat_result,
-            }
+            response = fight_response_with_tile(
+                status="fight_resolved_with_retreat"
+            )
+            response["retreat_result"] = retreat_result
+            return response
 
         # --------------------------------------------------
         # Outcome consequences: draw
@@ -1540,40 +2246,628 @@ class DungeonGraph:
             if may_continue_by_swo_02:
                 retreat_result = self._perform_retreat_without_ending_turn()
 
-                return {
-                    "ok": True,
-                    "status": "fight_resolved_with_retreat_and_continue",
-                    "action_kind": action.kind,
-                    "fight": fight_dict,
-                    "outcome": outcome,
-                    "hp_consequence": hp_consequence,
-                    "continuation": continuation,
-                    "tile": tile.to_dict(),
-                    "active_player": active.to_dict(),
-                    "turn": self.serialize_turn_state(),
-                    "retreat_result": retreat_result,
-                }
+                response = fight_response_with_tile(
+                    status="fight_resolved_with_retreat_and_continue"
+                )
+                response["retreat_result"] = retreat_result
+                return response
 
             retreat_result = self._execute_retreat_turn_ending_free_action(
                 RetreatTurnEndingFreeAction()
             )
 
-            return {
-                "ok": True,
-                "status": "fight_resolved_with_retreat",
-                "action_kind": action.kind,
-                "fight": fight_dict,
-                "outcome": outcome,
-                "hp_consequence": hp_consequence,
-                "continuation": continuation,
-                "tile": tile.to_dict(),
-                "active_player": active.to_dict(),
-                "turn": self.serialize_turn_state(),
-                "retreat_result": retreat_result,
-            }
+            response = fight_response_with_tile(
+                status="fight_resolved_with_retreat"
+            )
+            response["retreat_result"] = retreat_result
+            return response
 
         raise ValueError(f"Unexpected fight outcome: {outcome}")
 
+    def _execute_resolve_ko_reaction_free_action(self, action: ResolveKoReactionFreeAction) -> dict:
+        turn = self.ensure_turn_active()
+
+        if turn.mode != "awaiting_ko_reaction_choice":
+            raise ValueError(f"Cannot resolve KO reaction while turn mode is '{turn.mode}'.")
+
+        reaction = turn.pending_ko_reaction
+        if not reaction:
+            raise ValueError("No pending KO reaction.")
+
+        if reaction.get("reaction_id") != "skill_wrr_02":
+            raise ValueError(f"Unsupported KO reaction: {reaction.get('reaction_id')}")
+
+        affected_player_id = int(reaction["affected_player_id"])
+        affected_player = self._find_player_by_player_id(affected_player_id)
+
+        if affected_player is None:
+            raise ValueError("Affected player not found.")
+
+        result = self._perform_forced_fountain_teleport(
+            player=affected_player,
+            target_x=action.target_x,
+            target_y=action.target_y,
+            source="skill_wrr_02",
+        )
+
+        affected_is_turn_owner = bool(reaction.get("affected_player_is_turn_owner"))
+
+        turn.pending_ko_reaction = None
+
+        if affected_is_turn_owner:
+            turn.pending_turn_end_cause = "skill_wrr_02"
+            self.set_turn_mode("awaiting_turn_end_commit")
+
+            finalize_result = self._finalize_current_turn_and_advance(
+                end_cause="skill_wrr_02"
+            )
+
+            finalize_result["ko_reaction_result"] = result
+            return finalize_result
+
+        self.set_turn_mode("idle")
+
+        return {
+            "ok": True,
+            "status": "off_turn_ko_reaction_resolved",
+            "ko_reaction_result": result,
+            "turn": self.serialize_turn_state(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+        }
+    
+    def _execute_use_inventory_item_action(self, action: UseInventoryItemAction) -> dict:
+        turn, active = self.ensure_active_player_owns_turn()
+
+        allowed, reason, item_feat = self.can_use_inventory_item_from_slot(
+            player=active,
+            slot_group=action.slot_group,
+            slot_index=action.slot_index,
+        )
+
+        if not allowed:
+            raise ValueError(reason)
+
+        if item_feat is None:
+            raise ValueError("Selected slot does not contain a usable item.")
+
+        item_id = item_feat["item_id"]
+        effect = item_feat.get("effect")
+
+        if effect == "TP_HEAL":
+            return self._execute_healing_scroll_effect(
+                active=active,
+                action=action,
+                item_id=item_id,
+                item_feat=item_feat,
+            )
+
+        if effect == "LIFESTEAL":
+            return self._execute_lifesteal_scroll_effect(
+                active=active,
+                action=action,
+                item_id=item_id,
+                item_feat=item_feat,
+            )
+
+        if effect == "PURGE":
+            return self._execute_purge_amulet_effect(
+                active=active,
+                action=action,
+                item_id=item_id,
+                item_feat=item_feat,
+            )
+
+        raise ValueError(f"Unsupported active item effect: {effect}")
+    
+    def _consume_used_item_if_needed(
+            self,
+            *,
+            player: Player,
+            slot_group: SlotGroup,
+            slot_index: int,
+            item_id: str,
+            item_feat: dict[str, Any],
+    ) -> Optional[str]:
+        if not self.should_consume_item_after_use(item_feat):
+            return None
+
+        consumed_item_id = player.drop_item_from_slot(slot_group, slot_index)
+
+        if consumed_item_id != item_id:
+            raise ValueError("Internal error: consumed item does not match used item.")
+
+        return consumed_item_id
+    
+    def _execute_healing_scroll_effect(
+            self,
+            *,
+            active: Player,
+            action: UseInventoryItemAction,
+            item_id: str,
+            item_feat: dict[str, Any],
+    ) -> dict:
+        """
+        Healing scroll / TP_HEAL.
+
+        Rule:
+        - active player uses scroll from own scroll slot
+        - target can be any player, including self
+        - target fountain must be an existing committed fountain tile
+        - target player is forcibly relocated
+        - forced fountain arrival removes curse and heals to full HP
+        - scroll is consumed after successful effect
+        - no Action is consumed
+        """
+        if action.target_player_id is None:
+            raise ValueError("Healing scroll requires target_player_id.")
+
+        if action.target_x is None or action.target_y is None:
+            raise ValueError("Healing scroll requires target fountain coordinates.")
+
+        target_player = self._find_player_by_player_id(action.target_player_id)
+        if target_player is None:
+            raise ValueError("Target player not found.")
+
+        # Validate source slot still contains the same item before effect.
+        slot_item_id = active.get_slot_item(action.slot_group, action.slot_index)
+        if slot_item_id != item_id:
+            raise ValueError("Selected slot item changed before item use resolution.")
+
+        teleport_result = self._perform_forced_fountain_teleport(
+            player=target_player,
+            target_x=action.target_x,
+            target_y=action.target_y,
+            source="healing_scroll",
+        )
+
+        consumed_item_id = self._consume_used_item_if_needed(
+            player=active,
+            slot_group=action.slot_group,
+            slot_index=action.slot_index,
+            item_id=item_id,
+            item_feat=item_feat,
+        )
+
+        self.snapshot_active_ground_item()
+
+        return {
+            "ok": True,
+            "status": "item_used",
+            "action_kind": "free_action",
+            "item_use": {
+                "item_id": item_id,
+                "effect": item_feat.get("effect"),
+                "slot_group": action.slot_group,
+                "slot_index": action.slot_index,
+                "consumed": consumed_item_id is not None,
+                "consumed_item_id": consumed_item_id,
+                "used_by_player_id": active.player_id,
+                "target_player_id": target_player.player_id,
+            },
+            "effect_result": teleport_result,
+            "turn": self.serialize_turn_state(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+        }
+    
+    def _execute_lifesteal_scroll_effect(
+            self,
+            *,
+            active: Player,
+            action: UseInventoryItemAction,
+            item_id: str,
+            item_feat: dict[str, Any],
+    ) -> dict:
+        """
+        Thorn / LIFESTEAL scroll.
+
+        Rule:
+        - active player uses thorn from own scroll slot
+        - target must be another player
+        - target loses 1 HP, clamped at 0
+        - active player gains 1 HP only if target actually lost HP
+        - active player cannot exceed max HP
+        - scroll is consumed after successful effect
+        - no Action is consumed
+        - turn does not end
+        - normal item-use restrictions still apply:
+          idle mode, no combat lock, active player owns turn
+        """
+        if action.target_player_id is None:
+            raise ValueError("LIFESTEAL scroll requires target_player_id.")
+
+        target_player = self._find_player_by_player_id(action.target_player_id)
+        if target_player is None:
+            raise ValueError("Target player not found.")
+
+        if target_player.player_id == active.player_id:
+            raise ValueError("You cannot target yourself with LIFESTEAL.")
+
+        # Validate source slot still contains the same item before effect.
+        slot_item_id = active.get_slot_item(action.slot_group, action.slot_index)
+        if slot_item_id != item_id:
+            raise ValueError("Selected slot item changed before item use resolution.")
+
+        target_hp_before = target_player.hp
+        active_hp_before = active.hp
+
+        # Target can be selected even at 0 HP.
+        # But if no HP is actually lost, active player gains nothing.
+        target_damage_result = self.apply_hp_delta_to_player(
+            player=target_player,
+            delta=-1,
+            source="lifesteal_scroll",
+        )
+
+        target_hp_after = target_player.hp
+        actual_damage = max(0, target_hp_before - target_hp_after)
+
+        active_heal_result = None
+
+        if actual_damage > 0:
+            active_heal_result = self.apply_hp_delta_to_player(
+                player=active,
+                delta=1,
+                source="lifesteal_scroll",
+            )
+
+        consumed_item_id = self._consume_used_item_if_needed(
+            player=active,
+            slot_group=action.slot_group,
+            slot_index=action.slot_index,
+            item_id=item_id,
+            item_feat=item_feat,
+        )
+
+        self.snapshot_active_ground_item()
+
+        return {
+            "ok": True,
+            "status": "item_used",
+            "action_kind": "free_action",
+            "item_use": {
+                "item_id": item_id,
+                "effect": item_feat.get("effect"),
+                "slot_group": action.slot_group,
+                "slot_index": action.slot_index,
+                "consumed": consumed_item_id is not None,
+                "consumed_item_id": consumed_item_id,
+                "used_by_player_id": active.player_id,
+                "target_player_id": target_player.player_id,
+            },
+            "effect_result": {
+                "mode": "lifesteal_scroll",
+                "target_player_id": target_player.player_id,
+                "active_player_id": active.player_id,
+                "target_hp_before": target_hp_before,
+                "target_hp_after": target_hp_after,
+                "target_actual_damage": actual_damage,
+                "active_hp_before": active_hp_before,
+                "active_hp_after": active.hp,
+                "active_actual_heal": max(0, active.hp - active_hp_before),
+                "target_damage_result": target_damage_result,
+                "active_heal_result": active_heal_result,
+                "target_player": target_player.to_dict(),
+                "active_player": active.to_dict(),
+            },
+            "turn": self.serialize_turn_state(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+        }
+    
+    def _execute_purge_amulet_effect(
+            self,
+            *,
+            active: Player,
+            action: UseInventoryItemAction,
+            item_id: str,
+            item_feat: dict[str, Any],
+    ) -> dict:
+        """
+        Green amulet / PURGE.
+
+        Rule:
+        - self-use only
+        - no targeting
+        - active player must currently be cursed
+        - removes curse mark immediately
+        - consumes the amulet
+        - no Action is consumed
+        - turn does not end
+        """
+        if action.target_player_id is not None:
+            raise ValueError("PURGE amulet is self-use only and does not accept target_player_id.")
+
+        if action.target_x is not None or action.target_y is not None:
+            raise ValueError("PURGE amulet does not accept coordinates.")
+
+        active_is_cursed = bool(getattr(active, "is_cursed", False))
+        active_is_poisoned = bool(getattr(active, "poisoned_skill_ids", set()))
+        if not (active_is_cursed or active_is_poisoned):
+            raise ValueError("PURGE amulet can only be used while cursed or poisoned.")
+
+        slot_item_id = active.get_slot_item(action.slot_group, action.slot_index)
+        if slot_item_id != item_id:
+            raise ValueError("Selected slot item changed before item use resolution.")
+
+        active_before = active.to_dict()
+
+        curse_removed = self._clear_curse_for_player(active)
+        poison_removed = self._clear_poison_for_player(active)
+
+        consumed_item_id = self._consume_used_item_if_needed(
+            player=active,
+            slot_group=action.slot_group,
+            slot_index=action.slot_index,
+            item_id=item_id,
+            item_feat=item_feat,
+        )
+
+        self.snapshot_active_ground_item()
+
+        return {
+            "ok": True,
+            "status": "item_used",
+            "action_kind": "free_action",
+            "item_use": {
+                "item_id": item_id,
+                "effect": item_feat.get("effect"),
+                "slot_group": action.slot_group,
+                "slot_index": action.slot_index,
+                "consumed": consumed_item_id is not None,
+                "consumed_item_id": consumed_item_id,
+                "used_by_player_id": active.player_id,
+                "target_player_id": active.player_id,
+            },
+            "effect_result": {
+                "mode": "purge_amulet",
+                "curse_removed": curse_removed,
+                "poison_removed": poison_removed,
+                "active_before": active_before,
+                "active_after": active.to_dict(),
+            },
+            "turn": self.serialize_turn_state(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+        }
+    
+    def _get_selected_fight_scroll_items(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+    ) -> list[dict[str, Any]]:
+        """
+        Return selected combat scroll-slot items from the resolved fight.
+
+        Each entry contains:
+        - slot_id
+        - slot_index
+        - item_id
+        - item_feat
+
+        This is intentionally slot-based because fight-local choices store
+        selected scroll slot ids, not item ids.
+        """
+        selected: list[dict[str, Any]] = []
+
+        selected_scroll_slot_ids = set(
+            fight_state.challenged_side.choices.selected_scroll_slot_ids
+        )
+
+        for slot_id in selected_scroll_slot_ids:
+            if not slot_id.startswith("scroll_"):
+                continue
+
+            try:
+                slot_index = int(slot_id.split("_", 1)[1])
+            except (ValueError, IndexError):
+                continue
+
+            if slot_index < 0 or slot_index >= len(player.inventory.scroll_slots):
+                continue
+
+            item_id = player.inventory.scroll_slots[slot_index]
+            if item_id is None:
+                continue
+
+            item_feat = ITEM_FEATURES.get(item_id)
+            if item_feat is None:
+                continue
+
+            selected.append({
+                "slot_id": slot_id,
+                "slot_index": slot_index,
+                "item_id": item_id,
+                "item_feat": item_feat,
+            })
+
+        return selected
+
+    def _fight_used_p_bomb(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+    ) -> bool:
+        """
+        True if p_bomb was selected as a combat modifier in this fight.
+        """
+        for item in self._get_selected_fight_scroll_items(
+                player=player,
+                fight_state=fight_state,
+        ):
+            if item["item_id"] == "p_bomb":
+                return True
+
+            if item["item_feat"].get("effect") == "AOE_2":
+                return True
+
+        return False
+
+    def get_adjacent_blast_coords(
+            self,
+            *,
+            x: int,
+            y: int,
+    ) -> list[tuple[int, int]]:
+        """
+        Replaceable adjacency logic for p_bomb / AOE effects.
+
+        Current rule:
+        - all 8 surrounding coordinates
+        - only coordinates that currently exist as committed tiles
+        """
+        coords: list[tuple[int, int]] = []
+
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+
+                cx = x + dx
+                cy = y + dy
+
+                if self.get_tile(cx, cy) is not None:
+                    coords.append((cx, cy))
+
+        return coords
+
+    def _get_players_on_tile(
+            self,
+            *,
+            x: int,
+            y: int,
+    ) -> list[Player]:
+        return [
+            p for p in self.players
+            if p.x == x and p.y == y
+        ]
+
+    def _apply_p_bomb_blast_consequences(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+    ) -> dict:
+        """
+        Apply p_bomb consequences after fight resolution.
+
+        Current rule:
+        - bomb user loses 2 HP regardless of fight outcome
+        - all entities on adjacent existing tiles lose 1 HP
+        - adjacent players lose 1 HP
+        - adjacent monsters are killed immediately
+        - no runtime monster HP is used yet
+
+        Important:
+        - The actual fought monster is on the center tile, not an adjacent tile,
+          so it is not affected by this helper.
+        """
+        if not self._fight_used_p_bomb(player=player, fight_state=fight_state):
+            return {
+                "applied": False,
+                "reason": "p_bomb_not_selected",
+            }
+
+        center_x = fight_state.context.tile_x
+        center_y = fight_state.context.tile_y
+
+        result: dict[str, Any] = {
+            "applied": True,
+            "source": "p_bomb",
+            "center": {"x": center_x, "y": center_y},
+            "user_damage": None,
+            "adjacent_coords": [],
+            "affected_players": [],
+            "affected_monsters": [],
+        }
+
+        # --------------------------------------------------
+        # Bomb user self-damage: -2 HP, regardless of outcome.
+        # --------------------------------------------------
+        user_damage = self.apply_hp_delta_to_player(
+            player=player,
+            delta=-2,
+            source="p_bomb_self_damage",
+        )
+        result["user_damage"] = user_damage
+
+        # If self-damage creates a KO reaction, preserve it.
+        # The caller should check this before continuing normal flow.
+        if user_damage.get("ko_reaction"):
+            result["ko_reaction"] = user_damage["ko_reaction"]
+
+        adjacent_coords = self.get_adjacent_blast_coords(x=center_x, y=center_y)
+        result["adjacent_coords"] = [
+            {"x": x, "y": y}
+            for x, y in adjacent_coords
+        ]
+
+        for ax, ay in adjacent_coords:
+            tile = self.get_tile(ax, ay)
+            if tile is None:
+                continue
+
+            # --------------------------------------------------
+            # Adjacent players: -1 HP.
+            # --------------------------------------------------
+            for affected_player in self._get_players_on_tile(x=ax, y=ay):
+                hp_result = self.apply_hp_delta_to_player(
+                    player=affected_player,
+                    delta=-1,
+                    source="p_bomb_adjacent_blast",
+                )
+
+                result["affected_players"].append({
+                    "player_id": affected_player.player_id,
+                    "position": {"x": ax, "y": ay},
+                    "hp_result": hp_result,
+                    "player": affected_player.to_dict(),
+                })
+
+                if hp_result.get("ko_reaction") and not result.get("ko_reaction"):
+                    result["ko_reaction"] = hp_result["ko_reaction"]
+
+            # TODO: implement monster HP based injury / kill
+            # --------------------------------------------------
+            # Adjacent monsters:
+            # Current temporary rule before runtime monster HP:
+            # - any monster on an adjacent existing tile is killed immediately
+            # - no HP persistence is needed
+            # - no LIV/UND filtering is applied
+            # --------------------------------------------------
+
+            # --------------------------------------------------
+            # Adjacent monsters:
+            # Current temporary rule before runtime monster HP:
+            # - any monster on an adjacent existing tile is killed immediately
+            # - killed monster drops its configured loot onto the same tile
+            # - no LIV/UND filtering is applied
+            # --------------------------------------------------
+            if tile.monster_id:
+                monster_id = tile.monster_id
+                monster = get_monster_by_id(monster_id)
+                loot_id = monster["loot_id"]
+
+                tile.monster_id = None
+                tile.object_id = loot_id
+
+                result["affected_monsters"].append({
+                    "monster_id": monster_id,
+                    "position": {"x": ax, "y": ay},
+                    "sort": monster.get("sort"),
+                    "damage": "instant_kill",
+                    "affected": True,
+                    "killed": True,
+                    "loot_id": loot_id,
+                    "loot_dropped": True,
+                    "reason": "p_bomb_adjacent_instant_kill_loot_dropped",
+                })
+
+        return result
+    
     def _apply_fight_hp_consequences(
             self,
             *,
@@ -1663,7 +2957,11 @@ class DungeonGraph:
                 "reason": "Warlock sacrificed 1 HP for +1 combat strength.",
             })
 
-        player.set_hp(player.hp + total_delta)
+        hp_apply_result = self.apply_hp_delta_to_player(
+            player=player,
+            delta=total_delta,
+            source="fight_hp_consequence",
+        )
 
         return {
             "hp_before": hp_before,
@@ -1672,6 +2970,8 @@ class DungeonGraph:
             "raw_total_delta": total_delta,
             "effects": hp_effects,
             "is_conscious_after": player.is_conscious,
+            "hp_apply_result": hp_apply_result,
+            "ko_reaction": hp_apply_result.get("ko_reaction"),
         }
     
     def _fight_has_final_physical_six(self, fight_state: FightState) -> bool:
@@ -1752,8 +3052,12 @@ class DungeonGraph:
 
         turn.pending_retreat = False
         turn.pending_turn_end_cause = None
+        # Swordsman continuation after loss/draw keeps the turn alive after combat.
+        # Therefore active costless items may be used again.
+        turn.item_use_locked_by_combat = False
 
         self.set_turn_mode("idle")
+        
         self.snapshot_active_ground_item()
 
         return {
@@ -1798,6 +3102,9 @@ class DungeonGraph:
         if active.is_skill_active("skill_bar_02"):
             turn.pending_item_pickup = False
             turn.item_pickup_origin = None
+            turn.fight_continue_after_item_pickup = False
+            turn.fight_continue_skill_id = None
+            turn.item_use_locked_by_combat = False
             self.set_turn_mode("idle")
             self.snapshot_active_ground_item()
         else:
@@ -1810,6 +3117,60 @@ class DungeonGraph:
                 "target_player": target.to_dict(),
                 "turn": self.serialize_turn_state(),
                 "active_player": self.serialize_active_player()}
+
+    def _execute_poison_skill_free_action(self, action: PoisonSkillFreeAction) -> dict:
+        """
+        Backend implementation for GiantSnake kill poison choice.
+
+        Flow:
+        - only allowed in awaiting_poison_choice mode
+        - active player selects one target player
+        - active player selects one exact skill of that player
+        - selected skill becomes poisoned
+        - flow continues into item_pickup mode, unless skill_bar_02 allows skipping loot
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "awaiting_poison_choice":
+            raise ValueError(f"Cannot choose poison target while turn mode is '{turn.mode}'.")
+
+        if not turn.pending_poison_choice:
+            raise ValueError("No pending poison choice to resolve.")
+
+        target = self._find_player_by_player_id(action.target_player_id)
+        if target is None:
+            raise ValueError("Target player not found.")
+
+        poison_result = self._apply_poison_to_player_skill(
+            player=target,
+            skill_id=action.target_skill_id,
+            source=str(turn.pending_poison_choice.get("source") or "GiantSnake"),
+        )
+
+        turn.pending_poison_choice = None
+
+        if active.is_skill_active("skill_bar_02"):
+            turn.pending_item_pickup = False
+            turn.item_pickup_origin = None
+            turn.fight_continue_after_item_pickup = False
+            turn.fight_continue_skill_id = None
+            turn.item_use_locked_by_combat = False
+            self.set_turn_mode("idle")
+            self.snapshot_active_ground_item()
+        else:
+            self.enter_forced_item_pickup(origin="post_combat")
+
+        return {
+            "ok": True,
+            "status": "poison_applied",
+            "action_kind": action.kind,
+            "target_player_id": target.player_id,
+            "target_skill_id": action.target_skill_id,
+            "poison": poison_result,
+            "target_player": target.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+        }
     
     def _execute_combat_free_action(self, action: CombatFreeAction) -> dict:
         raise ValueError("CombatFreeAction is not implemented yet.")
@@ -1931,8 +3292,12 @@ class DungeonGraph:
         turn.fight_continue_after_item_pickup = False
         turn.fight_continue_skill_id = None
         turn.pending_turn_end_cause = None
+        # Swordsman continuation explicitly keeps the turn alive after combat.
+        # Therefore active costless items may be used again.
+        turn.item_use_locked_by_combat = False
 
         self.set_turn_mode("idle")
+        
         self.snapshot_active_ground_item()
 
         active_tile = self.get_active_tile()
@@ -2458,7 +3823,93 @@ class DungeonGraph:
         Later endpoints may directly instantiate ResolveFightFreeAction.
         """
         return self.execute_runtime_action(ResolveFightFreeAction())
+    
+    
+    def player_has_item_effect(self, player: Player, effect: str) -> bool:
+        """
+        Return True if the player holds any inventory item with the given effect.
 
+        Checks all inventory slot groups.
+        """
+        item_ids: list[Optional[str]] = []
+
+        item_ids.extend(player.inventory.weapon_slots)
+        item_ids.extend(player.inventory.scroll_slots)
+        item_ids.extend(player.inventory.key_slots)
+
+        for item_id in item_ids:
+            if item_id is None:
+                continue
+
+            item_feat = ITEM_FEATURES.get(item_id)
+            if item_feat is None:
+                continue
+
+            if item_feat.get("effect") == effect:
+                return True
+
+        return False
+    
+    def can_use_inventory_item_from_slot(
+            self,
+            *,
+            player: Player,
+            slot_group: SlotGroup,
+            slot_index: int,
+    ) -> tuple[bool, str, Optional[dict[str, Any]]]:
+        """
+        Validate whether the selected inventory item is an active item-use candidate.
+
+        This is for explicit item activation outside combat.
+        Combat-only scrolls such as fist/fireball are intentionally excluded here.
+        """
+        turn = self.ensure_turn_active()
+
+        if player.player_id != turn.owner_player_id:
+            return False, "player_does_not_own_turn", None
+
+        if turn.mode != "idle":
+            return False, f"turn_mode_not_idle:{turn.mode}", None
+
+        if turn.item_use_locked_by_combat:
+            return False, "item_use_locked_by_combat", None
+
+        if slot_group != "scroll":
+            return False, "only_scroll_slots_currently_support_item_use", None
+
+        item_id = player.get_slot_item(slot_group, slot_index)
+        if item_id is None:
+            return False, "slot_empty", None
+
+        item_feat = ITEM_FEATURES.get(item_id)
+        if item_feat is None:
+            return False, f"unknown_item_id:{item_id}", None
+
+        if item_feat.get("item_type") != "scroll":
+            return False, "slot_item_is_not_scroll", item_feat
+
+        if not bool(item_feat.get("active", False)):
+            return False, "item_not_active", item_feat
+
+        effect = item_feat.get("effect")
+
+        if effect == "TP_HEAL":
+            return True, "usable_tp_heal", item_feat
+
+        if effect == "LIFESTEAL":
+            return True, "usable_lifesteal", item_feat
+
+        if effect == "PURGE":
+            player_is_cursed = bool(getattr(player, "is_cursed", False))
+            player_is_poisoned = bool(getattr(player, "poisoned_skill_ids", set()))
+
+            if not (player_is_cursed or player_is_poisoned):
+                return False, "purge_requires_player_to_be_cursed_or_poisoned", item_feat
+
+            return True, "usable_purge", item_feat
+
+        return False, f"unsupported_active_item_effect:{effect}", item_feat
+    
     def get_active_player_inventory_ui(self) -> dict:
         active = self.get_active_player()
         if active is None:
@@ -2496,6 +3947,19 @@ class DungeonGraph:
                 receive_reason = "treasure_not_slot_placeable"
 
             can_drop_slot_item = slot_has_item
+            can_use_slot_item = False
+            use_reason = None
+            use_effect = None
+
+            if slot_has_item:
+                can_use_slot_item, use_reason, slot_item_feat = self.can_use_inventory_item_from_slot(
+                    player=active,
+                    slot_group=slot_group,
+                    slot_index=slot_index,
+                )
+
+                if slot_item_feat is not None:
+                    use_effect = slot_item_feat.get("effect")
 
             if slot_has_item:
                 if ground_has_item:
@@ -2526,7 +3990,11 @@ class DungeonGraph:
                 "ground_has_item": ground_has_item,
                 "can_receive_ground_item": can_receive_ground_item,
                 "receive_reason": receive_reason,
-                "can_drop_slot_item": can_drop_slot_item,
+                                "can_drop_slot_item": can_drop_slot_item,
+                # Explicit item-use UI state.
+                "can_use_slot_item": can_use_slot_item,
+                "use_reason": use_reason,
+                "use_effect": use_effect,
                 "available_action": available_action,
                 "is_enabled": available_action != "inactive",
             }
@@ -2561,6 +4029,14 @@ class DungeonGraph:
                 ],
             },
         }
+
+    def should_consume_item_after_use(self, item_feat: dict[str, Any]) -> bool:
+        raw_consumed = item_feat.get("consumed")
+
+        if raw_consumed is None:
+            return bool(item_feat.get("active", False))
+
+        return bool(raw_consumed)
     
     def can_pickup_ground_treasure(self) -> bool:
         tile = self.get_active_tile()
@@ -2707,7 +4183,34 @@ class DungeonGraph:
         row = active.to_dict()
         row["skills_ui"] = self.build_skill_ui_for_player(active)
         return row
+    
+    def get_skill_block_reason(self, player: Player, skill_id: str) -> Optional[str]:
+        """
+        Explain why a skill is blocked.
 
+        Returns:
+        - None if skill is active
+        - "not_owned"
+        - "cursed"
+        - "poisoned"
+
+        NO_CURSE / orange amulet suppresses both curse and poison effects,
+        but does not remove the underlying marks.
+        """
+        if skill_id not in player.skills:
+            return "not_owned"
+
+        if player.has_no_curse_protection_item():
+            return None
+
+        if getattr(player, "is_cursed", False) or getattr(player, "cursed", False):
+            return "cursed"
+
+        if skill_id in getattr(player, "poisoned_skill_ids", set()):
+            return "poisoned"
+
+        return None
+    
     def build_skill_ui_for_player(self, player: Player) -> list[list[dict]]:
         tile = self.get_active_tile() if self.get_active_player() and self.get_active_player().player_id == player.player_id else None
         on_fountain = bool(tile is not None and tile.feature == "fountain")
@@ -2719,8 +4222,8 @@ class DungeonGraph:
         for skill_id in sorted(player.skills):
             meta = SKILL_CATALOG.get(skill_id, {})
 
-            is_available = player.is_skill_active(skill_id)
-            blocked_reason = None if is_available else "cursed"
+            blocked_reason = self.get_skill_block_reason(player, skill_id)
+            is_available = blocked_reason is None
 
             # Separate concept:
             # - is_available: skill is generally available, e.g. not cursed
@@ -2923,6 +4426,17 @@ class DungeonGraph:
         Compatibility wrapper for CurseFreeAction.
         """
         return self.execute_runtime_action(CurseFreeAction(target_player_id=target_player_id))
+
+    def choose_poison_target(self, target_player_id: int, target_skill_id: str) -> dict:
+        """
+        Compatibility wrapper for GiantSnake poison choice.
+        """
+        return self.execute_runtime_action(
+            PoisonSkillFreeAction(
+                target_player_id=target_player_id,
+                target_skill_id=target_skill_id,
+            )
+        )
     
     def perform_retreat(self) -> dict:
         """
@@ -2947,7 +4461,33 @@ class DungeonGraph:
         Compatibility wrapper for turn-local numeric skill UI state.
         """
         return self.execute_runtime_action(SetSkillValueUiFreeAction(skill_id=skill_id, value=value))
+
+    def resolve_ko_reaction_fountain_choice(self, *, target_x: int, target_y: int) -> dict:
+        return self.execute_runtime_action(
+            ResolveKoReactionFreeAction(
+                target_x=target_x,
+                target_y=target_y,
+            )
+        )
     
+    def use_inventory_item(
+            self,
+            *,
+            slot_group: SlotGroup,
+            slot_index: int,
+            target_player_id: Optional[int] = None,
+            target_x: Optional[int] = None,
+            target_y: Optional[int] = None,
+    ) -> dict:
+        return self.execute_runtime_action(
+            UseInventoryItemAction(
+                slot_group=slot_group,
+                slot_index=slot_index,
+                target_player_id=target_player_id,
+                target_x=target_x,
+                target_y=target_y,
+            )
+        )
 
     def spend_action(self, amount: int = 1) -> TurnState:
         turn, _active = self.ensure_active_player_owns_turn()
@@ -3042,27 +4582,40 @@ class DungeonGraph:
         tile = self.get_active_tile()
         return bool(tile is not None and tile.feature == "fountain")
 
+    def _clear_curse_for_player(self, player: Player) -> bool:
+        if hasattr(player, "is_cursed"):
+            if getattr(player, "is_cursed"):
+                setattr(player, "is_cursed", False)
+                return True
+
+        if hasattr(player, "cursed"):
+            if getattr(player, "cursed"):
+                setattr(player, "cursed", False)
+                return True
+
+        if hasattr(player, "clear_curse") and callable(player.clear_curse):
+            player.clear_curse()
+            return True
+
+        return False
+    
+    def _clear_poison_for_player(self, player: Player) -> bool:
+        if hasattr(player, "clear_poison") and callable(player.clear_poison):
+            return player.clear_poison()
+
+        poisoned_skill_ids = getattr(player, "poisoned_skill_ids", None)
+        if isinstance(poisoned_skill_ids, set):
+            had_poison = bool(poisoned_skill_ids)
+            poisoned_skill_ids.clear()
+            return had_poison
+
+        return False
+
     def _clear_active_player_curse_if_possible(self) -> bool:
         active = self.get_active_player()
         if active is None:
             return False
-
-        # tolerant bridge until curse model is finalized
-        if hasattr(active, "is_cursed"):
-            if getattr(active, "is_cursed"):
-                setattr(active, "is_cursed", False)
-                return True
-
-        if hasattr(active, "cursed"):
-            if getattr(active, "cursed"):
-                setattr(active, "cursed", False)
-                return True
-
-        if hasattr(active, "clear_curse") and callable(active.clear_curse):
-            active.clear_curse()
-            return True
-
-        return False
+        return self._clear_curse_for_player(active)
     
     def _find_player_by_player_id(self, player_id: int) -> Optional[Player]:
         for p in self.players:
@@ -3089,6 +4642,9 @@ class DungeonGraph:
             if hasattr(p, "set_cursed") and callable(p.set_cursed):
                 p.set_cursed(False)
 
+        # Curse overrides poison on the newly cursed player.
+        self._clear_poison_for_player(target)
+
         # then apply curse to target
         if hasattr(target, "is_cursed"):
             setattr(target, "is_cursed", True)
@@ -3104,6 +4660,57 @@ class DungeonGraph:
 
         # fallback
         setattr(target, "is_cursed", True)
+        
+    def _apply_poison_to_player_skill(
+            self,
+            *,
+            player: Player,
+            skill_id: str,
+            source: str,
+    ) -> dict:
+        """
+        Apply poison to one exact skill of one player.
+
+        Poison:
+        - is not global
+        - does not relocate
+        - does not affect other players
+        - can coexist on several skills of the same player
+        - is redundant while player is cursed, because curse blocks all skills
+        """
+        if skill_id not in player.skills:
+            raise ValueError("Target player does not own this skill.")
+
+        if getattr(player, "is_cursed", False):
+            return {
+                "ok": True,
+                "applied": False,
+                "reason": "player_is_cursed_poison_redundant",
+                "player_id": player.player_id,
+                "skill_id": skill_id,
+                "source": source,
+                "player": player.to_dict(),
+            }
+
+        before = set(getattr(player, "poisoned_skill_ids", set()))
+
+        if hasattr(player, "poison_skill") and callable(player.poison_skill):
+            newly_poisoned = player.poison_skill(skill_id)
+        else:
+            player.poisoned_skill_ids.add(skill_id)
+            newly_poisoned = skill_id not in before
+
+        return {
+            "ok": True,
+            "applied": newly_poisoned,
+            "already_poisoned": not newly_poisoned,
+            "player_id": player.player_id,
+            "skill_id": skill_id,
+            "source": source,
+            "poisoned_skill_ids_before": sorted(before),
+            "poisoned_skill_ids_after": sorted(player.poisoned_skill_ids),
+            "player": player.to_dict(),
+        }
 
     def _apply_fountain_healing_to_active_player(self, *, target_hp: Optional[int] = None) -> dict:
         active = self.get_active_player()
@@ -3157,9 +4764,11 @@ class DungeonGraph:
             raise ValueError("Active player is not on a fountain.")
 
         curse_removed = self._clear_active_player_curse_if_possible()
+        poison_removed = self._clear_poison_for_player(active)
 
         return {
             "curse_removed": curse_removed,
+            "poison_removed": poison_removed,
             "active_player_after_pre_healing": active.to_dict(),
         }
 

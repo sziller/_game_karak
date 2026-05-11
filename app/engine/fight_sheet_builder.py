@@ -833,13 +833,14 @@ def _build_scroll_manual_row(player: Player, choices: PlayerFightChoices) -> Fig
     Current supported combat scrolls:
     - fist
     - fireball
+    - p_bomb
 
     Behavior:
     - only present buttons for supported combat scrolls actually present in inventory
     - each scroll slot is independently toggleable
     - multiple selected scrolls stack additively
     """
-    supported_scroll_ids = {"fist", "fireball"}
+    supported_scroll_ids = {"fist", "fireball", "p_bomb"}
 
     buttons: list[FightRowButton] = []
     selected_names: list[str] = []

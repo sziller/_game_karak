@@ -145,7 +145,15 @@ class Player:
     # Mechanics (CORE)
     # =====================================================
     skills: Set[SkillId] = field(default_factory=set)  # raw/base skills only
+    # Curse:
+    # - global mark
+    # - suppresses all skills unless suppressed by NO_CURSE item
     is_cursed: bool = False
+    # Poison:
+    # - per-player, per-skill suppression
+    # - does not relocate
+    # - may affect multiple skills on the same player
+    poisoned_skill_ids: Set[SkillId] = field(default_factory=set)
     is_evil: bool = False
 
     # =====================================================
@@ -196,12 +204,21 @@ class Player:
         if skill_id not in self.skills:
             return False
 
-        blocked_skill_ids = set()
+        # Orange amulet / NO_CURSE:
+        # Curse and poison marks may still exist, but they do not suppress
+        # skills while this passive item is held.
+        if self.has_no_curse_protection_item():
+            return True
 
+        # Curse suppresses all skills.
         if getattr(self, "is_cursed", False) or getattr(self, "cursed", False):
-            blocked_skill_ids.update(self.skills)
+            return False
 
-        return skill_id not in blocked_skill_ids
+        # Poison suppresses only selected skills.
+        if skill_id in self.poisoned_skill_ids:
+            return False
+
+        return True
     
     # =====================================================
     # Inventory queries (tiny helpers for testing / callers)
@@ -223,6 +240,53 @@ class Player:
     
     def has_any_key(self) -> bool:
         return any(item is not None for item in self.inventory.key_slots)
+    
+    def has_item_id(self, item_id: ItemId) -> bool:
+        return (
+            item_id in self.inventory.weapon_slots
+            or item_id in self.inventory.scroll_slots
+            or item_id in self.inventory.key_slots
+        )
+
+    def has_no_curse_protection_item(self) -> bool:
+        """
+        Orange amulet / amulet_o.
+
+        This is intentionally item-id based because Player does not import
+        ITEM_FEATURES. The engine still owns the real item-effect dispatch.
+        """
+        return self.has_item_id("amulet_o")
+    
+    def is_poisoned(self) -> bool:
+        return bool(self.poisoned_skill_ids)
+
+    def is_skill_poisoned(self, skill_id: SkillId) -> bool:
+        return skill_id in self.poisoned_skill_ids
+
+    def poison_skill(self, skill_id: SkillId) -> bool:
+        """
+        Add poison mark to one owned skill.
+
+        Returns:
+        - True if newly poisoned
+        - False if already poisoned
+        """
+        if skill_id not in self.skills:
+            raise ValueError("Cannot poison a skill the player does not own.")
+
+        already_poisoned = skill_id in self.poisoned_skill_ids
+        self.poisoned_skill_ids.add(skill_id)
+        return not already_poisoned
+
+    def clear_poison(self) -> bool:
+        """
+        Remove all poison marks from this player.
+
+        Returns True if anything was removed.
+        """
+        had_poison = bool(self.poisoned_skill_ids)
+        self.poisoned_skill_ids.clear()
+        return had_poison
     
     def get_slot_item(self, slot_group: SlotGroup, slot_index: int) -> Optional[ItemId]:
         if slot_group == "weapon":
@@ -432,10 +496,13 @@ class Player:
                              "y": self.y},
                 "status": {"is_evil": self.is_evil,
                            "is_cursed": self.is_cursed,
+                           "is_poisoned": self.is_poisoned(),
+                           "poisoned_skill_ids": sorted(self.poisoned_skill_ids),
                            "is_conscious": self.is_conscious},
                 "hp": {"current": self.hp,
                        "max": self.max_hp},
                 "skills": sorted(self.skills),
+                "poisoned_skill_ids": sorted(self.poisoned_skill_ids),
                 "inventory": self.inventory.to_dict(),
                 "inventory_view": {
                     "weapon_slots": list(self.inventory.weapon_slots),
