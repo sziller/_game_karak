@@ -7,6 +7,7 @@ let latestFight = null;
 let selectedCurseTargetPlayerId = null;
 let selectedPoisonTargetPlayerId = null;
 let selectedPoisonTargetSkillId = null;
+let selectedScoutPocketTileIndex = null;
 let skillUiState = {};
 let pendingTeleportSkillId = null;
 let pendingTeleportTargetMode = null; // null | "coordinates" | "player"
@@ -76,6 +77,161 @@ const PLAYER_TOKEN_COLORS = [
     "#ffff55", // 4 yellow
     "#ff9933", // 5 orange
 ];
+
+function tileMiniImagePathFromBase(imgBase) {
+    if (!imgBase) {
+        return "";
+    }
+
+    const max = TILE_VARIANTS[imgBase] ?? 1;
+    const variant = 1;
+
+    // Entrance is not expected in Scout pocket, but this keeps the helper safe.
+    if (imgBase === "entrance") {
+        return "/static/media/tiles/entrance.png";
+    }
+
+    return `/static/media/tiles/${imgBase}-${variant}.png`;
+}
+
+function getPlayerById(playerId) {
+    const players = latestPlayers?.players || [];
+    return players.find(p => Number(p.player_id) === Number(playerId)) || null;
+}
+
+function getScoutPocketForPlayer(playerId) {
+    const player = getPlayerById(playerId);
+
+    return player?.scout_pocket || {
+        capacity: 3,
+        count: 0,
+        tiles: []
+    };
+}
+
+function isScoutPocketTileSelected(index) {
+    return (
+        selectedScoutPocketTileIndex !== null &&
+        selectedScoutPocketTileIndex !== undefined &&
+        Number(selectedScoutPocketTileIndex) === Number(index)
+    );
+}
+
+function renderScoutPocketMiniSlots(playerId) {
+    const pocket = getScoutPocketForPlayer(playerId);
+    const capacity = Number(pocket.capacity ?? 3);
+    const tiles = Array.isArray(pocket.tiles) ? pocket.tiles : [];
+    const scoutSkillAvailable = isSkillAvailableForActivePlayer("skill_sco_02");
+
+    const tilesByIndex = new Map();
+
+    tiles.forEach(tile => {
+        tilesByIndex.set(Number(tile.index), tile);
+    });
+
+    let html = `<div class="scout-pocket-box" title="Scout pocket">`;
+
+    for (let i = 0; i < capacity; i++) {
+        const tile = tilesByIndex.get(i);
+
+        if (!tile) {
+            html += `
+                <button
+                    type="button"
+                    class="scout-pocket-slot empty"
+                    data-index="${i}"
+                    disabled
+                    title="Empty Scout pocket slot"
+                    onclick="event.stopPropagation();"
+                ></button>
+            `;
+            continue;
+        }
+
+        const selected = isScoutPocketTileSelected(i);
+        const imgSrc = tileMiniImagePathFromBase(tile.img_base);
+
+        const title = selected
+            ? `${tile.archetype_id || "tile"} (${tile.tile_type || "unknown"}) — selected. Click again to cancel.`
+            : `${tile.archetype_id || "tile"} (${tile.tile_type || "unknown"}) — click to use for next reveal.`;
+
+        html += `
+            <button
+                type="button"
+                class="scout-pocket-slot filled ${selected ? "selected" : ""} ${scoutSkillAvailable ? "" : "blocked"}"
+                data-index="${i}"
+                title="${title}"
+                ${scoutSkillAvailable ? "" : "disabled"}
+                onclick="selectScoutPocketTile(event, ${playerId}, ${i})"
+            >
+                <img
+                    src="${imgSrc}"
+                    alt="${tile.archetype_id || "Scout pocket tile"}"
+                >
+            </button>
+        `;
+    }
+
+    html += `</div>`;
+
+    return html;
+}
+
+function selectScoutPocketTile(event, playerId, index) {
+    if (event) {
+        event.stopPropagation();
+    }
+
+    const activePlayerId = latestPlayers?.active_player?.player_id;
+
+    if (Number(playerId) !== Number(activePlayerId)) {
+        showError("Only the active player's Scout pocket can be selected.");
+        return;
+    }
+
+    if (!isSkillAvailableForActivePlayer("skill_sco_02")) {
+        selectedScoutPocketTileIndex = null;
+        renderPlayers(latestPlayers);
+
+        showError("Scout pocket cannot be used because skill_sco_02 is currently blocked.");
+        return;
+    }
+
+    const pocket = getScoutPocketForPlayer(playerId);
+    const tiles = Array.isArray(pocket.tiles) ? pocket.tiles : [];
+
+    const tile = tiles.find(t => Number(t.index) === Number(index));
+
+    if (!tile) {
+        showError("This Scout pocket slot is empty.");
+        return;
+    }
+
+    // Clicking the already-selected pocket tile deselects it.
+    // The next hidden reveal will fall back to normal pile draw.
+    if (isScoutPocketTileSelected(index)) {
+        selectedScoutPocketTileIndex = null;
+        renderPlayers(latestPlayers);
+
+        showMessage(
+            "Scout pocket tile deselected. Next hidden reveal will draw from the pile.",
+            "info",
+            "Scout pocket"
+        );
+
+        return;
+    }
+
+    selectedScoutPocketTileIndex = Number(index);
+
+    renderPlayers(latestPlayers);
+
+    showMessage(
+        `Selected Scout pocket tile ${Number(index) + 1}: ${tile.archetype_id || "unknown tile"}. Click it again to cancel and draw from pile.`,
+        "info",
+        "Scout pocket"
+    );
+}
 
 function getPlayerTokenColor(playerId, index) {
     const n = Number.isInteger(playerId) ? playerId : index;
@@ -207,9 +363,10 @@ function prettySkillLabel(skillId) {
 }
 
 function renderSkillChip(skill, playerId) {
-    const label = (skill.label && !skill.label.startsWith("skill_"))
-        ? skill.label
-        : prettySkillLabel(skill.skill_id);
+    const label =
+        skill.name ||
+        (skill.label && !skill.label.startsWith("skill_") ? skill.label : null) ||
+        prettySkillLabel(skill.skill_id);
 
     const isAvailable = skill.is_available !== false;
     const isUsableNow = skill.is_usable_now !== false;
@@ -220,6 +377,9 @@ function renderSkillChip(skill, playerId) {
     const isSelected = !!skill.selected;
     const value = skill.value;
 
+    const isPoisoned = skill.blocked_reason === "poisoned";
+    const isCursedBlocked = skill.blocked_reason === "cursed";
+
     const bg = isAvailable ? (isSelected ? "#223322" : "#1b2a1b") : "#2a1b1b";
     const border = isAvailable ? (isSelected ? "#88ff88" : "#55cc55") : "#cc5555";
     const text = isAvailable ? "#d8ffd8" : "#ffd8d8";
@@ -227,76 +387,91 @@ function renderSkillChip(skill, playerId) {
     let stateText = "active";
 
     if (!isAvailable) {
-        if (skill.blocked_reason === "poisoned") {
-            stateText = "poisoned";
-        } else if (skill.blocked_reason === "cursed") {
-            stateText = "cursed";
-        } else {
-            stateText = "blocked";
-        }
+        stateText = "blocked";
     } else if (!isUsableNow && !isPassive) {
         stateText = "not usable now";
     } else if (isPassive) {
         stateText = "passive";
     }
 
-
     let controlHtml = "";
 
     if (controlType === "toggle") {
-        controlHtml = `
-            <label style="display:flex; align-items:center; gap:6px; margin-top:4px;">
-                <input
-                    type="checkbox"
-                    ${isSelected ? "checked" : ""}
-                    ${isUsableNow ? "" : "disabled"}
-                    onchange="toggleSkillUiSelection(${playerId}, '${skill.skill_id}')"
-                >
-                <span>toggle</span>
-            </label>
-        `;
+        if (skill.skill_id === "skill_sco_02") {
+            // Scout pocket draw is an Action, not a toggle.
+            controlHtml = `
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <button
+                        type="button"
+                        ${isUsableNow ? "" : "disabled"}
+                        onclick="event.stopPropagation(); scoutPullTile(${playerId});"
+                        title="Draw one tile into Scout pocket"
+                    >draw</button>
+                </div>
+            `;
+        } else {
+            controlHtml = `
+                <label style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+                    <input
+                        type="checkbox"
+                        ${isSelected ? "checked" : ""}
+                        ${isUsableNow ? "" : "disabled"}
+                        onchange="toggleSkillUiSelection(${playerId}, '${skill.skill_id}')"
+                    >
+                    <span>toggle</span>
+                </label>
+            `;
+        }
     } else if (controlType === "button") {
-        const buttonLabel = isTeleportSkill(skill.skill_id)
-            ? "target"
-            : "use";
+        let buttonLabel = "use";
+        let onclick = `pulseSkillUiButton(${playerId}, '${skill.skill_id}')`;
+
+        if (isTeleportSkill(skill.skill_id)) {
+            buttonLabel = "target";
+        }
+
+        if (skill.skill_id === "skill_thi_02" || skill.skill_id === "skill_pri_02") {
+            buttonLabel = "fight";
+            onclick = "fightStart()";
+        }
 
         controlHtml = `
-    <div style="margin-top:4px;">
-        <button
-            type="button"
-            ${isUsableNow ? "" : "disabled"}
-            onclick="pulseSkillUiButton(${playerId}, '${skill.skill_id}')"
-        >${buttonLabel}</button>
-    </div>
-`;
+        <div style="margin-top:4px;">
+            <button
+                type="button"
+                ${isUsableNow ? "" : "disabled"}
+                onclick="event.stopPropagation(); ${onclick}"
+            >${buttonLabel}</button>
+        </div>
+    `;
     } else if (controlType === "number_stepper") {
         const shownValue = (value != null) ? value : "?";
         const confirmHtml = skill.skill_id === "skill_bar_01"
             ? `
-            <button
-                type="button"
-                ${isUsableNow ? "" : "disabled"}
-                onclick="confirmHealingChoice()"
-            >confirm</button>
-        `
+                <button
+                    type="button"
+                    ${isUsableNow ? "" : "disabled"}
+                    onclick="event.stopPropagation(); confirmHealingChoice()"
+                >confirm</button>
+            `
             : "";
 
         controlHtml = `
-        <div style="display:flex; align-items:center; gap:4px; margin-top:4px;">
-            <button
-                type="button"
-                ${isUsableNow ? "" : "disabled"}
-                onclick="stepSkillUiValue(${playerId}, '${skill.skill_id}', -1)"
-            >-</button>
-            <span style="min-width:24px; text-align:center;">${shownValue}</span>
-            <button
-                type="button"
-                ${isUsableNow ? "" : "disabled"}
-                onclick="stepSkillUiValue(${playerId}, '${skill.skill_id}', 1)"
-            >+</button>
-            ${confirmHtml}
-        </div>
-    `;
+            <div style="display:flex; align-items:center; gap:4px; margin-top:4px;">
+                <button
+                    type="button"
+                    ${isUsableNow ? "" : "disabled"}
+                    onclick="event.stopPropagation(); stepSkillUiValue(${playerId}, '${skill.skill_id}', -1)"
+                >-</button>
+                <span style="min-width:24px; text-align:center;">${shownValue}</span>
+                <button
+                    type="button"
+                    ${isUsableNow ? "" : "disabled"}
+                    onclick="event.stopPropagation(); stepSkillUiValue(${playerId}, '${skill.skill_id}', 1)"
+                >+</button>
+                ${confirmHtml}
+            </div>
+        `;
     } else if (controlType === "choice_set") {
         controlHtml = `
             <div style="margin-top:4px; opacity:${isAvailable ? "1" : "0.6"};">
@@ -311,25 +486,42 @@ function renderSkillChip(skill, playerId) {
         `;
     }
 
+    const scoutPocketHtml = skill.skill_id === "skill_sco_02"
+        ? renderScoutPocketMiniSlots(playerId)
+        : "";
+
     const skillTargetClick = `
-    onclick="handleSkillChipClick(event, ${playerId}, '${skill.skill_id}')"
-`;
+        onclick="handleSkillChipClick(event, ${playerId}, '${skill.skill_id}')"
+    `;
 
     return `
-        <div ${skillTargetClick} style="
-    border:1px solid ${border};
-    background:${bg};
-    color:${text};
-    padding:4px 6px;
-    min-width:120px;
-    font-size:11px;
-    line-height:1.25;
-    border-radius:4px;
-    cursor:pointer;
-" title="${description}">
-            <div><b>${label}</b></div>
-            <div style="opacity:0.9;">${stateText}${controlType ? ` | ${controlType}` : ""}</div>
-            ${controlHtml}
+        <div ${skillTargetClick} class="skill-chip skill-${skill.skill_id}" style="
+            border:1px solid ${border};
+            background:${bg};
+            color:${text};
+            padding:4px 6px;
+            min-width:120px;
+            font-size:11px;
+            line-height:1.25;
+            border-radius:4px;
+            cursor:pointer;
+        " title="${description}">
+            <div class="skill-chip-title">
+                ${isPoisoned ? `<span class="skill-poison-icon" title="Poisoned">☣</span>` : ""}
+                ${isCursedBlocked ? `<span class="skill-curse-icon" title="Blocked by curse">☠</span>` : ""}
+                <b>${label}</b>
+            </div>
+
+            <div style="opacity:0.9;">
+                ${stateText}${controlType ? ` | ${controlType}` : ""}
+            </div>
+
+            <div class="skill-chip-control-row">
+                <div class="skill-chip-control-main">
+                    ${controlHtml}
+                </div>
+                ${scoutPocketHtml}
+            </div>
         </div>
     `;
 }
@@ -574,11 +766,13 @@ function renderCompactPlayerInventory(player) {
 function renderSkillRows(player) {
     const rows = player.skills_ui || [];
     if (rows.length) {
-        return rows.map(row => `
-            <div style="display:flex; gap:6px; flex-wrap:nowrap; margin-top:4px;">
-                ${row.map(skill => renderSkillChip(skill, player.player_id)).join("")}
-            </div>
-        `).join("");
+        const flatSkills = rows.flat();
+
+        return flatSkills.map(skill => `
+    <div class="player-skill-line">
+        ${renderSkillChip(skill, player.player_id)}
+    </div>
+`).join("");
     }
 
     const plainSkills = Array.isArray(player.skills) ? player.skills : [];
@@ -629,13 +823,15 @@ function isAwaitingPoisonChoice() {
 
 function renderPlayers(data) {
     const box = document.getElementById("players-box");
+    if (!box) return;
+
     box.innerHTML = "";
 
     const players = data?.players || [];
     const activeIdx = data?.active_player_idx ?? 0;
+
     const awaitingCurse = isAwaitingCurseChoice();
     const awaitingPoison = isAwaitingPoisonChoice();
-    console.log("awaitingCurse =", awaitingCurse, "turn =", latestPlayers?.turn, latestMap?.turn);
 
     if (!players.length) {
         box.textContent = "(no runtime players)";
@@ -643,12 +839,21 @@ function renderPlayers(data) {
     }
 
     players.forEach((p, idx) => {
-        const row = document.createElement("div");
-        row.className = "player-row" + (idx === activeIdx ? " active" : "");
+        const isActive = idx === activeIdx;
 
+        const isCursed = !!(p.status?.is_cursed || p.is_cursed || p.cursed);
+        const isEvil = !!(p.status?.is_evil || p.is_evil);
+
+        const row = document.createElement("div");
+        row.className = "player-row" + (isActive ? " active" : "");
+
+        // --------------------------------------------------------
+        // Selection / targeting highlight
+        // --------------------------------------------------------
         if (awaitingCurse && p.player_id === selectedCurseTargetPlayerId) {
             row.classList.add("curse-selected");
         }
+
         if (awaitingPoison && p.player_id === selectedPoisonTargetPlayerId) {
             row.classList.add("curse-selected");
         }
@@ -681,12 +886,22 @@ function renderPlayers(data) {
         const canSelectForTeleport = isTeleportPlayerTargeting;
         const canSelectForItemUse = isItemPlayerTargeting;
 
-        row.style.cursor = (canSelectForCurse || canSelectForPoison || canSelectForTeleport || canSelectForItemUse)
+        row.style.cursor = (
+            canSelectForCurse ||
+            canSelectForPoison ||
+            canSelectForTeleport ||
+            canSelectForItemUse
+        )
             ? "pointer"
             : "default";
 
+        // --------------------------------------------------------
+        // Player row click behavior
+        // --------------------------------------------------------
         row.onclick = () => {
-
+            // ----------------------------------------------------
+            // Item-use player targeting
+            // ----------------------------------------------------
             if (canSelectForItemUse) {
                 const activePlayerId = latestPlayers?.active_player?.player_id;
 
@@ -697,10 +912,8 @@ function renderPlayers(data) {
 
                 pendingItemUse.target_player_id = p.player_id;
 
-                // --------------------------------------------------------
                 // Healing scroll:
                 // player target first, then fountain coordinates.
-                // --------------------------------------------------------
                 if (pendingItemUse.effect === "TP_HEAL") {
                     pendingItemUse.phase = "select_fountain";
 
@@ -725,25 +938,18 @@ function renderPlayers(data) {
                     }
 
                     if (cancelBtn) {
-                        cancelBtn.style.display = "inline-block";
+                        cancelBtn.disabled = false;
                     }
 
                     renderPlayers(latestPlayers);
                     updateActionAvailability();
-
-                    showMessage(
-                        `Healing scroll target selected: ${p.display_name || ("Player #" + p.player_id)}.\nNow enter fountain coordinates and press Teleport.`,
-                        "info",
-                        "Item use"
-                    );
+                    renderWaitingInstructionMessage();
 
                     return;
                 }
 
-                // --------------------------------------------------------
                 // Thorn / LIFESTEAL:
                 // player target is enough; resolve immediately.
-                // --------------------------------------------------------
                 if (pendingItemUse.effect === "LIFESTEAL") {
                     const itemUse = pendingItemUse;
 
@@ -763,19 +969,23 @@ function renderPlayers(data) {
                 return;
             }
 
+            // ----------------------------------------------------
+            // Poison target player selection
+            // ----------------------------------------------------
             if (canSelectForPoison) {
                 selectedPoisonTargetPlayerId = p.player_id;
                 selectedPoisonTargetSkillId = null;
+
                 renderPlayers(latestPlayers);
                 renderPoisonConfirmArea();
-                showMessage(
-                    `Poison target player selected: ${p.display_name || ("Player #" + p.player_id)}.\nNow click one of this player's skill chips.`,
-                    "info",
-                    "Poison"
-                );
+                renderWaitingInstructionMessage();
+
                 return;
             }
 
+            // ----------------------------------------------------
+            // Teleport target player selection
+            // ----------------------------------------------------
             if (canSelectForTeleport) {
                 const activePlayerId = latestPlayers?.active_player?.player_id;
 
@@ -795,21 +1005,33 @@ function renderPlayers(data) {
                 }
 
                 selectedTeleportTargetPlayerId = p.player_id;
+
                 renderPlayers(latestPlayers);
                 renderTeleportConfirmArea();
+                renderWaitingInstructionMessage();
+
                 return;
             }
 
+            // ----------------------------------------------------
+            // Curse target player selection
+            // ----------------------------------------------------
             if (canSelectForCurse) {
                 selectedCurseTargetPlayerId = p.player_id;
+
                 renderPlayers(latestPlayers);
                 renderCurseConfirmArea();
+                renderWaitingInstructionMessage();
+
+                return;
             }
         };
 
+        // --------------------------------------------------------
+        // Left side: portrait block + skill column
+        // --------------------------------------------------------
         const left = document.createElement("div");
         left.className = "player-left";
-
 
         const portraitWrap = document.createElement("div");
         portraitWrap.className = "player-portrait-wrap";
@@ -822,7 +1044,7 @@ function renderPlayers(data) {
         if (p.icon_path) {
             const img = document.createElement("img");
             img.src = p.icon_path;
-            img.alt = p.display_name || `Player ${p.player_id}`;
+            img.alt = p.display_name || "Player";
             portrait.appendChild(img);
         } else {
             const ph = document.createElement("div");
@@ -831,51 +1053,47 @@ function renderPlayers(data) {
             portrait.appendChild(ph);
         }
 
+        const playerNameUnderPortrait = document.createElement("div");
+        playerNameUnderPortrait.className = "player-name-under-portrait";
+        playerNameUnderPortrait.textContent = p.display_name || "(unnamed)";
+
         const hpUnderPortrait = document.createElement("div");
         hpUnderPortrait.className = "player-hp-under-portrait";
-        hpUnderPortrait.textContent = String(p.hp?.current ?? "?");
+        hpUnderPortrait.innerHTML = `
+            <span class="player-hp-value">${p.hp?.current ?? "?"}</span>
+            ${isCursed ? `<span class="player-status-icon player-curse-icon" title="Cursed">☠</span>` : ""}
+            ${isEvil ? `<span class="player-status-icon player-evil-icon" title="Karak">◆</span>` : ""}
+        `;
+
+        const playerCoordsUnderPortrait = document.createElement("div");
+        playerCoordsUnderPortrait.className = "player-coordinates-under-portrait";
+        playerCoordsUnderPortrait.textContent = p.position
+            ? `(${p.position.x}, ${p.position.y})`
+            : "(?, ?)";
 
         portraitWrap.appendChild(portrait);
+        portraitWrap.appendChild(playerNameUnderPortrait);
         portraitWrap.appendChild(hpUnderPortrait);
-
+        portraitWrap.appendChild(playerCoordsUnderPortrait);
 
         const textWrap = document.createElement("div");
         textWrap.className = "player-text";
 
-        const line1 = document.createElement("div");
-        line1.className = "player-topline";
-
-        const cls = p.profession ? ` | class: ${p.profession}` : " | class: -";
-        const cursedMark = (p.status?.is_cursed || p.is_cursed || p.cursed) ? " | CURSED" : "";
-        const poisonCount = Array.isArray(p.status?.poisoned_skill_ids)
-            ? p.status.poisoned_skill_ids.length
-            : (Array.isArray(p.poisoned_skill_ids) ? p.poisoned_skill_ids.length : 0);
-        const poisonMark = poisonCount > 0 ? ` | POISONED:${poisonCount}` : "";
-        const evilMark = (p.status?.is_evil || p.is_evil) ? " | KARAK" : "";
-
-        const playerTitle = document.createElement("span");
-        playerTitle.className = "player-title-text";
-        playerTitle.textContent = `#${(p.player_id ?? idx)} | ${p.display_name || "(unnamed)"}${cls}${evilMark}${cursedMark}${poisonMark}`;
-
-        const playerCoords = document.createElement("span");
-        playerCoords.className = "player-coordinates";
-        playerCoords.textContent = p.position ? `(${p.position.x}, ${p.position.y})` : "(?, ?)";
-
-        line1.appendChild(playerTitle);
-        line1.appendChild(playerCoords);
-
         const skillsBlock = document.createElement("div");
+        skillsBlock.className = "player-skills-column";
         skillsBlock.innerHTML = renderSkillRows(p);
 
-        textWrap.appendChild(line1);
         textWrap.appendChild(skillsBlock);
-
-        const miniInventoryBlock = document.createElement("div");
-        miniInventoryBlock.className = "player-mini-inventory-wrap";
-        miniInventoryBlock.innerHTML = renderCompactPlayerInventory(p);
 
         left.appendChild(portraitWrap);
         left.appendChild(textWrap);
+
+        // --------------------------------------------------------
+        // Right side: compact read-only inventory
+        // --------------------------------------------------------
+        const miniInventoryBlock = document.createElement("div");
+        miniInventoryBlock.className = "player-mini-inventory-wrap";
+        miniInventoryBlock.innerHTML = renderCompactPlayerInventory(p);
 
         row.appendChild(left);
         row.appendChild(miniInventoryBlock);
@@ -884,6 +1102,8 @@ function renderPlayers(data) {
     });
 }
 
+// Development helper only.
+// Normal hotseat turn flow should use endTurn(), not manual active-player selection.
 async function selectActivePlayer(playerId) {
     const r = await fetch(gameApi("/players/select"), {
         method: "POST",
@@ -899,28 +1119,90 @@ async function selectActivePlayer(playerId) {
     await refreshAll();
 }
 
+function getSkillUiForActivePlayer(skillId) {
+    const activePlayer = latestPlayers?.active_player || null;
+    const rows = activePlayer?.skills_ui || [];
+
+    for (const row of rows) {
+        for (const skill of row) {
+            if (skill.skill_id === skillId) {
+                return skill;
+            }
+        }
+    }
+
+    return null;
+}
+
+function isSkillAvailableForActivePlayer(skillId) {
+    const skill = getSkillUiForActivePlayer(skillId);
+    return !!skill && skill.is_available !== false;
+}
+
+function isSkillSelectedForActivePlayer(skillId) {
+    const activePlayer = latestPlayers?.active_player || null;
+    const rows = activePlayer?.skills_ui || [];
+
+    for (const row of rows) {
+        for (const skill of row) {
+            if (skill.skill_id === skillId) {
+                return !!skill.selected;
+            }
+        }
+    }
+
+    return false;
+}
+
 async function move(direction) {
     clearError();
+
+    const usePeek = isSkillSelectedForActivePlayer("skill_ran_02");
+
+    const scoutSkillAvailable = isSkillAvailableForActivePlayer("skill_sco_02");
+    const hasSelectedPocketTile = selectedScoutPocketTileIndex !== null;
+
+    const usePocketTile =
+        hasSelectedPocketTile &&
+        scoutSkillAvailable;
+
+    const payload = {
+        direction: direction,
+        is_mage: false,
+        reveal_kind: usePeek ? "peek" : "discover",
+        tile_source: usePocketTile ? "pocket" : "pile",
+        pocket_tile_index: usePocketTile ? selectedScoutPocketTileIndex : null
+    };
 
     const r = await fetch(gameApi("/move"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-            direction: direction,
-            is_mage: false
-        })
+        body: JSON.stringify(payload)
     });
 
     const data = await r.json();
+
     if (!r.ok) {
         showError(data.detail || "Move failed.");
         return;
     }
 
+    // Pocket selection is a soft frontend preference.
+    // Clear it after any successful navigation/reveal action.
+    selectedScoutPocketTileIndex = null;
+
     await refreshAll();
+
+    if (hasSelectedPocketTile && !scoutSkillAvailable) {
+        showMessage(
+            "Scout pocket tile was ignored because skill_sco_02 is currently blocked. Drew from pile instead.",
+            "warning",
+            "Scout pocket"
+        );
+    }
 }
 
-<!--
+
 function renderActivePlayer(data) {
     const box = document.getElementById("active-player-box");
     if (!box) return;
@@ -960,7 +1242,7 @@ function renderDiagnostics(playersData, mapData) {
 
     box.textContent = lines.join("\n");
 }
--->
+
 function renderCurseRoomToss(mapData) {
     const box = document.getElementById("curse-toss-box");
     const dieEl = document.getElementById("curse-toss-die");
@@ -1062,6 +1344,48 @@ function renderRoomXCounter(mapData) {
     }
 }
 
+function getPendingDiscoveryTarget() {
+    const turn =
+        latestMap?.turn ||
+        latestPlayers?.turn ||
+        null;
+
+    const pd = turn?.pending_discovery || null;
+
+    if (!pd) {
+        return null;
+    }
+
+    const x = Number(pd.target_x);
+    const y = Number(pd.target_y);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+    }
+
+    return {x, y};
+}
+
+function getActivePlayerCurrentTile() {
+    const activePlayer = latestPlayers?.active_player || null;
+    const tiles = latestMap?.tiles || {};
+
+    if (!activePlayer?.position) {
+        return null;
+    }
+
+    const key = `${activePlayer.position.x},${activePlayer.position.y}`;
+    return tiles[key] || null;
+}
+
+function monsterImagePath(monsterId) {
+    if (!monsterId) {
+        return null;
+    }
+
+    return `/static/media/tile-content/${monsterId}.png`;
+}
+
 async function loadPlayers() {
     const r = await fetch(gameApi("/players"));
     const data = await r.json();
@@ -1110,6 +1434,172 @@ function renderCurseConfirmArea() {
             <div>Selected: <b>${selected.display_name || ("Player #" + selected.player_id)}</b></div>
             <button onclick="confirmCurseSelection()">☠️ Confirm Curse</button>
             <button onclick="clearCurseSelection()">Reset</button>
+        </div>
+    `;
+}
+
+function getPendingMonsterChoice() {
+    const turn =
+        latestMap?.turn ||
+        latestPlayers?.turn ||
+        null;
+
+    return turn?.pending_monster_choice || null;
+}
+
+async function confirmMonsterCandidate(candidateIndex) {
+    clearError();
+
+    const r = await fetch(gameApi("/monster/confirm_candidate"), {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({candidate_index: candidateIndex})
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Monster confirmation failed.");
+        return;
+    }
+
+    await refreshAll();
+}
+
+async function redrawMonsterCandidate() {
+    clearError();
+
+    const r = await fetch(gameApi("/monster/redraw_candidate"), {
+        method: "POST"
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Monster redraw failed.");
+        return;
+    }
+
+    await refreshAll();
+}
+
+
+function renderEncounterPanel() {
+    const box = document.getElementById("monster-choice-box");
+
+    if (!box) {
+        console.error("monster-choice-box not found");
+        return;
+    }
+
+    const activePlayer = latestPlayers?.active_player || null;
+    const currentTile = getActivePlayerCurrentTile();
+    const pendingChoice = getPendingMonsterChoice();
+
+    const tableauPath =
+        activePlayer?.tableau_path ||
+        activePlayer?.image_path ||
+        activePlayer?.icon_path ||
+        null;
+
+    // --------------------------------------------------------
+    // Pending Oracle / Alchemist monster choice
+    // --------------------------------------------------------
+    if (pendingChoice) {
+        const candidates = Array.isArray(pendingChoice.candidates)
+            ? pendingChoice.candidates
+            : [];
+
+        const confirmable = new Set(
+            (pendingChoice.confirmable_indices || []).map(Number)
+        );
+
+        const canRedraw = !!pendingChoice.has_alc_02;
+
+        box.classList.remove("panel-placeholder");
+        box.classList.add("encounter-box", "encounter-monster-choice-box");
+
+        box.innerHTML = `
+            <div class="encounter-active-player">
+                ${
+            tableauPath
+                ? `<img class="encounter-tableau-img" src="${tableauPath}" alt="active player">`
+                : `<div class="encounter-tableau-placeholder">no tableau</div>`
+        }
+            </div>
+
+            <div class="encounter-monster-choice">
+                <div class="monster-choice-candidates">
+                    ${
+            candidates.length
+                ? candidates.map((m, i) => {
+                    const isConfirmable = confirmable.has(i);
+                    const monsterId = m.monster_id || "?";
+                    const imgPath = m.image_path || monsterImagePath(monsterId);
+
+                    return `
+                                    <button
+                                        type="button"
+                                        class="monster-choice-card ${isConfirmable ? "confirmable" : "not-confirmable"}"
+                                        ${isConfirmable ? "" : "disabled"}
+                                        onclick="confirmMonsterCandidate(${i})"
+                                        title="${monsterId}"
+                                    >
+                                        <img src="${imgPath}" alt="${monsterId}">
+                                        <span>${monsterId}</span>
+                                    </button>
+                                `;
+                }).join("")
+                : `<div class="encounter-target-empty">no candidates</div>`
+        }
+                </div>
+
+                <div class="monster-choice-actions">
+                    <button
+                        type="button"
+                        onclick="redrawMonsterCandidate()"
+                        ${canRedraw ? "" : "disabled"}
+                        title="Alchemist redraw: costs 1 Action and 1 HP"
+                    >redraw</button>
+                </div>
+            </div>
+        `;
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Default encounter display: active player + current monster
+    // --------------------------------------------------------
+    const monsterId = currentTile?.monster_id || null;
+    const monsterPath = monsterImagePath(monsterId);
+
+    console.log("ENCOUNTER DEBUG", {
+        activePlayer,
+        tableauPath,
+        currentTile,
+        monsterId,
+        monsterPath
+    });
+
+    box.classList.remove("panel-placeholder", "encounter-monster-choice-box");
+    box.classList.add("encounter-box");
+
+    box.innerHTML = `
+        <div class="encounter-active-player">
+            ${
+        tableauPath
+            ? `<img class="encounter-tableau-img" src="${tableauPath}" alt="active player">`
+            : `<div class="encounter-tableau-placeholder">no tableau</div>`
+    }
+        </div>
+
+        <div class="encounter-target">
+            ${
+        monsterId
+            ? `<img class="encounter-monster-img" src="${monsterPath}" alt="${monsterId}">`
+            : `<div class="encounter-target-empty">no monster</div>`
+    }
         </div>
     `;
 }
@@ -1266,6 +1756,10 @@ async function refreshAll() {
         await loadMap();
         await loadInventory();
 
+        if (!isSkillAvailableForActivePlayer("skill_sco_02")) {
+            selectedScoutPocketTileIndex = null;
+        }
+
         if (!latestPlayers?.players?.length) {
             skillUiState = {};
         }
@@ -1285,6 +1779,7 @@ async function refreshAll() {
         }
 
         renderMapVisual();
+        renderEncounterPanel();
         renderActionCounter();
         renderRoomXCounter(latestMap);
         renderCurseRoomToss(latestMap);
@@ -1333,7 +1828,11 @@ async function refreshAll() {
             renderFight(null);
         }
 
-        showMessage("Phase 3 state refreshed.", "info", "Info");
+        const waitingMessageShown = renderWaitingInstructionMessage();
+
+        if (!waitingMessageShown) {
+            showMessage("Phase 3 state refreshed.", "info", "Info");
+        }
     } catch (e) {
         console.error("refreshAll failed:", e);
         showError(String(e));
@@ -1432,7 +1931,7 @@ async function confirmTeleport() {
         }
 
         if (cancelBtn) {
-            cancelBtn.style.display = "none";
+            cancelBtn.disabled = true;
         }
 
         renderTeleportConfirmArea();
@@ -1538,7 +2037,7 @@ async function confirmTeleport() {
     }
 
     if (cancelBtn) {
-        cancelBtn.style.display = "none";
+        cancelBtn.disabled = true;
     }
 
     renderTeleportConfirmArea();
@@ -1614,15 +2113,21 @@ async function fight() {
 }
 
 async function rotateTile(direction) {
-    if (!latestMap || !latestMap.player) return;
+    const target = getPendingDiscoveryTarget();
 
-    const x = latestMap.player.x;
-    const y = latestMap.player.y;
+    if (!target) {
+        showError("No pending tile target to rotate.");
+        return;
+    }
 
     const r = await fetch(gameApi("/rotate_tile"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({x, y, direction})
+        body: JSON.stringify({
+            x: target.x,
+            y: target.y,
+            direction
+        })
     });
 
     const data = await r.json();
@@ -1655,8 +2160,8 @@ function renderGround(data) {
         <div class="ground-slot">
             <div class="ground-image">
                 ${groundItem
-                    ? `<img class="item-icon" src="${itemImagePath(groundItem)}" alt="${groundItemId || ""}">`
-                    : `<span class="muted">(empty)</span>`}
+        ? `<img class="item-icon" src="${itemImagePath(groundItem)}" alt="${groundItemId || ""}">`
+        : `<span class="muted">(empty)</span>`}
             </div>
 
             <div class="ground-text">
@@ -2245,7 +2750,7 @@ function enterTeleportTargeting(skillId) {
     }
 
     if (cancelBtn) {
-        cancelBtn.style.display = "inline-block";
+        cancelBtn.disabled = false;
     }
 
     if (xInput) {
@@ -2262,19 +2767,10 @@ function enterTeleportTargeting(skillId) {
         xInput.focus();
     }
 
-    const instruction = targetMode === "player"
-        ? `${teleportSkillLabel(skillId)}.\nNavigation is blocked until you select a player, confirm, or cancel.`
-        : `${teleportSkillLabel(skillId)}.\nNavigation is blocked until you confirm or cancel.`;
-
-    showMessage(
-        instruction,
-        "info",
-        "Teleport targeting"
-    );
-
     renderPlayers(latestPlayers);
     renderTeleportConfirmArea();
     updateActionAvailability();
+    renderWaitingInstructionMessage();
 }
 
 function teleportTargetModeForSkill(skillId) {
@@ -2331,7 +2827,7 @@ function cancelItemUseTargeting() {
     }
 
     if (cancelBtn) {
-        cancelBtn.style.display = "none";
+        cancelBtn.disabled = true;
     }
 
     if (xInput) {
@@ -2375,7 +2871,7 @@ function beginItemUse(slotGroup, slotIndex, itemId, effect) {
         }
 
         if (cancelBtn) {
-            cancelBtn.style.display = "inline-block";
+            cancelBtn.disabled = false;
         }
 
         if (xInput) {
@@ -2390,12 +2886,7 @@ function beginItemUse(slotGroup, slotIndex, itemId, effect) {
 
         renderPlayers(latestPlayers);
         updateActionAvailability();
-
-        showMessage(
-            "Healing scroll: click one player row as target.",
-            "info",
-            "Item use"
-        );
+        renderWaitingInstructionMessage();
 
         return;
     }
@@ -2420,7 +2911,7 @@ function beginItemUse(slotGroup, slotIndex, itemId, effect) {
         }
 
         if (cancelBtn) {
-            cancelBtn.style.display = "inline-block";
+            cancelBtn.disabled = false;
         }
 
         if (xInput) {
@@ -2435,12 +2926,7 @@ function beginItemUse(slotGroup, slotIndex, itemId, effect) {
 
         renderPlayers(latestPlayers);
         updateActionAvailability();
-
-        showMessage(
-            "Thorn: click one other player row as target.",
-            "info",
-            "Item use"
-        );
+        renderWaitingInstructionMessage();
 
         return;
     }
@@ -2489,7 +2975,7 @@ function cancelTeleportTargeting() {
     }
 
     if (cancelBtn) {
-        cancelBtn.style.display = "none";
+        cancelBtn.disabled = true;
     }
 
     if (xInput) {
@@ -2507,6 +2993,38 @@ function cancelTeleportTargeting() {
     updateActionAvailability();
 }
 
+async function scoutPullTile(playerId) {
+    clearError();
+
+    const activePlayerId = latestPlayers?.active_player?.player_id;
+
+    if (Number(playerId) !== Number(activePlayerId)) {
+        showError("Only the active Scout can draw a pocket tile.");
+        return;
+    }
+
+    const r = await fetch(gameApi("/skills/sco_02/pull_tile"), {
+        method: "POST"
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Scout tile draw failed.");
+        return;
+    }
+
+    selectedScoutPocketTileIndex = null;
+
+    await refreshAll();
+
+    showMessage(
+        "Scout drew one tile into the pocket.",
+        "info",
+        "Scout pocket"
+    );
+}
+
 async function pulseSkillUiButton(playerId, skillId) {
     const activePlayerId = latestPlayers?.active_player?.player_id;
 
@@ -2519,6 +3037,15 @@ async function pulseSkillUiButton(playerId, skillId) {
         latestMap?.turn ||
         latestPlayers?.turn ||
         null;
+    // --------------------------------------------------------
+    // skill_sco_02:
+    // Draw one tile from tile_pool into Scout pocket.
+    // This is an Action.
+    // --------------------------------------------------------
+    if (skillId === "skill_sco_02") {
+        await scoutPullTile();
+        return;
+    }
 
     // --------------------------------------------------------
     // skill_swo_02:
@@ -2632,7 +3159,7 @@ async function useInventoryItem({
     }
 
     if (cancelBtn) {
-        cancelBtn.style.display = "none";
+        cancelBtn.disabled = true;
     }
 
     if (xInput) {
@@ -2710,12 +3237,7 @@ function handleSkillChipClick(event, playerId, skillId) {
 
         selectedPoisonTargetSkillId = skillId;
         renderPoisonConfirmArea();
-
-        showMessage(
-            `Poison target skill selected: ${prettySkillLabel(skillId)}.`,
-            "info",
-            "Poison"
-        );
+        renderWaitingInstructionMessage();
 
         return;
     }
@@ -2777,6 +3299,8 @@ function updateActionAvailability() {
 
     const isIdle = mode === "idle";
     const isPendingTile = mode === "pending_tile";
+    const isAwaitingMonsterChoice = mode === "awaiting_monster_choice";
+    const isAwaitingMonsterEncounter = mode === "awaiting_monster_encounter";
     const isFight = mode === "fight";
     const isItemPickup = mode === "item_pickup";
     const isAwaitingCurse = mode === "awaiting_curse_choice";
@@ -2784,13 +3308,14 @@ function updateActionAvailability() {
     const isAwaitingHeal = mode === "awaiting_heal_choice";
     const isAwaitingKoReaction = isAwaitingKoReactionChoice();
 
+    const encounter = turn?.pending_monster_encounter || null;
+    const canMoveDuringMonsterEncounter =
+        isAwaitingMonsterEncounter &&
+        !!encounter?.can_skip;
+
     // --------------------------------------------------------
     // Special item pickup state:
     // Swordsman won a fight with a final physical 6.
-    //
-    // In this state:
-    // - normal End Turn must be disabled
-    // - skill_swo_02 button is used to continue after item pickup
     // --------------------------------------------------------
     const isSwoContinueItemPickup =
         isItemPickup &&
@@ -2800,37 +3325,26 @@ function updateActionAvailability() {
     const canStartFight =
         !!currentTile?.monster_id &&
         !!turn &&
-        isIdle &&
+        (isIdle || isAwaitingMonsterEncounter) &&
         !isAwaitingKoReaction &&
-        !isAwaitingPoison;
+        !isAwaitingPoison &&
+        !isAwaitingMonsterChoice;
 
     if (fightBtn) {
         fightBtn.disabled = !canStartFight;
     }
 
     // Old button: no longer part of the normal UI.
-    // Keep disabled/hidden until removed from HTML.
     if (finishItemPickupBtn) {
         finishItemPickupBtn.disabled = true;
         finishItemPickupBtn.style.display = "none";
     }
 
-    // --------------------------------------------------------
-    // End Turn behavior:
-    //
-    // Normal item_pickup:
-    //   End Turn is allowed and backend maps it to ItemPickUpTurnEndingFreeAction.
-    //
-    // Swordsman continuation item_pickup:
-    //   End Turn is disabled because the player may continue.
-    //
-    // KO reaction:
-    //   End Turn is disabled because the pending forced fountain teleport
-    //   must be resolved first.
-    // --------------------------------------------------------
     if (endTurnBtn) {
         endTurnBtn.disabled =
             isPendingTile ||
+            isAwaitingMonsterChoice ||
+            isAwaitingMonsterEncounter ||
             isFight ||
             isAwaitingCurse ||
             isAwaitingPoison ||
@@ -2846,24 +3360,22 @@ function updateActionAvailability() {
         isTeleportTargeting &&
         pendingTeleportTargetMode === "coordinates";
 
-    const isPlayerTeleportTargeting =
-        isTeleportTargeting &&
-        pendingTeleportTargetMode === "player";
-
     const canUsePortalTeleport =
         !!currentTile &&
         currentTile.feature === "teleport" &&
         isIdle &&
         !isTeleportTargeting &&
-        !isAwaitingKoReaction;
+        !isAwaitingKoReaction &&
+        !isAwaitingMonsterChoice &&
+        !isAwaitingMonsterEncounter;
 
     const canUseCoordinateSkillTeleport =
         isCoordinateTeleportTargeting &&
         isIdle &&
-        !isAwaitingKoReaction;
+        !isAwaitingKoReaction &&
+        !isAwaitingMonsterChoice &&
+        !isAwaitingMonsterEncounter;
 
-    // KO reaction uses the same coordinate input area,
-    // but it is not a normal teleport Action.
     const canResolveKoReaction =
         isAwaitingKoReaction;
 
@@ -2902,16 +3414,15 @@ function updateActionAvailability() {
     }
 
     if (teleportCancelBtn) {
-        // Cancel is only meaningful for manually started targeting.
-        // KO reaction must be resolved, not cancelled.
-        teleportCancelBtn.style.display =
-            (pendingTeleportSkillId || pendingItemUse) && !isAwaitingKoReaction
-                ? "inline-block"
-                : "none";
+        teleportCancelBtn.style.display = "";
+        teleportCancelBtn.disabled =
+            !((pendingTeleportSkillId || pendingItemUse) && !isAwaitingKoReaction);
     }
 
     // --------------------------------------------------------
-    // Navigation blocking during teleport targeting / KO reaction.
+    // Navigation:
+    // - idle: normal movement
+    // - awaiting_monster_encounter: movement only if skip is allowed
     // --------------------------------------------------------
     moveButtons.forEach(btn => {
         if (btn) {
@@ -2919,7 +3430,8 @@ function updateActionAvailability() {
                 isTeleportTargeting ||
                 isItemTargeting ||
                 isAwaitingKoReaction ||
-                !isIdle;
+                isAwaitingMonsterChoice ||
+                !(isIdle || canMoveDuringMonsterEncounter);
         }
     });
 
@@ -2929,6 +3441,8 @@ function updateActionAvailability() {
                 isTeleportTargeting ||
                 isItemTargeting ||
                 isAwaitingKoReaction ||
+                isAwaitingMonsterChoice ||
+                isAwaitingMonsterEncounter ||
                 !isPendingTile;
         }
     });
@@ -2938,15 +3452,22 @@ function updateActionAvailability() {
             isTeleportTargeting ||
             isItemTargeting ||
             isAwaitingKoReaction ||
+            isAwaitingMonsterChoice ||
+            isAwaitingMonsterEncounter ||
             !isPendingTile;
     }
 }
 
 async function confirmTile() {
-    if (!latestMap || !latestMap.player) return;
+    const target = getPendingDiscoveryTarget();
 
-    const x = latestMap.player.x;
-    const y = latestMap.player.y;
+    if (!target) {
+        showError("No pending tile target to confirm.");
+        return;
+    }
+
+    const x = target.x;
+    const y = target.y;
 
     const r = await fetch(gameApi("/confirm_tile"), {
         method: "POST",
@@ -3256,17 +3777,229 @@ function showMessage(msg, level = "info", title = null) {
         return;
     }
 
-    box.classList.remove("message-info", "message-error");
+    box.classList.remove("message-info", "message-error", "message-waiting");
 
     if (level === "error") {
         box.classList.add("message-error");
         titleEl.textContent = title || "Error";
+    } else if (level === "waiting") {
+        box.classList.add("message-waiting");
+        titleEl.textContent = title || "Waiting for action";
     } else {
         box.classList.add("message-info");
         titleEl.textContent = title || "Info";
     }
 
     content.textContent = msg;
+}
+
+function renderWaitingInstructionMessage() {
+    const waiting = getWaitingInstructionMessage();
+
+    if (!waiting) {
+        return false;
+    }
+
+    showMessage(waiting.message, "waiting", waiting.title);
+    return true;
+}
+
+function getWaitingInstructionMessage() {
+    const turn =
+        latestMap?.turn ||
+        latestPlayers?.turn ||
+        null;
+
+    const mode = turn?.mode || "idle";
+
+    // --------------------------------------------------------
+    // Local frontend targeting states
+    // --------------------------------------------------------
+    if (pendingItemUse) {
+        if (pendingItemUse.effect === "TP_HEAL") {
+            if (pendingItemUse.phase === "select_player") {
+                return {
+                    title: "Waiting for item target",
+                    message: "Healing scroll: select the player who should be teleported/healed."
+                };
+            }
+
+            if (pendingItemUse.phase === "select_fountain") {
+                return {
+                    title: "Waiting for fountain coordinates",
+                    message: "Healing scroll: enter the target fountain coordinates, then press Teleport."
+                };
+            }
+        }
+
+        if (pendingItemUse.effect === "LIFESTEAL") {
+            return {
+                title: "Waiting for item target",
+                message: "Thorn: select another player as the target."
+            };
+        }
+
+        return {
+            title: "Waiting for item use",
+            message: "Finish or cancel the current item-use targeting."
+        };
+    }
+
+    if (pendingTeleportSkillId) {
+        if (pendingTeleportTargetMode === "player") {
+            return {
+                title: "Waiting for teleport target",
+                message: `${teleportSkillLabel(pendingTeleportSkillId)}. Select a target player, then confirm.`
+            };
+        }
+
+        if (pendingTeleportTargetMode === "coordinates") {
+            return {
+                title: "Waiting for teleport coordinates",
+                message: `${teleportSkillLabel(pendingTeleportSkillId)}. Enter target coordinates, then press Teleport.`
+            };
+        }
+
+        return {
+            title: "Waiting for teleport",
+            message: "Finish or cancel the current teleport targeting."
+        };
+    }
+
+    // --------------------------------------------------------
+    // Backend-authoritative turn modes
+    // --------------------------------------------------------
+    if (mode === "awaiting_ko_reaction_choice") {
+        return {
+            title: "Waiting for Warrior teleport",
+            message: "Warrior knockout reaction: choose a fountain coordinate, then press Teleport."
+        };
+    }
+
+    if (mode === "awaiting_monster_choice") {
+        const choice = turn?.pending_monster_choice || null;
+        const hasAlchemist = !!choice?.has_alc_02;
+        const hasOracle = !!choice?.has_ora_02;
+
+        if (hasOracle && hasAlchemist) {
+            return {
+                title: "Waiting for monster choice",
+                message: "Oracle may choose a monster candidate. Alchemist may redraw for -1 HP and 1 Action; after redraw only the newest monster can be confirmed."
+            };
+        }
+
+        if (hasOracle) {
+            return {
+                title: "Waiting for Oracle monster choice",
+                message: "Choose one of the two monster candidates for this room."
+            };
+        }
+
+        if (hasAlchemist) {
+            return {
+                title: "Waiting for Alchemist monster choice",
+                message: "Confirm the current monster candidate, or redraw for -1 HP and 1 Action."
+            };
+        }
+
+        return {
+            title: "Waiting for monster choice",
+            message: "Choose the monster candidate for this room."
+        };
+    }
+
+    if (mode === "awaiting_monster_encounter") {
+        const encounter = turn?.pending_monster_encounter || null;
+
+        if (encounter?.can_skip) {
+            const skillId = encounter.skip_skill_id || "movement skill";
+
+            if (skillId === "skill_pri_02") {
+                return {
+                    title: "Monster encounter",
+                    message: "Warrior Princess may fight, or continue moving by paying -1 HP. If no Actions remain or HP is 1, she must fight."
+                };
+            }
+
+            if (skillId === "skill_thi_02") {
+                return {
+                    title: "Monster encounter",
+                    message: "Thief may fight, or continue moving if Actions remain."
+                };
+            }
+
+            return {
+                title: "Monster encounter",
+                message: "You may fight this monster or continue moving using your movement skill."
+            };
+        }
+
+        return {
+            title: "Monster encounter",
+            message: "You entered a monster tile. You must start the fight."
+        };
+    }
+
+    if (mode === "awaiting_curse_choice") {
+        return {
+            title: "Waiting for curse target",
+            message: "Choose which player receives the curse, then confirm the curse selection."
+        };
+    }
+
+    if (mode === "awaiting_poison_choice") {
+        return {
+            title: "Waiting for poison target",
+            message: "Choose a player, then click one of that player’s skill chips to poison it."
+        };
+    }
+
+    if (mode === "awaiting_heal_choice") {
+        return {
+            title: "Waiting for healing choice",
+            message: "Choose the target HP value for fountain healing, then confirm."
+        };
+    }
+
+    if (mode === "pending_tile") {
+        return {
+            title: "Waiting for tile confirmation",
+            message: "Rotate the discovered tile if needed, then confirm tile placement."
+        };
+    }
+
+    if (mode === "fight") {
+        return {
+            title: "Waiting for fight resolution",
+            message: "Resolve the active fight in the fight window."
+        };
+    }
+
+    if (mode === "item_pickup") {
+        if (
+            turn?.fight_continue_after_item_pickup &&
+            turn?.fight_continue_skill_id === "skill_swo_02"
+        ) {
+            return {
+                title: "Waiting for Swordsman pickup",
+                message: "Swordsman may continue after item pickup. Use the Swordsman continuation skill to proceed."
+            };
+        }
+
+        return {
+            title: "Waiting for item pickup",
+            message: "Finish the current item pickup by choosing what to keep/drop, then end the turn."
+        };
+    }
+
+    if (mode === "retreat") {
+        return {
+            title: "Waiting for retreat",
+            message: "Resolve the retreat action before continuing."
+        };
+    }
+
+    return null;
 }
 
 function showError(msg) {

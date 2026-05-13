@@ -80,6 +80,11 @@ class SkillTeleportMonsterTileRequest(BaseModel):
 class KoReactionFountainChoiceRequest(BaseModel):
     x: int
     y: int
+    
+    
+class ConfirmMonsterCandidateRequest(BaseModel):
+    candidate_index: int = Field(..., ge=0)
+    
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
@@ -470,7 +475,13 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     )
     def move_player(request: MoveRequest):
         try:
-            return graph.move(request.direction, request.is_mage)
+            return graph.move(
+                request.direction,
+                request.is_mage,
+                reveal_kind=request.reveal_kind,
+                tile_source=request.tile_source,
+                pocket_tile_index=request.pocket_tile_index,
+            )
         except ValueError as e:
             msg = str(e)
             code = 400 if msg != "Current tile not found." else 404
@@ -500,6 +511,28 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    @router.post(
+        "/monster/confirm_candidate",
+        summary="Confirm monster candidate during room population",
+        description="Confirms one pending monster candidate and continues the reveal pipeline.",
+    )
+    def confirm_monster_candidate(req: ConfirmMonsterCandidateRequest):
+        try:
+            return graph.confirm_monster_candidate(req.candidate_index)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/monster/redraw_candidate",
+        summary="Use Alchemist monster redraw",
+        description="Consumes 1 Action and 1 HP to draw a new monster candidate. Only the newest candidate is confirmable.",
+    )
+    def redraw_monster_candidate():
+        try:
+            return graph.redraw_monster_candidate()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
     @router.post(
         "/teleport",
         summary="Teleport to target coordinates",
@@ -574,6 +607,20 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def select_pocket_tile(req: SelectPocketTileRequest):
         return graph.select_pocket_tile(req.index)
 
+    @router.post(
+        "/skills/sco_02/pull_tile",
+        summary="Use Scout tile pull",
+        description=(
+                "Consumes 1 Action to draw one tile from the drawing pile into the active Scout's disclosed pocket. "
+                "Hotseat mode exposes the pocket contents to all players."
+        ),
+    )
+    def scout_pull_tile():
+        try:
+            return graph.scout_pull_tile()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
     @router.post(
         "/pocket/place",
         summary="Place selected pocket tile (stub)",

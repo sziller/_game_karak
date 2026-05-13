@@ -161,6 +161,13 @@ class Player:
     # =====================================================
     inventory: Inventory = field(default_factory=Inventory)
 
+    # Scout / skill_sco_02 tile pocket.
+    # Hotseat mode:
+    # - fully disclosed in serialization.
+    # Future distributed mode:
+    # - serialization may hide contents from non-owner viewers.
+    scout_pocket_tiles: List[Dict[str, Any]] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         if self.player_id < 0:
             raise ValueError("player_id must be >= 0")
@@ -473,6 +480,51 @@ class Player:
         }
         return mapping.get(item_type) == slot_group
     
+    # --- Scout handlers
+
+    def scout_pocket_count(self) -> int:
+        return len(self.scout_pocket_tiles)
+
+    def can_store_scout_tile(self, capacity: int) -> bool:
+        return len(self.scout_pocket_tiles) < capacity
+
+    def store_scout_tile(self, tile_data: Dict[str, Any], capacity: int) -> Dict[str, Any]:
+        """
+        Store one unplaced tile archetype in the Scout pocket.
+
+        IMPORTANT:
+        - No skill validation here.
+        - No Action spending here.
+        - Engine owns all game-rule validation.
+        """
+        if len(self.scout_pocket_tiles) >= capacity:
+            return {
+                "stored": False,
+                "reason": "scout_pocket_full",
+                "capacity": capacity,
+                "count": len(self.scout_pocket_tiles),
+            }
+
+        self.scout_pocket_tiles.append(dict(tile_data))
+
+        return {
+            "stored": True,
+            "index": len(self.scout_pocket_tiles) - 1,
+            "capacity": capacity,
+            "count": len(self.scout_pocket_tiles),
+        }
+
+    def pop_scout_tile(self, index: int) -> Dict[str, Any]:
+        """
+        Remove and return one tile archetype from the Scout pocket.
+
+        Used later by the reveal/discovery pipeline.
+        """
+        if not (0 <= index < len(self.scout_pocket_tiles)):
+            raise IndexError("Invalid scout pocket tile index.")
+
+        return self.scout_pocket_tiles.pop(index)
+    
     # =====================================================
     # Serialization (BASE VIEW ONLY)
     # =====================================================
@@ -508,7 +560,22 @@ class Player:
                     "weapon_slots": list(self.inventory.weapon_slots),
                     "scroll_slots": list(self.inventory.scroll_slots),
                     "key_slots": list(self.inventory.key_slots),
-                    "treasure": self.inventory.treasure}
+                    "treasure": self.inventory.treasure},
+                "scout_pocket": {
+                    "count": len(self.scout_pocket_tiles),
+                    "capacity": 3,
+                    "tiles": [
+                        {
+                            "index": i,
+                            "archetype_id": t.get("archetype_id"),
+                            "tile_type": t.get("tile_type"),
+                            "img_base": t.get("img_base"),
+                            "feature": t.get("feature"),
+                            "doors": dict(t.get("doors", {})),
+                        }
+                        for i, t in enumerate(self.scout_pocket_tiles)
+                    ],
+                }
                 }
 
 

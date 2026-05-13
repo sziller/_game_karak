@@ -15,9 +15,16 @@ RotationDir = Literal["left", "right"]
 # Requests
 # ============================================================
 
+
 class MoveRequest(BaseModel):
-    direction: Direction
+    direction: Literal["N", "S", "E", "W"]
     is_mage: bool = False
+
+    # New reveal/discovery controls.
+    # Used only when moving into hidden space.
+    reveal_kind: Literal["discover", "peek"] = "discover"
+    tile_source: Literal["pile", "pocket"] = "pile"
+    pocket_tile_index: Optional[int] = Field(default=None, ge=0)
 
 
 class TeleportRequest(BaseModel):

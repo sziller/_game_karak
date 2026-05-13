@@ -27,8 +27,9 @@ DIR_ORDER: tuple[DIRECTION, DIRECTION, DIRECTION, DIRECTION] = ("N", "E", "S", "
 ROOM_X_KARAK_LIMIT = 5
 CURSE_ROOM_RELOCATE_CHANCE = 0.5
 TeleportKind: TypeAlias = Literal["portal", "skill_bea_02", "skill_wlk_02", "skill_bat_02"]
-
 ActionPrice: TypeAlias = int | Literal["all", "remaining"]
+RevealKind: TypeAlias = Literal["discover", "peek"]
+TileSource: TypeAlias = Literal["pile", "pocket"]
 
 def direction_to_delta(direction: DIRECTION) -> Tuple[int, int]:
     return {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0)}[direction]
@@ -125,16 +126,20 @@ class TileNode:
         }
 
 
-TurnMode = Literal[ "idle",
-                    "pending_tile",
-                    "fight",
-                    "awaiting_curse_choice",
-                    "awaiting_poison_choice",
-                    "item_pickup",
-                    "retreat",
-                    "awaiting_turn_end_commit",
-                    "awaiting_heal_choice",
-                    "awaiting_ko_reaction_choice"]
+TurnMode = Literal[
+    "idle",
+    "pending_tile",
+    "awaiting_monster_choice",
+    "awaiting_monster_encounter",
+    "fight",
+    "awaiting_curse_choice",
+    "awaiting_poison_choice",
+    "item_pickup",
+    "retreat",
+    "awaiting_turn_end_commit",
+    "awaiting_heal_choice",
+    "awaiting_ko_reaction_choice",
+]
 
 @dataclass
 class TurnState:
@@ -154,6 +159,43 @@ class TurnState:
     pending_curse_choice: bool = False
     pending_poison_choice: Optional[dict[str, Any]] = None
     pending_ko_reaction: Optional[dict[str, Any]] = None
+
+    # Pending tile reveal/discovery pipeline.
+    # Used while mode == "pending_tile".
+    #
+    # Shape:
+    # {
+    #     "origin_x": int,
+    #     "origin_y": int,
+    #     "target_x": int,
+    #     "target_y": int,
+    #     "entry_direction": "N"|"S"|"E"|"W",
+    #     "required_entry_door": "N"|"S"|"E"|"W",
+    #     "reveal_kind": "discover"|"peek",
+    #     "tile_source": "pile"|"pocket",
+    #     "pocket_tile_index": int|None,
+    #     "will_enter_after_confirm": bool,
+    # }
+    pending_discovery: Optional[dict[str, Any]] = None
+    # Pending monster population pipeline.
+    # Used after a room tile has been confirmed/committed/rotated,
+    # but before Discover-entry or Peek-completion is resolved.
+    pending_monster_choice: Optional[dict[str, Any]] = None
+    # Pending mandatory monster encounter after active player enters a monster tile.
+    # Used while mode == "awaiting_monster_encounter".
+    #
+    # Shape:
+    # {
+    #     "tile_x": int,
+    #     "tile_y": int,
+    #     "monster_id": str,
+    #     "entered_by": str,
+    #     "can_skip": bool,
+    #     "skip_skill_id": str | None,
+    #     "skip_cost_hp": int,
+    #     "must_fight_reason": str | None,
+    # }
+    pending_monster_encounter: Optional[dict[str, Any]] = None
     # Item-use lock:
     # Once a fight is entered, active costless items are blocked for the rest of the turn,
     # unless the turn explicitly continues after combat by a continuation rule
@@ -194,6 +236,9 @@ class TurnState:
                 "pending_curse_choice": self.pending_curse_choice,
                 "pending_poison_choice": self.pending_poison_choice,
                 "pending_ko_reaction": self.pending_ko_reaction,
+                "pending_discovery": self.pending_discovery,
+                "pending_monster_choice": self.pending_monster_choice,
+                "pending_monster_encounter": self.pending_monster_encounter,
                 "item_use_locked_by_combat": self.item_use_locked_by_combat,
                 "last_valid_safe_tile": self.last_valid_safe_tile,
                 "ground_snapshot_item_id": self.ground_snapshot_item_id,
@@ -219,7 +264,7 @@ class RuntimeAction:
     does_end_turn: bool = False
     kind: str = "runtime_action"
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         raise NotImplementedError
 
 
@@ -255,6 +300,11 @@ class MoveAction(Action):
     direction: DIRECTION
     is_mage: bool = False
 
+    # Used only when target space is hidden.
+    reveal_kind: RevealKind = "discover"
+    tile_source: TileSource = "pile"
+    pocket_tile_index: Optional[int] = None
+
     def execute(self, graph: "DungeonGraph") -> dict:
         return graph._execute_move_action(self)
 
@@ -272,13 +322,13 @@ class TeleportAction(Action):
     
 @dataclass
 class StartFightFreeAction(FreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_start_fight_free_action(self)
 
 
 @dataclass
 class TossFightFreeAction(FreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_toss_fight_free_action(self)
 
 
@@ -286,13 +336,13 @@ class TossFightFreeAction(FreeAction):
 class ToggleFightScrollFreeAction(FreeAction):
     slot_id: str
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_toggle_fight_scroll_free_action(self)
 
 
 @dataclass
 class ResolveFightFreeAction(FreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_resolve_fight_free_action(self)
 
 
@@ -300,7 +350,7 @@ class ResolveFightFreeAction(FreeAction):
 class CurseFreeAction(FreeAction):
     target_player_id: int
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_curse_free_action(self)
     
     
@@ -309,13 +359,13 @@ class PoisonSkillFreeAction(FreeAction):
     target_player_id: int
     target_skill_id: str
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_poison_skill_free_action(self)
     
     
 @dataclass
 class CombatFreeAction(FreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_combat_free_action(self)
 
 
@@ -323,19 +373,19 @@ class CombatFreeAction(FreeAction):
 class HealingTurnEndingFreeAction(TurnEndingFreeAction):
     target_hp: Optional[int] = None
     
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_healing_turn_ending_free_action(self)
 
 
 @dataclass
 class RetreatTurnEndingFreeAction(TurnEndingFreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_retreat_turn_ending_free_action(self)
 
 
 @dataclass
 class ItemPickUpTurnEndingFreeAction(TurnEndingFreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_itempickup_turn_ending_free_action(self)
 
 
@@ -344,20 +394,20 @@ class ConfirmTileFreeAction(FreeAction):
     x: int
     y: int
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_confirm_tile_free_action(self)
 
 
 @dataclass
 class EndTurnTurnEndingFreeAction(TurnEndingFreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_end_turn_turn_ending_free_action(self)
 
 @dataclass
 class ToggleSkillUiFreeAction(FreeAction):
     skill_id: str
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_toggle_skill_ui_free_action(self)
 
 
@@ -366,13 +416,13 @@ class SetSkillValueUiFreeAction(FreeAction):
     skill_id: str
     value: int
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_set_skill_value_ui_free_action(self)
 
 
 @dataclass
 class ContinueAfterItemPickupFreeAction(FreeAction):
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_continue_after_itempickup_free_action(self)
     
     
@@ -381,7 +431,7 @@ class ResolveKoReactionFreeAction(FreeAction):
     target_x: int
     target_y: int
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_resolve_ko_reaction_free_action(self)
 
 
@@ -393,8 +443,29 @@ class UseInventoryItemAction(FreeAction):
     target_x: Optional[int] = None
     target_y: Optional[int] = None
 
-    def execute(self, graph: "DungeonGraph") -> dict:
+    def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_use_inventory_item_action(self)
+    
+    
+@dataclass
+class ScoutPullTileAction(Action):
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_scout_pull_tile_action(self)
+    
+    
+@dataclass
+class ConfirmMonsterCandidateFreeAction(FreeAction):
+    candidate_index: int
+
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_confirm_monster_candidate_free_action(self)
+
+
+@dataclass
+class RedrawMonsterCandidateAction(Action):
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_redraw_monster_candidate_action(self)
+    
 # --------------------------
 # Engine
 # --------------------------
@@ -496,6 +567,410 @@ class DungeonGraph:
                 neighbor.passable_neighbors[opp] = passable
             else:
                 tile.passable_neighbors[dir_] = False
+
+    def _make_tile_node_from_archetype(
+            self,
+            *,
+            archetype: dict[str, Any],
+            x: int,
+            y: int,
+            entry_direction: DIRECTION,
+    ) -> TileNode:
+        """
+        Convert an unplaced tile archetype into a runtime TileNode.
+
+        Important:
+        - Does NOT populate the tile with a monster.
+        - Rotation is chosen only to guarantee the entry door.
+        - Room population happens after the tile is confirmed/locked.
+        """
+        archetype_id: str = archetype["archetype_id"]
+        tile_type: str = archetype["tile_type"]
+        img_base: str = archetype["img_base"]
+        feature: Optional[str] = archetype.get("feature", None)
+
+        canonical_doors = ensure_doors_typed(archetype["doors"])
+
+        rotation_q = 0
+        required_entry = opposite(entry_direction)
+
+        for _ in range(4):
+            doors_try = rotate_doors_clockwise(canonical_doors, rotation_q)
+            if doors_try.get(required_entry, False):
+                break
+            rotation_q = (rotation_q + 1) % 4
+
+        return TileNode(
+            x=x,
+            y=y,
+            archetype_id=archetype_id,
+            img_base=img_base,
+            tile_type=tile_type,  # type: ignore[arg-type]
+            doors_base=canonical_doors,
+            rotation_q=rotation_q,
+            feature=feature,
+        )
+
+    def _draw_random_tile_from_pool(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not self.tile_pool:
+            raise ValueError("No more tiles available.")
+
+        idx = random.randrange(len(self.tile_pool))
+        tile_data = self.tile_pool.pop(idx)
+
+        return tile_data, {
+            "tile_source": "pile",
+            "tile_pool_index": idx,
+            "pocket_tile_index": None,
+            "fallback": False,
+        }
+
+    def _draw_or_select_reveal_tile_archetype(
+            self,
+            *,
+            active: Player,
+            tile_source: TileSource,
+            pocket_tile_index: Optional[int],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """
+        Resolve tile source for a reveal/discovery action.
+
+        Important:
+        - Scout pocket selection is a preference, not a hard lock.
+        - If pocket use is illegal because skill_sco_02 is blocked, fall back to pile.
+        """
+        if tile_source == "pile":
+            return self._draw_random_tile_from_pool()
+
+        if tile_source == "pocket":
+            fallback_reason = None
+
+            if pocket_tile_index is None:
+                fallback_reason = "missing_pocket_tile_index"
+            elif not active.is_skill_active("skill_sco_02"):
+                fallback_reason = "skill_sco_02_blocked"
+            else:
+                try:
+                    tile_data = active.pop_scout_tile(int(pocket_tile_index))
+                    return tile_data, {
+                        "tile_source": "pocket",
+                        "tile_pool_index": None,
+                        "pocket_tile_index": int(pocket_tile_index),
+                        "fallback": False,
+                    }
+                except IndexError:
+                    fallback_reason = "invalid_pocket_tile_index"
+
+            # Fallback to normal draw from pile.
+            tile_data, source_info = self._draw_random_tile_from_pool()
+            source_info.update({
+                "fallback": True,
+                "fallback_from": "pocket",
+                "fallback_reason": fallback_reason,
+                "requested_pocket_tile_index": pocket_tile_index,
+            })
+            return tile_data, source_info
+
+        raise ValueError(f"Unsupported tile_source: {tile_source}")
+
+    def serialize_monster_archetype_for_ui(
+            self,
+            monster_data: dict[str, Any],
+            *,
+            index: Optional[int] = None,
+            confirmable: bool = True,
+    ) -> dict:
+        """
+        Serialize a drawn monster candidate for the encounter UI.
+
+        Candidates are already popped from self.monster_pool while pending.
+        """
+        row = {
+            "monster_id": monster_data.get("monster_id"),
+            "strength": monster_data.get("strength"),
+            "loot_id": monster_data.get("loot_id"),
+            "img_file": monster_data.get("img_file"),
+            "sort": monster_data.get("sort"),
+            "confirmable": confirmable,
+            "image_path": f"/static/media/tile-content/{monster_data.get('monster_id')}.png",
+        }
+
+        if index is not None:
+            row["index"] = index
+
+        return row
+
+    def _return_monster_candidates_to_pool(
+            self,
+            monsters: list[dict[str, Any]],
+    ) -> None:
+        """
+        Return unselected monster candidates to the bag.
+
+        The bag is randomized after return to avoid predictable append-order effects.
+        """
+        if not monsters:
+            return
+
+        self.monster_pool.extend(monsters)
+        random.shuffle(self.monster_pool)
+
+    def _draw_monster_candidate_from_pool(self) -> dict[str, Any]:
+        if not self.monster_pool:
+            raise ValueError("No more monsters available.")
+
+        idx = random.randrange(len(self.monster_pool))
+        monster = self.monster_pool.pop(idx)
+
+        return dict(monster)
+
+    def _get_pending_monster_choice_tile(self) -> TileNode:
+        turn = self.ensure_turn_active()
+
+        choice = turn.pending_monster_choice
+        if not choice:
+            raise ValueError("No pending monster choice.")
+
+        x = int(choice["target_x"])
+        y = int(choice["target_y"])
+
+        tile = self.get_tile(x, y)
+        if tile is None:
+            raise ValueError("Pending monster choice tile is not committed.")
+
+        return tile
+
+    def _execute_confirm_monster_candidate_free_action(
+            self,
+            action: ConfirmMonsterCandidateFreeAction,
+    ) -> dict:
+        """
+        Confirm a pending monster candidate and continue reveal.
+
+        Oracle:
+        - initially any of the 2 candidates may be confirmed.
+
+        Alchemist:
+        - after redraw, only the newest candidate is confirmable.
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "awaiting_monster_choice":
+            raise ValueError(f"Cannot confirm monster while turn mode is '{turn.mode}'.")
+
+        choice = turn.pending_monster_choice
+        if not choice:
+            raise ValueError("No pending monster choice.")
+
+        candidates = list(choice.get("candidates") or [])
+        confirmable_indices = set(int(i) for i in choice.get("confirmable_indices") or [])
+
+        candidate_index = int(action.candidate_index)
+
+        if candidate_index not in confirmable_indices:
+            raise ValueError("This monster candidate is not confirmable.")
+
+        if not (0 <= candidate_index < len(candidates)):
+            raise ValueError("Invalid monster candidate index.")
+
+        tile = self._get_pending_monster_choice_tile()
+
+        selected = candidates[candidate_index]
+        unselected = [
+            m for i, m in enumerate(candidates)
+            if i != candidate_index
+        ]
+
+        tile.monster_id = selected["monster_id"]
+
+        self._return_monster_candidates_to_pool(unselected)
+
+        continuation = self._continue_after_tile_population(tile=tile)
+
+        return {
+            "ok": True,
+            "status": "monster_candidate_confirmed",
+            "action_kind": action.kind,
+            "selected_index": candidate_index,
+            "selected_monster": self.serialize_monster_archetype_for_ui(
+                selected,
+                index=candidate_index,
+                confirmable=True,
+            ),
+            "returned_candidates": [
+                self.serialize_monster_archetype_for_ui(m, index=i, confirmable=False)
+                for i, m in enumerate(unselected)
+            ],
+            "tile": tile.to_dict(),
+            "continuation": continuation,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+
+    def _execute_redraw_monster_candidate_action(
+            self,
+            action: RedrawMonsterCandidateAction,
+    ) -> dict:
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "awaiting_monster_choice":
+            raise ValueError(f"Cannot redraw monster while turn mode is '{turn.mode}'.")
+
+        choice = turn.pending_monster_choice
+        if not choice:
+            raise ValueError("No pending monster choice.")
+
+        if not active.is_skill_active("skill_alc_02"):
+            raise ValueError("Monster redraw requires active skill_alc_02.")
+
+        if not choice.get("has_alc_02"):
+            raise ValueError("This pending monster choice was not created with skill_alc_02 available.")
+
+        if not self.monster_pool:
+            raise ValueError("No more monsters available.")
+
+        tile = self._get_pending_monster_choice_tile()
+
+        # Redraw costs one Action.
+        self.spend_action(action.price)
+
+        # Draw newest candidate first, because if the HP cost knocks the player out,
+        # this newest candidate is the one that must be taken.
+        new_candidate = self._draw_monster_candidate_from_pool()
+
+        candidates = list(choice.get("candidates") or [])
+        candidates.append(new_candidate)
+
+        newest_index = len(candidates) - 1
+
+        choice["candidates"] = candidates
+        choice["latest_index"] = newest_index
+        choice["redraw_count"] = int(choice.get("redraw_count") or 0) + 1
+
+        # After Alchemist redraw, only newest candidate may be confirmed.
+        choice["confirmable_indices"] = [newest_index]
+
+        hp_result = self.apply_hp_delta_to_player(
+            player=active,
+            delta=-1,
+            source="skill_alc_02_redraw",
+        )
+
+        ko_reaction = hp_result.get("ko_reaction")
+
+        # --------------------------------------------------
+        # If Alchemist drops unconscious:
+        # - newest candidate is forced onto the tile
+        # - all older candidates return to the pool
+        # - player must not enter the tile this turn
+        # --------------------------------------------------
+        if active.hp <= 0:
+            selected = new_candidate
+
+            unselected = [
+                m for i, m in enumerate(candidates)
+                if i != newest_index
+            ]
+
+            tile.monster_id = selected["monster_id"]
+            self._return_monster_candidates_to_pool(unselected)
+
+            # Prevent Discover-entry after KO.
+            if turn.pending_discovery:
+                turn.pending_discovery["will_enter_after_confirm"] = False
+                turn.pending_discovery["entry_cancelled_reason"] = "active_player_unconscious_after_skill_alc_02"
+
+            # Clear monster choice now; tile is populated.
+            turn.pending_monster_choice = None
+
+            # Clear pending discovery too: reveal is complete, but player does not enter.
+            turn.pending_discovery = None
+
+            # If Warrior KO reaction was created, its mode was already set by apply_hp_delta_to_player().
+            # Preserve that. Otherwise enter turn-end commit.
+            if ko_reaction:
+                return {
+                    "ok": True,
+                    "status": "alchemist_redraw_auto_confirmed_awaiting_ko_reaction",
+                    "action_kind": action.kind,
+                    "redraw": {
+                        "newest_index": newest_index,
+                        "selected_monster": self.serialize_monster_archetype_for_ui(
+                            selected,
+                            index=newest_index,
+                            confirmable=True,
+                        ),
+                        "forced": True,
+                        "reason": "active_player_unconscious",
+                    },
+                    "hp_result": hp_result,
+                    "ko_reaction": ko_reaction,
+                    "tile": tile.to_dict(),
+                    "turn": self.serialize_turn_state(),
+                    "active_player": self.serialize_active_player(),
+                    "players": self.serialize_players(),
+                }
+
+            turn.pending_turn_end_cause = "skill_alc_02_unconscious"
+            self.set_turn_mode("awaiting_turn_end_commit")
+
+            finalize_result = self._finalize_current_turn_and_advance(
+                end_cause="skill_alc_02_unconscious"
+            )
+
+            finalize_result["alchemist_redraw"] = {
+                "newest_index": newest_index,
+                "selected_monster": self.serialize_monster_archetype_for_ui(
+                    selected,
+                    index=newest_index,
+                    confirmable=True,
+                ),
+                "forced": True,
+                "reason": "active_player_unconscious",
+            }
+            finalize_result["hp_result"] = hp_result
+            finalize_result["tile"] = tile.to_dict()
+
+            return finalize_result
+
+        # Normal redraw: still awaiting choice.
+        return {
+            "ok": True,
+            "status": "monster_candidate_redrawn",
+            "action_kind": action.kind,
+            "redraw": {
+                "newest_index": newest_index,
+                "redraw_count": choice["redraw_count"],
+                "new_candidate": self.serialize_monster_archetype_for_ui(
+                    new_candidate,
+                    index=newest_index,
+                    confirmable=True,
+                ),
+                "candidates": [
+                    self.serialize_monster_archetype_for_ui(
+                        m,
+                        index=i,
+                        confirmable=i == newest_index,
+                    )
+                    for i, m in enumerate(candidates)
+                ],
+                "confirmable_indices": [newest_index],
+            },
+            "hp_result": hp_result,
+            "tile": tile.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+
+    def confirm_monster_candidate(self, candidate_index: int) -> dict:
+        return self.execute_runtime_action(
+            ConfirmMonsterCandidateFreeAction(candidate_index=candidate_index)
+        )
+
+    def redraw_monster_candidate(self) -> dict:
+        return self.execute_runtime_action(RedrawMonsterCandidateAction())
     
     def set_active_player_by_index(self, player_index: int) -> dict:
         if not self.players:
@@ -526,8 +1001,35 @@ class DungeonGraph:
                 }
 
         raise ValueError("Player not found.")
+
+    def get_scout_pocket_capacity(self) -> int:
+        """
+        Return configured Scout pocket capacity.
+
+        Default rule:
+        - skill_sco_02 may store up to 3 private/disclosed tiles.
+        """
+        return int(
+            self.rules_skill
+            .get("skill_sco_02", {})
+            .get("scout_pocket_capacity", 3)
+        )
     
     # ---------- Serialization ----------
+    def serialize_tile_archetype_for_ui(self, tile_data: dict[str, Any], *, index: Optional[int] = None) -> dict:
+        row = {
+            "archetype_id": tile_data.get("archetype_id"),
+            "tile_type": tile_data.get("tile_type"),
+            "img_base": tile_data.get("img_base"),
+            "feature": tile_data.get("feature"),
+            "doors": dict(tile_data.get("doors", {})),
+        }
+
+        if index is not None:
+            row["index"] = index
+
+        return row
+
     def serialize(self) -> dict:
         self._sync_compat_player_position()
         tiles = {}
@@ -537,6 +1039,17 @@ class DungeonGraph:
 
         for (x, y), tile in self.pending_tiles.items():
             tiles[f"{x},{y}"] = tile.to_dict()
+
+        active = self.get_active_player()
+
+        active_scout_pocket = {
+            "capacity": self.get_scout_pocket_capacity(),
+            "count": active.scout_pocket_count() if active else 0,
+            "tiles": [
+                self.serialize_tile_archetype_for_ui(t, index=i)
+                for i, t in enumerate(active.scout_pocket_tiles)
+            ] if active else [],
+        }
 
         return {
             "tiles": tiles,
@@ -549,7 +1062,13 @@ class DungeonGraph:
             "last_karak_event": self.last_karak_event,
             "last_room_x_event": self.last_room_x_event,
             "turn": self.serialize_turn_state(),
-            # 🔍 diagnostics (safe, read-only)
+
+            # Scout pocket, active-player view.
+            # Hotseat mode: fully disclosed.
+            "active_scout_pocket": active_scout_pocket,
+
+            # Keep this old diagnostic temporarily if the frontend still reads it.
+            # It can be removed later.
             "tile_pocket": [
                 {
                     "archetype_id": t["archetype_id"],
@@ -559,6 +1078,7 @@ class DungeonGraph:
                 }
                 for t in getattr(self, "tile_pocket", [])
             ],
+
             "monster_choices": list(getattr(self, "monster_choices", [])),
         }
 
@@ -745,33 +1265,66 @@ class DungeonGraph:
         }
     """
 
-    def move(self, direction: DIRECTION, is_mage: bool = False) -> dict:
+    def move(
+            self,
+            direction: DIRECTION,
+            is_mage: bool = False,
+            reveal_kind: RevealKind = "discover",
+            tile_source: TileSource = "pile",
+            pocket_tile_index: Optional[int] = None,
+    ) -> dict:
         """
         Compatibility wrapper.
-        Later endpoints may directly instantiate MoveAction.
+
+        For discovered targets:
+        - behaves as normal Move.
+
+        For hidden targets:
+        - reveal_kind controls Discover vs Peek.
+        - tile_source controls pile vs Scout pocket.
         """
-        return self.execute_runtime_action(MoveAction(direction=direction, is_mage=is_mage))
+        return self.execute_runtime_action(
+            MoveAction(
+                direction=direction,
+                is_mage=is_mage,
+                reveal_kind=reveal_kind,
+                tile_source=tile_source,
+                pocket_tile_index=pocket_tile_index,
+            )
+        )
 
     def _execute_move_action(self, action: MoveAction) -> dict:
         """
         Backend implementation for MoveAction.
 
-        Current Phase-3 semantics:
-        - requires an active turn owned by the active player
-        - only allowed in turn mode = "idle"
-        - consumes 1 Action on successful move/discovery attempt
-        - moving onto a discovered tile keeps mode = "idle"
-        - moving into undiscovered space creates a pending tile and sets mode = "pending_tile"
+        Modes:
+        - idle:
+            normal move / reveal
+        - awaiting_monster_encounter:
+            movement is allowed only if skill_thi_02 or skill_pri_02 may skip.
 
-        skill_wiz_02:
-        - allows passing through walls to an already discovered adjacent tile
-        - does NOT remove the normal movement rules for exploration
+        Discovered target:
+        - consumes 1 Action
+        - player enters immediately
+        - if target has monster: enter awaiting_monster_encounter
+
+        Hidden target:
+        - creates pending tile reveal
+        - consumes 1 Action
+        - player does NOT move onto pending tile yet
         """
         self.ensure_entrance()
 
         turn, active = self.ensure_active_player_owns_turn()
 
-        if turn.mode != "idle":
+        skip_result = None
+
+        if turn.mode == "awaiting_monster_encounter":
+            skip_result = self._validate_and_apply_monster_skip_before_move()
+            # helper returns mode to idle so the normal movement code can continue
+            turn, active = self.ensure_active_player_owns_turn()
+
+        elif turn.mode != "idle":
             raise ValueError(f"Cannot move while turn mode is '{turn.mode}'.")
 
         current_x = active.x
@@ -794,10 +1347,11 @@ class DungeonGraph:
         has_ability_blink = active.is_skill_active("skill_wiz_02")
         can_blink = bool(action.is_mage or has_ability_blink)
 
-        # --------------------------------------------------
-        # Case 1: target is already discovered
-        # --------------------------------------------------
+        # ======================================================
+        # Case 1: target is already discovered / committed
+        # ======================================================
         target = self.get_tile(nx, ny)
+
         if target is not None:
             normal_pass = bool(current.passable_neighbors.get(action.direction, False))
             blink_pass = bool(can_blink)
@@ -805,6 +1359,9 @@ class DungeonGraph:
             if not (normal_pass or blink_pass):
                 raise ValueError("Path blocked, cannot move.")
 
+            # Record current tile as retreat-safe only if it is safe.
+            # If we are leaving a monster tile via skill_thi_02/skill_pri_02,
+            # this will intentionally NOT overwrite last_valid_safe_tile.
             self.register_last_valid_safe_tile_from_active_player()
             self.spend_action(action.price)
 
@@ -819,112 +1376,185 @@ class DungeonGraph:
                 is_turn_owner=True,
             )
 
+            monster_encounter = None
+
+            if self._tile_has_active_monster(target):
+                monster_encounter = self._maybe_enter_monster_encounter_after_entry(
+                    player=active,
+                    tile=target,
+                    entry_cause="move",
+                )
+            else:
+                # Empty tile, chest tile, future escape gate, etc. are retreat-safe.
+                self.register_tile_as_last_valid_safe_if_possible(tile=target)
+                self.set_turn_mode("idle")
+
             self.last_move_direction = action.direction
-            self.set_turn_mode("idle")
+            turn.pending_discovery = None
+
             self.snapshot_active_ground_item()
             self.current_fight_state = None
 
             return {
                 "ok": True,
-                "status": "moved",
+                "status": (
+                    "moved_awaiting_monster_encounter"
+                    if monster_encounter
+                    else "moved"
+                ),
                 "action_kind": action.kind,
                 "movement_mode": "blink" if (blink_pass and not normal_pass) else "normal",
+                "skip_result": skip_result,
                 "new_position": {"x": nx, "y": ny},
                 "tile": target.to_dict(),
                 "entry": entry_result,
+                "monster_encounter": monster_encounter,
                 "turn": self.serialize_turn_state(),
+                "active_player": self.serialize_active_player(),
+                "players": self.serialize_players(),
             }
 
-        # --------------------------------------------------
-        # Case 2: target is not discovered
-        # --------------------------------------------------
-        # Here wizard must obey normal exploration rules.
+        # ======================================================
+        # From here: target is hidden / not committed
+        # ======================================================
+        # Wizard blink does NOT allow exploring through walls.
         if not current.doors.get(action.direction, False):
             raise ValueError("Cannot move: wall blocks exploration.")
 
+        # Peek is only valid when skill_ran_02 was announced/toggled.
+        if action.reveal_kind == "peek":
+            if not active.is_skill_active("skill_ran_02"):
+                raise ValueError("Peek requires active skill_ran_02.")
+
+            if "skill_ran_02" not in turn.selected_skill_ids:
+                raise ValueError("Peek requires skill_ran_02 to be selected before the Action.")
+
+        # ======================================================
+        # Case 2: target already has a pending tile
+        # ======================================================
         if (nx, ny) in self.pending_tiles:
             pending = self.pending_tiles[(nx, ny)]
 
             self.register_last_valid_safe_tile_from_active_player()
             self.spend_action(action.price)
 
-            active.x = nx
-            active.y = ny
-            self._sync_compat_player_position()
+            if "skill_ran_02" in turn.selected_skill_ids:
+                turn.selected_skill_ids.discard("skill_ran_02")
+
+            turn.pending_discovery = {
+                "origin_x": current_x,
+                "origin_y": current_y,
+                "target_x": nx,
+                "target_y": ny,
+                "entry_direction": action.direction,
+                "required_entry_door": opposite(action.direction),
+                "reveal_kind": action.reveal_kind,
+
+                "tile_source": "existing_pending",
+                "requested_tile_source": action.tile_source,
+                "pocket_tile_index": None,
+                "requested_pocket_tile_index": action.pocket_tile_index,
+                "tile_source_fallback": False,
+                "tile_source_fallback_reason": None,
+
+                "will_enter_after_confirm": action.reveal_kind == "discover",
+            }
 
             self.last_move_direction = action.direction
             self.set_turn_mode("pending_tile")
             self.current_fight_state = None
+            self._sync_compat_player_position()
 
             return {
                 "ok": True,
-                "status": "moved_to_pending_tile",
+                "status": "moved_to_existing_pending_tile",
                 "action_kind": action.kind,
-                "new_position": {"x": nx, "y": ny},
+                "reveal_kind": action.reveal_kind,
+                "skip_result": skip_result,
+                "tile_source": "existing_pending",
+                "requested_tile_source": action.tile_source,
+                "tile_source_fallback": False,
+                "tile_source_fallback_reason": None,
+                "origin_position": {"x": current_x, "y": current_y},
+                "target_position": {"x": nx, "y": ny},
+                "new_position": {"x": active.x, "y": active.y},
                 "tile": pending.to_dict(),
                 "pending": True,
+                "pending_discovery": turn.pending_discovery,
                 "turn": self.serialize_turn_state(),
+                "active_player": self.serialize_active_player(),
+                "players": self.serialize_players(),
             }
 
-        if not self.tile_pool:
-            raise ValueError("No more tiles available.")
-
-        idx = random.randrange(len(self.tile_pool))
-        chosen = self.tile_pool.pop(idx)
-
-        archetype_id: str = chosen["archetype_id"]
-        tile_type: str = chosen["tile_type"]
-        img_base: str = chosen["img_base"]
-        feature: Optional[str] = chosen.get("feature", None)
-
-        canonical_doors = ensure_doors_typed(chosen["doors"])
-
-        rotation_q = 0
-        backward = opposite(action.direction)
-
-        for _ in range(4):
-            doors_try = rotate_doors_clockwise(canonical_doors, rotation_q)
-            if doors_try.get(backward, False):
-                break
-            rotation_q = (rotation_q + 1) % 4
-
-        new_tile = TileNode(
-            x=nx,
-            y=ny,
-            archetype_id=archetype_id,
-            img_base=img_base,
-            tile_type=tile_type,  # type: ignore[arg-type]
-            doors_base=canonical_doors,
-            rotation_q=rotation_q,
-            feature=feature,
+        # ======================================================
+        # Case 3: target is hidden space -> create pending reveal
+        # ======================================================
+        chosen, source_info = self._draw_or_select_reveal_tile_archetype(
+            active=active,
+            tile_source=action.tile_source,
+            pocket_tile_index=action.pocket_tile_index,
         )
 
-        if new_tile.tile_type == "room" and self.monster_pool:
-            m_idx = random.randrange(len(self.monster_pool))
-            m = self.monster_pool.pop(m_idx)
-            new_tile.monster_id = m["monster_id"]
+        new_tile = self._make_tile_node_from_archetype(
+            archetype=chosen,
+            x=nx,
+            y=ny,
+            entry_direction=action.direction,
+        )
 
         self.register_last_valid_safe_tile_from_active_player()
         self.spend_action(action.price)
 
+        if "skill_ran_02" in turn.selected_skill_ids:
+            turn.selected_skill_ids.discard("skill_ran_02")
+
         self.pending_tiles[(nx, ny)] = new_tile
 
-        active.x = nx
-        active.y = ny
-        self._sync_compat_player_position()
+        turn.pending_discovery = {
+            "origin_x": current_x,
+            "origin_y": current_y,
+            "target_x": nx,
+            "target_y": ny,
+            "entry_direction": action.direction,
+            "required_entry_door": opposite(action.direction),
+            "reveal_kind": action.reveal_kind,
+
+            "tile_source": source_info.get("tile_source", action.tile_source),
+            "requested_tile_source": action.tile_source,
+
+            "pocket_tile_index": source_info.get("pocket_tile_index"),
+            "requested_pocket_tile_index": action.pocket_tile_index,
+            "tile_source_fallback": bool(source_info.get("fallback")),
+            "tile_source_fallback_reason": source_info.get("fallback_reason"),
+
+            "will_enter_after_confirm": action.reveal_kind == "discover",
+        }
 
         self.last_move_direction = action.direction
         self.set_turn_mode("pending_tile")
         self.current_fight_state = None
+        self._sync_compat_player_position()
 
         return {
             "ok": True,
             "status": "pending_tile_created",
             "action_kind": action.kind,
-            "new_position": {"x": nx, "y": ny},
+            "reveal_kind": action.reveal_kind,
+            "skip_result": skip_result,
+            "tile_source": source_info.get("tile_source", action.tile_source),
+            "requested_tile_source": action.tile_source,
+            "tile_source_fallback": bool(source_info.get("fallback")),
+            "tile_source_fallback_reason": source_info.get("fallback_reason"),
+            "source_info": source_info,
+            "origin_position": {"x": current_x, "y": current_y},
+            "target_position": {"x": nx, "y": ny},
+            "new_position": {"x": active.x, "y": active.y},
             "tile": new_tile.to_dict(),
             "pending": True,
+            "pending_discovery": turn.pending_discovery,
             "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
         }
 
     def _execute_teleport_action(self, action: TeleportAction) -> dict:
@@ -1264,62 +1894,318 @@ class DungeonGraph:
             "turn": self.serialize_turn_state(),
             "active_player": self.serialize_active_player(),
         }
-    
+
+    def _execute_scout_pull_tile_action(self, action: ScoutPullTileAction) -> dict:
+        """
+        skill_sco_02 / Scout pocket draw.
+
+        Rule:
+        - costs 1 Action
+        - active player must own the turn
+        - turn must be idle
+        - skill_sco_02 must be active
+        - Scout pocket must not be full
+        - draws one random tile archetype from tile_pool
+        - stores it in active player's Scout pocket
+        - does not move player
+        - does not place tile on board
+        - does not draw monster
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "idle":
+            raise ValueError(f"Cannot draw Scout pocket tile while turn mode is '{turn.mode}'.")
+
+        skill_id = "skill_sco_02"
+
+        if not active.is_skill_active(skill_id):
+            raise ValueError("skill_sco_02 is not active.")
+
+        capacity = self.get_scout_pocket_capacity()
+
+        if not active.can_store_scout_tile(capacity):
+            raise ValueError("Scout pocket is full.")
+
+        if not self.tile_pool:
+            raise ValueError("No more tiles available.")
+
+        self.spend_action(action.price)
+
+        idx = random.randrange(len(self.tile_pool))
+        tile_data = self.tile_pool.pop(idx)
+
+        store_result = active.store_scout_tile(tile_data, capacity)
+
+        if not store_result.get("stored"):
+            # Safety rollback. Should not normally happen because we checked capacity first.
+            self.tile_pool.append(tile_data)
+            random.shuffle(self.tile_pool)
+            raise ValueError(store_result.get("reason", "Could not store Scout tile."))
+
+        self.snapshot_active_ground_item()
+        self.current_fight_state = None
+        self.set_turn_mode("idle")
+
+        return {
+            "ok": True,
+            "status": "scout_tile_drawn_to_pocket",
+            "action_kind": action.kind,
+            "skill_id": skill_id,
+            "drawn_tile": self.serialize_tile_archetype_for_ui(
+                tile_data,
+                index=int(store_result["index"]),
+            ),
+            "scout_pocket": {
+                "capacity": capacity,
+                "count": active.scout_pocket_count(),
+                "tiles": [
+                    self.serialize_tile_archetype_for_ui(t, index=i)
+                    for i, t in enumerate(active.scout_pocket_tiles)
+                ],
+            },
+            "tiles_left": len(self.tile_pool),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+
     def _execute_confirm_tile_free_action(self, action: ConfirmTileFreeAction) -> dict:
         """
-        Backend implementation for ConfirmTileFreeAction.
+        Confirm the pending reveal tile.
 
-        Current Phase-3 semantics:
-        - only allowed during turn mode = "pending_tile"
-        - does not consume an Action
-        - confirms pending tile placement
-        - returns turn mode back to "idle"
-
-        Later this method may grow to include:
-        - full discover completion
-        - fight auto-trigger
-        - skill hooks around discovery/population
+        Staged semantics:
+        - only allowed during mode = "pending_tile"
+        - commits the rotated pending tile
+        - applies tile discovery effects
+        - then either:
+            - starts monster-choice phase, or
+            - default-populates immediately, or
+            - continues immediately if no population needed
+        - player entry happens only after population is finalized
         """
-        turn, _active = self.ensure_active_player_owns_turn()
+        turn, active = self.ensure_active_player_owns_turn()
 
         if turn.mode != "pending_tile":
             raise ValueError(f"Cannot confirm tile while turn mode is '{turn.mode}'.")
+
+        pending_discovery = turn.pending_discovery
+        if not pending_discovery:
+            raise ValueError("No pending discovery metadata.")
+
+        target_x = int(pending_discovery["target_x"])
+        target_y = int(pending_discovery["target_y"])
+
+        if action.x != target_x or action.y != target_y:
+            raise ValueError(
+                f"Confirm coordinates do not match pending discovery target "
+                f"({target_x}, {target_y})."
+            )
 
         pending = self.pending_tiles.pop((action.x, action.y), None)
         if not pending:
             raise ValueError("No pending tile to confirm here.")
 
-        if self.last_move_direction is None:
+        required_entry_door = pending_discovery.get("required_entry_door")
+        if not required_entry_door:
             self.pending_tiles[(action.x, action.y)] = pending
-            raise ValueError("No recorded last move direction.")
+            raise ValueError("No required entry door stored for pending discovery.")
 
-        expected_entry_from = opposite(self.last_move_direction)
-        if not pending.doors.get(expected_entry_from, False):
+        if not pending.doors.get(required_entry_door, False):
             self.pending_tiles[(action.x, action.y)] = pending
-            raise ValueError(f"Invalid placement: no entry from {expected_entry_from}")
+            raise ValueError(f"Invalid placement: no entry from {required_entry_door}")
 
+        # --------------------------------------------------
+        # Commit tile geometry.
+        # --------------------------------------------------
         self.add_tile(action.x, action.y, pending)
         turn.discovered_tile_coords_this_turn.add((action.x, action.y))
+
         discovery_result = self._after_tile_discovered(pending)
+
+        # --------------------------------------------------
+        # Populate only after final rotation/confirmation.
+        # This may pause in awaiting_monster_choice.
+        # --------------------------------------------------
+        population_result = self._begin_or_resolve_room_population_after_confirm(pending)
+
+        return {
+            "ok": True,
+            "status": (
+                "confirmed_awaiting_monster_choice"
+                if population_result.get("requires_choice")
+                else "confirmed"
+            ),
+            "action_kind": action.kind,
+            "reveal_kind": pending_discovery.get("reveal_kind"),
+            "tile": pending.to_dict(),
+            "discovery": discovery_result,
+            "population": population_result.get("population"),
+            "continuation": population_result.get("continuation"),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+            "turn": self.serialize_turn_state(),
+        }
+
+    def _tile_requires_monster_population(self, tile: TileNode) -> bool:
+        """
+        Current rule:
+        - only normal room tiles receive monsters/chests
+        - room_x and corridors do not
+        """
+        return tile.tile_type == "room"
+
+    def _active_player_can_use_monster_choice_skill(self, skill_id: str) -> bool:
+        active = self.get_active_player()
+        if active is None:
+            return False
+        return active.is_skill_active(skill_id)
+
+    def _begin_or_resolve_room_population_after_confirm(self, tile: TileNode) -> dict:
+        """
+        Called after tile geometry is committed.
+
+        If the tile is not a normal room:
+            continue immediately.
+
+        If no relevant monster-choice skill is active:
+            draw one monster immediately and continue.
+
+        If skill_ora_02 and/or skill_alc_02 is active:
+            enter awaiting_monster_choice.
+        """
         turn, active = self.ensure_active_player_owns_turn()
-        entry_result = self._after_player_entered_tile(player=active,
-                                                       tile=pending,
-                                                       entry_cause="discovery",
-                                                       is_turn_owner=True)
 
-        self.set_turn_mode("idle")
-        self.snapshot_active_ground_item()
+        if not self._tile_requires_monster_population(tile):
+            continuation = self._continue_after_tile_population(tile=tile)
+            return {
+                "requires_choice": False,
+                "population": {
+                    "populated": False,
+                    "reason": "tile_not_normal_room",
+                    "monster_id": None,
+                },
+                "continuation": continuation,
+            }
 
-        return {"ok": True,
-                "status": "confirmed",
-                "action_kind": action.kind,
-                "tile": pending.to_dict(),
-                "discovery": discovery_result,
-                "entry": entry_result,
-                "players": self.serialize_players(),
-                "active_player": self.serialize_active_player(),
-                "turn": self.serialize_turn_state()}
+        if tile.monster_id:
+            continuation = self._continue_after_tile_population(tile=tile)
+            return {
+                "requires_choice": False,
+                "population": {
+                    "populated": False,
+                    "reason": "tile_already_has_monster",
+                    "monster_id": tile.monster_id,
+                },
+                "continuation": continuation,
+            }
 
+        if not self.monster_pool:
+            continuation = self._continue_after_tile_population(tile=tile)
+            return {
+                "requires_choice": False,
+                "population": {
+                    "populated": False,
+                    "reason": "monster_pool_empty",
+                    "monster_id": None,
+                },
+                "continuation": continuation,
+            }
+
+        has_ora = active.is_skill_active("skill_ora_02")
+        has_alc = active.is_skill_active("skill_alc_02")
+
+        # --------------------------------------------------
+        # Default behavior: no choice, draw exactly one.
+        # --------------------------------------------------
+        if not has_ora and not has_alc:
+            monster = self._draw_monster_candidate_from_pool()
+            tile.monster_id = monster["monster_id"]
+
+            continuation = self._continue_after_tile_population(tile=tile)
+
+            return {
+                "requires_choice": False,
+                "population": {
+                    "populated": True,
+                    "reason": "normal_monster_draw",
+                    "monster_id": tile.monster_id,
+                    "monster": self.serialize_monster_archetype_for_ui(monster),
+                },
+                "continuation": continuation,
+            }
+
+        # --------------------------------------------------
+        # Choice behavior.
+        # Oracle:
+        #   draw 2 candidates, both confirmable initially.
+        #
+        # Alchemist only:
+        #   draw 1 candidate, latest confirmable.
+        #
+        # Oracle + Alchemist:
+        #   draw 2 candidates initially, both confirmable.
+        #   If redraw happens, only newest candidate remains confirmable.
+        # --------------------------------------------------
+        candidate_count = 2 if has_ora else 1
+        candidates: list[dict[str, Any]] = []
+
+        for _ in range(candidate_count):
+            if not self.monster_pool:
+                break
+            candidates.append(self._draw_monster_candidate_from_pool())
+
+        if not candidates:
+            continuation = self._continue_after_tile_population(tile=tile)
+            return {
+                "requires_choice": False,
+                "population": {
+                    "populated": False,
+                    "reason": "monster_pool_empty_after_choice_start",
+                    "monster_id": None,
+                },
+                "continuation": continuation,
+            }
+
+        confirmable_indices = list(range(len(candidates)))
+
+        turn.pending_monster_choice = {
+            "target_x": tile.x,
+            "target_y": tile.y,
+            "has_ora_02": has_ora,
+            "has_alc_02": has_alc,
+            "redraw_count": 0,
+            "candidates": candidates,
+            "confirmable_indices": confirmable_indices,
+            "latest_index": len(candidates) - 1,
+            "auto_confirm_required": False,
+            "reason": "oracle_or_alchemist_choice",
+        }
+
+        self.set_turn_mode("awaiting_monster_choice")
+
+        return {
+            "requires_choice": True,
+            "population": {
+                "populated": False,
+                "reason": "awaiting_monster_choice",
+                "target_x": tile.x,
+                "target_y": tile.y,
+                "has_ora_02": has_ora,
+                "has_alc_02": has_alc,
+                "candidates": [
+                    self.serialize_monster_archetype_for_ui(
+                        m,
+                        index=i,
+                        confirmable=i in confirmable_indices,
+                    )
+                    for i, m in enumerate(candidates)
+                ],
+                "confirmable_indices": confirmable_indices,
+                "latest_index": len(candidates) - 1,
+            },
+            "continuation": None,
+        }
+    
     def _after_tile_discovered(self, tile: TileNode) -> dict:
         """
         Apply immediate consequences of confirmed tile discovery.
@@ -1416,6 +2302,95 @@ class DungeonGraph:
 
         return result
 
+    def _continue_after_tile_population(self, *, tile: TileNode) -> dict:
+        """
+        Continue reveal after tile geometry and monster population are finalized.
+
+        Discover:
+        - active player enters the tile if conscious.
+        - entry effects run.
+        - if tile has monster, enter awaiting_monster_encounter.
+
+        Peek:
+        - active player stays on origin tile.
+        - no entry effects.
+        - no fight.
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        pending_discovery = turn.pending_discovery
+        if not pending_discovery:
+            raise ValueError("No pending discovery metadata while continuing after tile population.")
+
+        reveal_kind = pending_discovery.get("reveal_kind", "discover")
+        entry_result = None
+        monster_encounter = None
+        skipped_entry_reason = None
+
+        if reveal_kind == "discover":
+            if not active.is_conscious:
+                skipped_entry_reason = "active_player_unconscious"
+            else:
+                active.x = tile.x
+                active.y = tile.y
+                self._sync_compat_player_position()
+
+                entry_result = self._after_player_entered_tile(
+                    player=active,
+                    tile=tile,
+                    entry_cause="discovery",
+                    is_turn_owner=True,
+                )
+
+                if self._tile_has_active_monster(tile):
+                    # Do NOT mark active monster tile as safe.
+                    monster_encounter = self._maybe_enter_monster_encounter_after_entry(
+                        player=active,
+                        tile=tile,
+                        entry_cause="discovery",
+                    )
+                else:
+                    # Empty tile, chest tile, future escape gate, etc. are retreat-safe.
+                    self.register_tile_as_last_valid_safe_if_possible(tile=tile)
+
+        elif reveal_kind == "peek":
+            # Player remains on origin tile.
+            self._sync_compat_player_position()
+
+        else:
+            raise ValueError(f"Unsupported reveal_kind: {reveal_kind}")
+
+        turn.pending_discovery = None
+        turn.pending_monster_choice = None
+
+        if monster_encounter is None:
+            self.set_turn_mode("idle")
+            self.snapshot_active_ground_item()
+        else:
+            # Keep mode as awaiting_monster_encounter.
+            # Snapshot current ground anyway, but inventory should normally be blocked by mode.
+            self.snapshot_active_ground_item()
+
+        self.current_fight_state = None
+
+        return {
+            "ok": True,
+            "status": (
+                "reveal_completed_awaiting_monster_encounter"
+                if monster_encounter
+                else "reveal_completed"
+            ),
+            "reveal_kind": reveal_kind,
+            "entered_tile": bool(entry_result),
+            "skipped_entry_reason": skipped_entry_reason,
+            "monster_encounter": monster_encounter,
+            "tile": tile.to_dict(),
+            "entry": entry_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+    
     def _resolve_curse_room_effect_for_player(self, player: Player) -> dict:
         """
         Resolve curse-room dice toss for the entering player.
@@ -1831,6 +2806,12 @@ class DungeonGraph:
         if turn.mode == "pending_tile":
             raise ValueError("Cannot end turn before confirming the pending tile.")
 
+        if turn.mode == "awaiting_monster_choice":
+            raise ValueError("Cannot end turn before resolving monster choice.")
+
+        if turn.mode == "awaiting_monster_encounter":
+            raise ValueError("Cannot end turn before resolving monster encounter.")
+
         if turn.pending_item_pickup:
             raise ValueError("Cannot end turn before resolving item pickup.")
         
@@ -1850,17 +2831,20 @@ class DungeonGraph:
 
     def _execute_start_fight_free_action(self, action: StartFightFreeAction) -> dict:
         """
-        Backend implementation for starting a fight on the active player's current tile.
+        Start a fight on the active player's current tile.
 
-        Current Phase-3 semantics:
-        - only allowed in turn mode = "idle"
-        - requires a monster on the active tile
-        - enters turn mode = "fight"
+        Allowed modes:
+        - idle
+        - awaiting_monster_encounter
+
+        If awaiting_monster_encounter:
+        - clears pending encounter
+        - enters fight
         """
         turn, active = self.ensure_active_player_owns_turn()
 
-        if turn.mode != "idle":
-            raise ValueError(f"Cannot start fight while turn mode is '{turn.mode}'. Confirm pending tile first.")
+        if turn.mode not in ("idle", "awaiting_monster_encounter"):
+            raise ValueError(f"Cannot start fight while turn mode is '{turn.mode}'.")
 
         tile = self.get_active_tile()
         if tile is None:
@@ -1882,7 +2866,9 @@ class DungeonGraph:
             monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
         )
 
+        turn.pending_monster_encounter = None
         turn.item_use_locked_by_combat = True
+
         self.set_turn_mode("fight")
 
         return {
@@ -1891,6 +2877,8 @@ class DungeonGraph:
             "action_kind": action.kind,
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
         }
 
     def _execute_toss_fight_free_action(self, action: TossFightFreeAction) -> dict:
@@ -2846,7 +3834,7 @@ class DungeonGraph:
             # - killed monster drops its configured loot onto the same tile
             # - no LIV/UND filtering is applied
             # --------------------------------------------------
-            if tile.monster_id:
+            if self._tile_has_active_monster(tile):
                 monster_id = tile.monster_id
                 monster = get_monster_by_id(monster_id)
                 loot_id = monster["loot_id"]
@@ -2867,6 +3855,153 @@ class DungeonGraph:
                 })
 
         return result
+
+    def _build_monster_encounter_for_active_player(
+            self,
+            *,
+            player: Player,
+            tile: TileNode,
+            entry_cause: str,
+    ) -> dict[str, Any]:
+        """
+        Build the mandatory monster-encounter state after active player enters a monster tile.
+
+        Rules:
+        - Everyone must fight by default.
+        - skill_thi_02 may skip if at least 1 Action remains.
+        - skill_pri_02 may skip if at least 1 Action remains and HP > 1.
+          The actual -1 HP cost is paid when she moves away.
+        - If no Actions remain, even skill_thi_02 / skill_pri_02 must fight.
+        """
+        turn = self.ensure_turn_active()
+
+        can_skip = False
+        skip_skill_id = None
+        skip_cost_hp = 0
+        must_fight_reason = None
+
+        if turn.actions_left <= 0:
+            must_fight_reason = "no_actions_left"
+
+        elif player.is_skill_active("skill_thi_02"):
+            can_skip = True
+            skip_skill_id = "skill_thi_02"
+            skip_cost_hp = 0
+
+        elif player.is_skill_active("skill_pri_02"):
+            if player.hp > 1:
+                can_skip = True
+                skip_skill_id = "skill_pri_02"
+                skip_cost_hp = 1
+            else:
+                must_fight_reason = "skill_pri_02_requires_hp_above_1"
+
+        else:
+            must_fight_reason = "no_skip_skill"
+
+        return {
+            "tile_x": tile.x,
+            "tile_y": tile.y,
+            "monster_id": tile.monster_id,
+            "entered_by": entry_cause,
+            "can_skip": can_skip,
+            "skip_skill_id": skip_skill_id,
+            "skip_cost_hp": skip_cost_hp,
+            "must_fight_reason": must_fight_reason,
+        }
+
+    def _maybe_enter_monster_encounter_after_entry(
+            self,
+            *,
+            player: Player,
+            tile: TileNode,
+            entry_cause: str,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Enter mandatory monster encounter mode if active player entered a monster tile.
+
+        This does NOT start the fight directly.
+        UI/global fight button starts the fight.
+        """
+        turn = self.ensure_turn_active()
+
+        if player.player_id != turn.owner_player_id:
+            return None
+
+        if not self._tile_has_active_monster(tile):
+            return None
+
+        encounter = self._build_monster_encounter_for_active_player(
+            player=player,
+            tile=tile,
+            entry_cause=entry_cause,
+        )
+
+        turn.pending_monster_encounter = encounter
+        self.set_turn_mode("awaiting_monster_encounter")
+
+        return encounter
+
+    def _validate_and_apply_monster_skip_before_move(self) -> dict[str, Any]:
+        """
+        Allow movement out of awaiting_monster_encounter only for valid skip skills.
+
+        skill_thi_02:
+        - no HP cost
+
+        skill_pri_02:
+        - requires HP > 1
+        - pays -1 HP before moving
+        - cannot cause unconsciousness
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        encounter = turn.pending_monster_encounter
+        if not encounter:
+            raise ValueError("No pending monster encounter.")
+
+        if not encounter.get("can_skip"):
+            raise ValueError("You must fight this monster before moving.")
+
+        if turn.actions_left <= 0:
+            raise ValueError("No Actions left; you must fight.")
+
+        skill_id = encounter.get("skip_skill_id")
+
+        if skill_id not in ("skill_thi_02", "skill_pri_02"):
+            raise ValueError("Unsupported monster skip skill.")
+
+        if not active.is_skill_active(skill_id):
+            raise ValueError("Monster skip skill is no longer active.")
+
+        hp_result = None
+
+        if skill_id == "skill_pri_02":
+            if active.hp <= 1:
+                raise ValueError("Warrior Princess cannot skip with 1 HP; she must fight.")
+
+            hp_result = self.apply_hp_delta_to_player(
+                player=active,
+                delta=-1,
+                source="skill_pri_02_skip_monster",
+            )
+
+            if active.hp <= 0:
+                raise ValueError("Internal rule error: skill_pri_02 skip may not cause unconsciousness.")
+
+        turn.pending_monster_encounter = None
+        self.set_turn_mode("idle")
+
+        return {
+            "skipped": True,
+            "skill_id": skill_id,
+            "hp_result": hp_result,
+            "skipped_from": {
+                "x": encounter.get("tile_x"),
+                "y": encounter.get("tile_y"),
+                "monster_id": encounter.get("monster_id"),
+            },
+        }
     
     def _apply_fight_hp_consequences(
             self,
@@ -3069,6 +4204,34 @@ class DungeonGraph:
             "turn": self.serialize_turn_state(),
             "active_player": self.serialize_active_player(),
         }
+
+    def _get_tile_monster_sort(self, tile: Optional[TileNode]) -> Optional[str]:
+        """
+        Return monster sort for a tile's monster_id.
+
+        Current sort semantics:
+        - LIV / UND = active hostile monster
+        - ITM       = passive object-like encounter, e.g. Chest
+        """
+        if tile is None or not tile.monster_id:
+            return None
+
+        monster = get_monster_by_id(tile.monster_id)
+        return monster.get("sort")
+
+    def _tile_has_active_monster(self, tile: Optional[TileNode]) -> bool:
+        """
+        Active monsters block safe retreat and force monster encounter.
+
+        Current active monster sorts:
+        - LIV
+        - UND
+
+        Passive / object-like monster entries:
+        - ITM, e.g. Chest
+        """
+        monster_sort = self._get_tile_monster_sort(tile)
+        return monster_sort in {"LIV", "UND"}
     
     def _execute_curse_free_action(self, action: CurseFreeAction) -> dict:
         """
@@ -3427,6 +4590,19 @@ class DungeonGraph:
         """
         turn, _active = self.ensure_active_player_owns_turn()
 
+        pending_discovery = turn.pending_discovery
+        if not pending_discovery:
+            raise ValueError("No pending discovery metadata.")
+
+        target_x = int(pending_discovery["target_x"])
+        target_y = int(pending_discovery["target_y"])
+
+        if x != target_x or y != target_y:
+            raise ValueError(
+                f"Rotate coordinates do not match pending discovery target "
+                f"({target_x}, {target_y})."
+            )
+        
         if turn.mode != "pending_tile":
             raise ValueError(f"Cannot rotate pending tile while turn mode is '{turn.mode}'.")
 
@@ -3434,8 +4610,9 @@ class DungeonGraph:
         if not tile:
             raise ValueError("No pending tile at this position.")
 
-        if self.last_move_direction is None:
-            raise ValueError("No recorded last move direction.")
+        entry_dir = pending_discovery.get("required_entry_door")
+        if not entry_dir:
+            raise ValueError("No required entry door stored for pending discovery.")
 
         if direction not in ("left", "right"):
             raise ValueError("Invalid rotation direction.")
@@ -3447,7 +4624,6 @@ class DungeonGraph:
 
         new_doors = rotate_doors_clockwise(tile.doors_base, new_rot)
 
-        entry_dir = opposite(self.last_move_direction)
         if not new_doors.get(entry_dir, False):
             raise ValueError("Rotation would block the entry door.")
 
@@ -3744,7 +4920,9 @@ class DungeonGraph:
         Later endpoints may directly instantiate StartFightFreeAction.
         """
         return self.execute_runtime_action(StartFightFreeAction())
-    
+
+    def scout_pull_tile(self) -> dict:
+        return self.execute_runtime_action(ScoutPullTileAction())
     
     def get_current_fight_state(self) -> dict:
         if self.current_fight_state is None:
@@ -4276,7 +5454,31 @@ class DungeonGraph:
                 if not can_continue_after_item_pickup:
                     is_usable_now = False
                     unusable_reason = "not_usable_in_current_turn_state"
+            if skill_id in ("skill_thi_02", "skill_pri_02"):
+                turn_for_player = (
+                    self.turn_state
+                    if self.turn_state and self.turn_state.owner_player_id == player.player_id
+                    else None
+                )
 
+                encounter = turn_for_player.pending_monster_encounter if turn_for_player else None
+
+                can_use_fight_button = bool(
+                    is_available
+                    and turn_for_player
+                    and turn_for_player.mode == "awaiting_monster_encounter"
+                    and encounter
+                    and getattr(player, "x", None) == int(encounter.get("tile_x"))
+                    and getattr(player, "y", None) == int(encounter.get("tile_y"))
+                )
+
+                control_type = "button"
+                is_passive = False
+                selected = False
+
+                if not can_use_fight_button:
+                    is_usable_now = False
+                    unusable_reason = "not_awaiting_monster_encounter"
             raw_skills.append({
                 "skill_id": skill_id,
                 "label": meta.get("name") or skill_id,
@@ -4573,9 +5775,52 @@ class DungeonGraph:
                 turn.item_pickup_origin = None
                 self.set_turn_mode("idle")
 
+
+    def _active_player_is_on_monster_tile(self) -> bool:
+        tile = self.get_active_tile()
+        return self._tile_has_active_monster(tile)
+
+    def _tile_is_safe_for_retreat(self, tile: Optional[TileNode]) -> bool:
+        """
+        A retreat-safe tile is committed and does not contain an active hostile monster.
+
+        Important:
+        - active monsters with sort LIV / UND are unsafe
+        - passive object-like entries such as Chest / sort ITM are safe
+        - future escape gate / grid should also remain safe unless explicitly hostile
+        """
+        if tile is None:
+            return False
+
+        if self.get_tile(tile.x, tile.y) is None:
+            return False
+
+        return not self._tile_has_active_monster(tile)
+
     def register_last_valid_safe_tile_from_active_player(self) -> None:
+        """
+        Store active player's current tile as retreat target only if it is safe.
+
+        Important:
+        - monster tiles are NOT safe
+        - this prevents skill_thi_02 / skill_pri_02 skip movement from overwriting
+          last_valid_safe_tile with the monster tile
+        """
         turn, active = self.ensure_active_player_owns_turn()
-        turn.last_valid_safe_tile = (active.x, active.y)
+        tile = self.get_tile(active.x, active.y)
+
+        if self._tile_is_safe_for_retreat(tile):
+            turn.last_valid_safe_tile = (active.x, active.y)
+
+    def register_tile_as_last_valid_safe_if_possible(self, *, tile: Optional[TileNode]) -> None:
+        """
+        Explicitly update last_valid_safe_tile after entering a safe tile.
+        """
+        if not self._tile_is_safe_for_retreat(tile):
+            return
+
+        turn, _active = self.ensure_active_player_owns_turn()
+        turn.last_valid_safe_tile = (tile.x, tile.y)
         
     
     def _is_active_player_on_fountain(self) -> bool:

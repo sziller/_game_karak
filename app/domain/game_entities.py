@@ -244,7 +244,7 @@ MONSTER_POOL: List[MonsterArchetype] = (
     [monster(monster_id="SkeletonTurnkey",  strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 12 +
     [monster(monster_id="SkeletonWarrior",  strength=9,     loot_id="sword",    sort="UND", img_file="SkeletonWarrior.png")] * 5 +
     [monster(monster_id="SkeletonKing",     strength=10,    loot_id="axe",      sort="UND", img_file="SkeletonKing.png")] * 3 +
-    [monster(monster_id="SkeletalMage",     strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 2 +
+    [monster(monster_id="SkeletalMage",     strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 200 +  # 2
     [monster(monster_id="Mummy",            strength=7,     loot_id="fireball", sort="UND", img_file="Mummy.png")] * 8 +
     [monster(monster_id="Fallen",           strength=12,    loot_id="treasure", sort="UND", img_file="Fallen.png")] * 2 +
     [monster(monster_id="Dragon",           strength=15,    loot_id="ruby",     sort="LIV", img_file="Dragon.png")] * 1 +
@@ -300,10 +300,10 @@ ITEM_FEATURES: dict[str, ItemArchetype] = {
                  "effect": None,        "value": 0.1,           "mode": "base", "active": False, "consumed": None,
                  "desc": "opens all types of locks, once"},
     "fist":     {"item_id": "fist",     "item_type": "scroll",  "str_mod": 2,   "img_file": "fist.png",
-                 "effect": None,        "value": 0.1,           "mode": "base", "active": False, "consumed": None,
+                 "effect": None,        "value": 0.1,           "mode": "base", "active": False, "consumed": True,
                  "desc": "powerful freezing spell"},
     "fireball": {"item_id": "fireball", "item_type": "scroll",  "str_mod": 1,   "img_file": "fireball.png",
-                 "effect": None,        "value": 0.1,           "mode": "base", "active": False, "consumed": None,
+                 "effect": None,        "value": 0.1,           "mode": "base", "active": False, "consumed": True,
                  "desc": "enchant your weapon with fire"},
     "treasure": {"item_id": "treasure", "item_type": "treasure","str_mod": 0,   "img_file": "treasure.png",
                  "effect": None,        "value": 10,            "mode": "base", "active": False, "consumed": False,

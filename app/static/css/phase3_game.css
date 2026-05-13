@@ -151,18 +151,6 @@ body.karak-page {
     gap: 6px;
 }
 
-.teleport-inputs {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-}
-
-.teleport-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-}
-
 .bottom-controls-layout {
     display: grid;
     grid-template-columns: 1fr 160px;
@@ -1038,10 +1026,10 @@ pre {
 
 /* The whole right-side inventory column wrapper. */
 .player-mini-inventory-wrap {
-    flex: 0 0 126px;
+    flex: 0 0 74px;
 
-    min-width: 126px;
-    max-width: 126px;
+    min-width: 74px;
+    max-width: 74px;
 
     align-self: stretch;
 
@@ -1070,8 +1058,8 @@ pre {
 /* One inventory row: W / K / S / T. */
 .mini-inv-row {
     display: grid;
-    grid-template-columns: 18px 1fr;
-    gap: 4px;
+    grid-template-columns: 12px 1fr;
+    gap: 1px;
 
     min-width: 0;
     min-height: 0;
@@ -1079,7 +1067,7 @@ pre {
     border: 1px solid #333;
     background: #151515;
 
-    padding: 1px 3px;
+    padding: 1px 2px;
 
     overflow: hidden;
 }
@@ -1100,7 +1088,7 @@ pre {
 .mini-inv-slots {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 1px;
 
     min-width: 0;
     overflow: hidden;
@@ -1109,10 +1097,10 @@ pre {
 /* Every inventory slot has fixed size.
    Empty slots keep the same space as filled slots. */
 .mini-inv-slot {
-    flex: 0 0 18px;
+    flex: 0 0 16px;
 
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
 
     display: flex;
     align-items: center;
@@ -1128,8 +1116,8 @@ pre {
 .mini-inv-icon {
     display: block;
 
-    max-width: 16px;
-    max-height: 16px;
+    max-width: 14px;
+    max-height: 14px;
 
     width: auto;
     height: auto;
@@ -1403,4 +1391,639 @@ pre {
     margin: 2px;
 
     box-sizing: border-box;
+}
+/* =========================================================
+   32. MESSAGE TEXT SIZE
+   ========================================================= */
+
+.message-box {
+    font-size: 12px;
+}
+
+.message-box pre {
+    font-size: 12px;
+    line-height: 1.25;
+}
+
+#message-title {
+    font-size: 12px;
+}
+
+/* =========================================================
+   33. PLAYER ROW REWORK
+   Portrait column now contains name, HP, and coordinates.
+   Skill area sits to the right of the portrait.
+   ========================================================= */
+
+.player-portrait-wrap {
+    flex: 0 0 72px;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    text-align: center;
+}
+
+.player-name-under-portrait {
+    width: 100%;
+
+    margin-top: 4px;
+
+    font-size: 11px;
+    font-weight: bold;
+    line-height: 1.1;
+
+    color: #ddd;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-hp-under-portrait {
+    margin-top: 3px;
+
+    font-size: 14px;
+    font-weight: bold;
+    line-height: 1;
+
+    color: #ddd;
+    text-align: center;
+}
+
+.player-hp-under-portrait::after {
+    content: " HP";
+
+    margin-left: 2px;
+
+    font-size: 9px;
+    font-weight: normal;
+
+    color: #888899;
+}
+
+.player-coordinates-under-portrait {
+    margin-top: 3px;
+
+    font-size: 10px;
+    line-height: 1;
+
+    color: #aaa;
+
+    white-space: nowrap;
+}
+
+.player-text {
+    display: flex;
+    flex-direction: column;
+
+    gap: 4px;
+
+    min-width: 0;
+    flex: 1 1 auto;
+
+    overflow: hidden;
+}
+
+/* Optional status line: KARAK / CURSED / POISONED */
+.player-status-line {
+    font-size: 11px;
+    line-height: 1.2;
+
+    color: #ccaa44;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Skill rows/chips now occupy the main text area next to portrait. */
+.player-skills-column {
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* =========================================================
+   34. PLAYER SKILL COLUMN
+   Skills are stacked vertically in the main player row area.
+   ========================================================= */
+
+.player-skill-line {
+    min-width: 0;
+    margin-bottom: 4px;
+}
+
+.player-skill-line:last-child {
+    margin-bottom: 0;
+}
+
+/* Skill chips are generated with inline styles.
+   This makes them behave better inside the vertical column. */
+.player-skill-line > div {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+/* =========================================================
+   35. ENCOUNTER PANEL
+   Top-left display:
+   - active player's tableau image always on the left
+   - monster/player/choice target on the right when relevant
+   ========================================================= */
+
+.top-monster-panel {
+    min-width: 0;
+    min-height: 0;
+
+    display: flex;
+    flex-direction: column;
+}
+
+/* The actual encounter content box. */
+.encounter-box {
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    display: grid;
+    grid-template-columns: 1fr 96px;
+    gap: 8px;
+
+    align-items: center;
+
+    overflow: hidden;
+}
+
+/* Active player tableau area. */
+.encounter-active-player {
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+
+    overflow: hidden;
+}
+
+/* Active player tableau image. */
+.encounter-tableau-img {
+    display: block;
+
+    height: 100%;
+    max-height: 100%;
+
+    width: auto;
+    max-width: 100%;
+
+    object-fit: contain;
+}
+
+/* Right-side opponent/monster area. */
+.encounter-target {
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    overflow: hidden;
+}
+
+/* Empty target keeps the area reserved. */
+.encounter-target-empty {
+    opacity: 0.25;
+}
+
+/* Monster icon, same conceptual asset as map content icon. */
+.encounter-monster-img {
+    display: block;
+
+    max-width: 88px;
+    max-height: 88px;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* Optional fallback if player tableau is missing. */
+.encounter-tableau-placeholder {
+    width: 100%;
+    height: 100%;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    color: #777;
+    font-size: 12px;
+
+    border: 1px solid #222;
+    background: #101010;
+}
+
+/* =========================================================
+   36. PLAYER STATUS ICONS
+   Curse is shown next to HP. Poison is shown on skill chips.
+   ========================================================= */
+
+.player-hp-under-portrait {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    gap: 3px;
+}
+
+.player-hp-value::after {
+    content: " HP";
+
+    margin-left: 2px;
+
+    font-size: 9px;
+    font-weight: normal;
+
+    color: #888899;
+}
+
+/* Disable the older HP suffix if still present. */
+.player-hp-under-portrait::after {
+    content: none;
+}
+
+.player-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 14px;
+    height: 14px;
+
+    font-size: 12px;
+    line-height: 1;
+}
+
+.player-curse-icon {
+    color: #ccaa44;
+}
+
+.encounter-monster-choice-box {
+    grid-template-columns: 1fr 1.5fr;
+}
+
+.encounter-monster-choice {
+    min-width: 0;
+    min-height: 0;
+
+    display: grid;
+    grid-template-rows: 1fr auto;
+    gap: 6px;
+
+    overflow: hidden;
+}
+
+.monster-choice-candidates {
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+
+    align-items: center;
+    justify-content: center;
+
+    min-width: 0;
+    min-height: 0;
+
+    overflow: hidden;
+}
+
+.monster-choice-card {
+    width: 72px;
+    height: 86px;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    padding: 4px;
+
+    font-size: 10px;
+    line-height: 1.1;
+
+    overflow: hidden;
+}
+
+.monster-choice-card img {
+    display: block;
+
+    max-width: 48px;
+    max-height: 48px;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+}
+
+.monster-choice-card span {
+    margin-top: 3px;
+
+    width: 100%;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.monster-choice-card.confirmable {
+    border-color: #88cc88;
+}
+
+.monster-choice-card.not-confirmable {
+    opacity: 0.35;
+}
+
+.monster-choice-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.monster-choice-actions button {
+    width: 100%;
+    max-width: 120px;
+}
+
+/* =========================================================
+   37. SKILL STATUS ICONS
+   Poison is shown before the poisoned skill title.
+   ========================================================= */
+
+.skill-chip-title {
+    display: flex;
+    align-items: center;
+
+    gap: 4px;
+
+    min-width: 0;
+}
+
+.skill-chip-title b {
+    min-width: 0;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.skill-poison-icon {
+    flex: 0 0 auto;
+
+    color: #66cc66;
+    font-size: 12px;
+    line-height: 1;
+}
+
+/* =========================================================
+   37B. SCOUT POCKET INSIDE skill_sco_02 CHIP
+   Shows max 3 stored Scout tiles as mini active tile buttons.
+   ========================================================= */
+
+.skill-chip-control-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+
+    width: 100%;
+    min-width: 0;
+
+    margin-top: 4px;
+}
+
+.skill-chip-control-main {
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+/* renderSkillChip() creates class="skill-chip skill-skill_sco_02" */
+.skill-chip.skill-skill_sco_02 {
+    min-width: 230px !important;
+}
+
+/* The fixed 3-slot pocket area on the right side of the Scout skill chip. */
+.scout-pocket-box {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+
+    align-items: center;
+    justify-content: flex-end;
+
+    margin-left: auto;
+
+    flex: 0 0 auto;
+    min-width: 96px;
+}
+
+/* One Scout pocket tile slot. Empty slots remain visible/reserved. */
+.scout-pocket-slot {
+    width: 28px;
+    height: 28px;
+
+    padding: 1px;
+
+    border: 1px solid #555;
+    border-radius: 4px;
+
+    background: rgba(255, 255, 255, 0.08);
+
+    cursor: pointer;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+/* Keep empty pocket slots visible but quiet. */
+.scout-pocket-slot.empty {
+    opacity: 0.35;
+    cursor: default;
+}
+
+/* Slight feedback for stored tile buttons. */
+.scout-pocket-slot.filled:hover {
+    transform: scale(1.08);
+}
+
+/* Currently selected pocket tile, used later by pocket-based reveal. */
+.scout-pocket-slot.selected {
+    outline: 2px solid #ffd36a;
+    outline-offset: 1px;
+}
+
+/* Mini tile image inside Scout pocket slot. */
+.scout-pocket-slot img {
+    display: block;
+
+    max-width: 100%;
+    max-height: 100%;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.scout-pocket-slot.blocked {
+    opacity: 0.35;
+    cursor: default;
+    filter: grayscale(1);
+}
+
+.scout-pocket-clear-btn {
+    flex: 0 0 36px;
+    height: 34px;
+
+    padding: 2px 4px;
+
+    font-size: 10px;
+    line-height: 1;
+
+    border: 1px solid #333;
+    background: #151515;
+    color: #aaa;
+}
+
+.scout-pocket-clear-btn.selected {
+    border-color: #88cc88;
+    color: #d8ffd8;
+}
+
+/* =========================================================
+   38. TARGETING PANEL REWORK
+   X/Y inputs in a column, action buttons locked next to them.
+   ========================================================= */
+
+/* Targeting panel has:
+   row 1: mode label
+   row 2: input/button grid */
+.targeting-panel {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: 6px;
+
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Mode/status text at the top. */
+.targeting-mode-label {
+    min-width: 0;
+
+    font-size: 11px;
+    line-height: 1.2;
+
+    color: #aaa;
+    text-align: left;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Inputs column: X above Y. */
+.teleport-inputs {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 6px;
+
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Button column: Teleport above Cancel.
+   Cancel exists spatially even when disabled. */
+.teleport-buttons {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 6px;
+
+    min-width: 0;
+    min-height: 0;
+}
+
+/* The input and button groups sit next to each other. */
+.targeting-panel {
+    grid-template-areas:
+        "label label"
+        "inputs buttons";
+    grid-template-columns: 1fr 1.15fr;
+}
+
+.targeting-mode-label {
+    grid-area: label;
+}
+
+.teleport-inputs {
+    grid-area: inputs;
+}
+
+.teleport-buttons {
+    grid-area: buttons;
+}
+
+/* Stable control sizing. */
+.teleport-inputs input,
+.teleport-buttons button {
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    box-sizing: border-box;
+}
+
+/* Placeholder button behavior:
+   disabled buttons keep their slot but become quiet. */
+.teleport-buttons button:disabled {
+    opacity: 0.35;
+}
+
+/* =========================================================
+   39. TARGETING CANCEL BUTTON VISIBILITY FIX
+   Cancel button always occupies its locked slot.
+   ========================================================= */
+
+#teleport-cancel-btn {
+    display: block;
+    visibility: visible;
+}
+
+/* =========================================================
+   40. PURPLE WAITING / REQUIRED ACTION MESSAGE
+   Used when the game is waiting for a confirmation or target.
+   ========================================================= */
+
+.message-waiting {
+    background: #1b102a;
+    color: #d8b8ff;
+    border: 2px solid #aa66ff;
 }
