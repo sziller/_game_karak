@@ -13,6 +13,7 @@ from app.routers.router_frontend import build_frontend_router
 from app.routers.router_phase1_bootstrap import build_bootstrap_router
 from app.routers.router_phase2_lobby import build_lobby_router
 from app.routers.router_phase3_game import build_game_router
+from app.routers.router_phase4_results import build_results_router
 from app.routers.router_ops import build_ops_router
 
 from app.services.lobby import LobbyService
@@ -33,6 +34,10 @@ OPENAPI_TAGS = [
     {
         "name": "Labirintus",
         "description": "Phase 3 gameplay endpoints.",
+    },
+    {
+        "name": "Phase-4 Results",
+        "description": "Final game results and restart endpoints.",
     },
     {
         "name": "Ops & Diagnostics",
@@ -92,4 +97,9 @@ app.include_router(build_game_router(graph=graph,
                                      ascii_tiles=ASCII_TILES,
                                      item_features=ITEM_FEATURES,
                                      get_monster_by_id=get_monster_by_id))
+app.include_router(build_results_router(
+    bootstrap_service=bootstrap,
+    lobby_service=lobby,
+    graph=graph,
+))
 app.include_router(build_ops_router(app))

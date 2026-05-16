@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -7,10 +9,19 @@ from pydantic import BaseModel, Field
 class AddHotseatPlayerRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=64)
 
+
 class AssignProfessionRequest(BaseModel):
     player_id: str = Field(..., min_length=1, max_length=64)
     profession: str = Field(..., min_length=1, max_length=64)
-    
+
+
+class SetRuntimeConfigRequest(BaseModel):
+    runtime_config: dict[str, Any]
+
+
+class StartGameRequest(BaseModel):
+    runtime_config: Optional[dict[str, Any]] = None
+
 
 def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
     router = APIRouter(prefix="/api/lobby", tags=["Phase-2 Lobby"])
@@ -38,12 +49,11 @@ def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
                 raise HTTPException(status_code=400, detail=str(e))
 
         missing_profession_player_id = None
-        players = current_lobby.players if hasattr(current_lobby, "players") else current_lobby.get("players", [])
+        players = current_lobby.get("players", [])
 
         for p in players:
-            profession = p.profession if hasattr(p, "profession") else p.get("profession")
-            if not profession:
-                missing_profession_player_id = p.player_id if hasattr(p, "player_id") else p.get("player_id")
+            if not p.get("profession"):
+                missing_profession_player_id = p.get("player_id")
                 break
 
         return {
@@ -56,7 +66,36 @@ def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
             "missing_profession_player_id": missing_profession_player_id,
             "message": "Lobby entered successfully.",
         }
-    
+
+    @router.get(
+        "/runtime_config",
+        summary="Get editable runtime config",
+        description="Returns current editable lobby runtime config.",
+    )
+    def get_runtime_config():
+        try:
+            return {
+                "ok": True,
+                "runtime_config": lobby_service.get_runtime_config(),
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @router.post(
+        "/set_runtime_config",
+        summary="Set editable runtime config",
+        description="Stores the runtime config edited in the lobby.",
+    )
+    def set_runtime_config(req: SetRuntimeConfigRequest):
+        try:
+            state = lobby_service.set_runtime_config(req.runtime_config)
+            return {
+                "ok": True,
+                "lobby_state": state,
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     @router.get(
         "/character_catalog",
         summary="Get selectable character classes",
@@ -86,7 +125,7 @@ def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
             }
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/add_hotseat_player",
         summary="Add player to hot-seat lobby",
@@ -138,11 +177,23 @@ def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
         summary="Start game from lobby",
         description="Starts the game when lobby requirements are satisfied and initializes Phase 3 runtime.",
     )
-    def start_game():
+    def start_game(req: StartGameRequest | None = None):
         try:
-            setup = lobby_service.export_game_setup()
+            runtime_config = req.runtime_config if req else None
+
+            start_result = lobby_service.start_game(runtime_config=runtime_config)
+            setup = start_result["game_setup"]
+
+            # Preferred future engine signature:
+            #
+            #     graph.setup_from_lobby(setup)
+            #
+            # Minimal compatible version:
             engine_result = graph.setup_players_from_lobby(setup["players"])
-            lobby_service.state.started = True
+
+            # Add this only if/when graph supports runtime config application:
+            if hasattr(graph, "apply_runtime_config"):
+                graph.apply_runtime_config(setup["runtime_config"])
 
             return {
                 "ok": True,
@@ -150,7 +201,8 @@ def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
                 "game_setup": setup,
                 "engine_result": engine_result,
             }
+
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     return router

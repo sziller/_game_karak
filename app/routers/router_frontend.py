@@ -52,4 +52,13 @@ def build_frontend_router() -> APIRouter:
     def serve_phase3():
         return _serve_html("phase3_game.html")
 
+    @router.get(
+        "/phase4",
+        response_class=HTMLResponse,
+        summary="Phase 4 page",
+        description="Serves Phase 4 results UI.",
+    )
+    def serve_phase4():
+        return _serve_html("phase4_results.html")
+
     return router

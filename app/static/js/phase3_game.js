@@ -328,33 +328,37 @@ function renderMapVisual() {
     });
 
     indexedPlayers.forEach(({p, idx}) => {
-        const pos = p.position || {x: 0, y: 0};
-        const px = (pos.x - centerX) * size + screenCX;
-        const py = (centerY - pos.y) * size + screenCY;
-        const isActive = idx === activeIdx;
+    const pos = p.position || {x: 0, y: 0};
+    const px = (pos.x - centerX) * size + screenCX;
+    const py = (centerY - pos.y) * size + screenCY;
+    const isActive = idx === activeIdx;
 
-        const marker = document.createElement("div");
-        marker.style.position = "absolute";
-        marker.style.left = `${px - 14}px`;
-        marker.style.top = `${py - 14}px`;
-        marker.style.width = `28px`;
-        marker.style.height = `28px`;
-        marker.style.borderRadius = "50%";
-        marker.style.display = "flex";
-        marker.style.alignItems = "center";
-        marker.style.justifyContent = "center";
-        marker.style.fontSize = "14px";
-        marker.style.fontWeight = "bold";
-        marker.style.color = "#000";
-        marker.style.boxSizing = "border-box";
-        marker.style.pointerEvents = "none";
+    const figurineSize = isActive ? 56 : 48;  /* 48 - 42 */
+
+    const marker = document.createElement("div");
+    marker.className = "map-player-figurine" + (isActive ? " active" : "");
+
+    marker.style.left = `${px - figurineSize / 2}px`;
+    marker.style.top = `${py - figurineSize / 2}px`;
+    marker.style.width = `${figurineSize}px`;
+    marker.style.height = `${figurineSize}px`;
+    marker.style.zIndex = isActive ? "60" : "40";
+
+    if (p.figurine_path) {
+        const img = document.createElement("img");
+        img.src = p.figurine_path;
+        img.alt = p.display_name || "player";
+        img.title = p.display_name || "player";
+        marker.appendChild(img);
+    } else {
+        // Fallback if figurine_path is missing.
+        marker.classList.add("map-player-figurine-fallback");
         marker.style.background = getPlayerTokenColor(p.player_id, idx);
-        marker.style.border = isActive ? "3px solid #ffffff" : "2px solid #333";
-        marker.style.zIndex = isActive ? "50" : "20";
         marker.textContent = String(p.player_id ?? "?");
+    }
 
-        mapDiv.appendChild(marker);
-    });
+    mapDiv.appendChild(marker);
+});
 }
 
 function prettySkillLabel(skillId) {
@@ -821,6 +825,33 @@ function isAwaitingPoisonChoice() {
     return !!turn && turn.mode === "awaiting_poison_choice";
 }
 
+function getPlayersInDisplayOrder(players, activeIdx) {
+    if (!Array.isArray(players) || !players.length) {
+        return [];
+    }
+
+    const safeActiveIdx =
+        Number.isInteger(activeIdx) &&
+        activeIdx >= 0 &&
+        activeIdx < players.length
+            ? activeIdx
+            : 0;
+
+    const ordered = [];
+
+    for (let offset = 0; offset < players.length; offset += 1) {
+        const originalIdx = (safeActiveIdx + offset) % players.length;
+        ordered.push({
+            player: players[originalIdx],
+            originalIdx: originalIdx,
+            displayIdx: offset,
+            isActive: offset === 0,
+        });
+    }
+
+    return ordered;
+}
+
 function renderPlayers(data) {
     const box = document.getElementById("players-box");
     if (!box) return;
@@ -838,9 +869,9 @@ function renderPlayers(data) {
         return;
     }
 
-    players.forEach((p, idx) => {
-        const isActive = idx === activeIdx;
+    const orderedPlayers = getPlayersInDisplayOrder(players, activeIdx);
 
+    orderedPlayers.forEach(({player: p, originalIdx: idx, displayIdx, isActive}) => {
         const isCursed = !!(p.status?.is_cursed || p.is_cursed || p.cursed);
         const isEvil = !!(p.status?.is_evil || p.is_evil);
 
@@ -3211,12 +3242,38 @@ async function endTurn() {
             throw new Error(data.detail || "Failed to end turn.");
         }
 
+        if (handleGameOverRedirect(data)) {
+            return;
+        }
+
         await refreshAll();
         showMessage("Turn ended. Next player is active.", "info", "Info");
+
     } catch (e) {
         console.error("endTurn failed:", e);
         showMessage(String(e), "warning", "Warning");
     }
+}
+
+function handleGameOverRedirect(data) {
+    const isGameOver =
+        data?.status === "game_over" ||
+        data?.game_over === true ||
+        data?.scope === "results" ||
+        Boolean(data?.redirect_to);
+
+    if (!isGameOver) {
+        return false;
+    }
+
+    showMessage(
+        "Game over. Opening results...",
+        "info",
+        "Game over"
+    );
+
+    window.location.href = data.redirect_to || "/phase4";
+    return true;
 }
 
 function handleSkillChipClick(event, playerId, skillId) {
@@ -3733,25 +3790,38 @@ async function fightToggleScroll(slotId) {
     await refreshAll();
 }
 
-async function finishItemPickup() {
-    try {
-        const r = await fetch(gameApi("/itempickup/finish"), {
-            method: "POST",
-        });
-        const data = await r.json();
+async function postGameAction(path, payload = null) {
+    const options = {
+        method: "POST",
+    };
 
-        if (!r.ok) {
-            throw new Error(data.detail || "Failed to finish item pickup.");
-        }
-
-        renderFight(null);
-        await refreshAll();
-        showMessage("Item pickup finished. Turn ended.", "info", "Info");
-    } catch (e) {
-        console.error("finishItemPickup failed:", e);
-        showMessage(String(e), "warning", "Warning");
+    if (payload !== null) {
+        options.headers = {
+            "Content-Type": "application/json",
+        };
+        options.body = JSON.stringify(payload);
     }
+
+    const r = await fetch(gameApi(path), options);
+    const data = await r.json();
+
+    if (!r.ok) {
+        throw new Error(data.detail || `Request failed: ${path}`);
+    }
+
+    if (handleGameOverRedirect(data)) {
+        return {
+            redirected: true,
+            data,
+        };
+    }
+
+    return {
+        redirected: false,
+        data,
+    };
 }
+
 
 async function leaveGame() {
     try {

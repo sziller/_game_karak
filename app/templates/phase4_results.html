@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Karak - Results</title>
+    <link href="/static/favicon.ico" rel="icon">
+
+    <!-- Reuse Phase 3 base visual language -->
+    <link href="/static/css/phase3_game.css" rel="stylesheet">
+
+    <!-- Phase 4 extension -->
+    <link href="/static/css/phase4_results.css" rel="stylesheet">
+</head>
+
+<body class="karak-page">
+<div class="karak-shell results-shell">
+
+    <div class="results-header karak-row">
+        <div class="results-title-block">
+            <h1>Karak - Results</h1>
+            <div id="results-subtitle" class="results-subtitle">(loading)</div>
+        </div>
+
+        <div class="results-actions">
+            <button id="restart-btn">Restart</button>
+        </div>
+    </div>
+
+    <div class="results-main karak-row">
+        <div class="ui-panel results-table-panel">
+            <div id="results-table-root" class="results-table-root">
+                (loading)
+            </div>
+        </div>
+    </div>
+
+    <div class="results-footer karak-row">
+        <div class="ui-panel message-panel">
+            <div class="message-box message-info" id="message-box">
+                <b id="message-title">Info</b>
+                <pre id="message-content">(ready)</pre>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script src="/static/js/phase4_results.js"></script>
+</body>
+</html>

@@ -1,462 +1,56 @@
-<!DOCTYPE html>
-<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Karak - Player settings</title>
+    <title>Karak - Lobby</title>
     <link href="/static/favicon.ico" rel="icon">
-    <link href="/static/css/phases12.css" rel="stylesheet">
+    <link href="/static/css/phase2_lobby.css" rel="stylesheet">
 </head>
-<body>
-<h1>Karak-1 - Phase 2</h1>
-<p>Hot-seat lobby</p>
+<body class="karak-page lobby-page">
+<div class="lobby-shell">
 
-<div class="message-box message-info" id="message-box">
-    <b id="message-title">Info</b>
-    <pre id="message-content">(ready)</pre>
-</div>
+    <div class="lobby-header">
+        <div class="lobby-title">Karak - Lobby</div>
+        <div class="lobby-session" id="lobby-session-label"></div>
+    </div>
 
-<div class="panel two-col">
-    <div class="col">
-        <h2>Players</h2>
-        <div>
-            <input id="new-player-name" placeholder="New player name" type="text">
-            <button onclick="addHotseatPlayer()">Add Player</button>
+    <div class="lobby-main">
+
+        <section class="ui-panel lobby-left-panel">
+            <div class="lobby-section-title">Players</div>
+
+            <div class="lobby-player-setup-column">
+                <div class="player-add-row">
+                    <input id="player-name-input" placeholder="Player name">
+                    <button id="add-player-btn">Add player</button>
+                </div>
+
+                <div class="lobby-player-list" id="lobby-player-list"></div>
+            </div>
+
+            <div class="lobby-class-column">
+                <div class="lobby-class-card" id="lobby-class-card">
+                    <div class="muted">Select a player, then assign a profession.</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="ui-panel lobby-right-panel">
+            <div class="lobby-section-title">Game rules</div>
+
+            <div class="config-editor" id="config-editor"></div>
+        </section>
+
+    </div>
+
+    <div class="lobby-footer">
+        <button id="back-to-phase1-btn">Back</button>
+        <div class="message-box message-info" id="message-box">
+            <b id="message-title">Info</b>
+            <pre id="message-content">(ready)</pre>
         </div>
-        <div id="players-box"></div>
+        <button disabled id="start-game-btn">Start game</button>
     </div>
 
-    <div class="col">
-        <h2>Character Selector</h2>
-        <div class="class-card">
-            <div class="muted" id="selected-player-label">(select a player)</div>
-
-            <div class="class-image-box">
-                <img alt="" id="class-image" src="" style="display:none;">
-                <div class="muted" id="class-image-placeholder">No class selected</div>
-            </div>
-
-            <div id="class-label">-</div>
-            <div class="muted" id="class-profession">-</div>
-            <pre id="class-description">-</pre>
-
-            <div class="slideshow-controls">
-                <button onclick="prevClass()">← Prev</button>
-                <span id="class-index-label">0 / 0</span>
-                <button onclick="nextClass()">Next →</button>
-            </div>
-
-            <div style="margin-top:10px;">
-                <button id="assign-class-btn" onclick="assignCurrentClass()">Assign to Selected Player</button>
-                <button onclick="clearSelectedClass()">Clear Selected Player Class</button>
-            </div>
-        </div>
-    </div>
 </div>
 
-<div class="panel">
-    <button onclick="backToPhase1()">Back to Phase 1</button>
-    <button id="start-game-btn" onclick="startGame()">Start Game</button>
-</div>
-
-<div class="panel">
-    <h2>Diagnostics</h2>
-    <div class="panel">
-        <h3>Lobby State</h3>
-        <pre id="lobby-box">(loading)</pre>
-    </div>
-</div>
-
-<script>
-    const lobbyApi = (p) => "/api/lobby" + (p.startsWith("/") ? p : "/" + p);
-
-    let latestLobbyResponse = null;
-    let selectedPlayerId = null;
-    let classCatalog = [];
-    let classIndex = 0;
-    let usedProfessions = [];
-
-    function showMessage(msg, level = "info", title = null) {
-    const box = document.getElementById("message-box");
-    const titleEl = document.getElementById("message-title");
-    const content = document.getElementById("message-content");
-
-    if (!box || !titleEl || !content) {
-        console.error("Message box elements not found.");
-        return;
-    }
-
-    box.classList.remove("message-info", "message-warning", "message-error");
-
-    if (level === "error") {
-        box.classList.add("message-error");
-        titleEl.textContent = title || "Error";
-    } else if (level === "warning") {
-        box.classList.add("message-warning");
-        titleEl.textContent = title || "Warning";
-    } else {
-        box.classList.add("message-info");
-        titleEl.textContent = title || "Info";
-    }
-
-    content.textContent = msg;
-}
-
-    function showError(msg) {
-        showMessage(msg, "error", "Error");
-    }
-
-    function showWarning(msg, title = "Warning") {
-    showMessage(msg, "warning", title);
-}
-    
-    function clearError() {
-        showMessage("(ready)", "info", "Info");
-    }
-
-
-    function currentClass() {
-        if (!classCatalog.length) return null;
-        return classCatalog[classIndex];
-    }
-
-    function renderClassCard() {
-        const selectedLabel = document.getElementById("selected-player-label");
-        const img = document.getElementById("class-image");
-        const placeholder = document.getElementById("class-image-placeholder");
-        const classLabel = document.getElementById("class-label");
-        const classProfession = document.getElementById("class-profession");
-        const classDescription = document.getElementById("class-description");
-        const indexLabel = document.getElementById("class-index-label");
-        const assignBtn = document.getElementById("assign-class-btn");
-
-        const cls = currentClass();
-        const selectedPlayer = getSelectedPlayer();
-
-        let playerText = "(select a player)";
-        if (selectedPlayer) {
-            playerText = `Selected player: ${selectedPlayer.display_name} (${selectedPlayer.player_id})`;
-        }
-        selectedLabel.textContent = playerText;
-
-        if (!cls) {
-            img.style.display = "none";
-            img.src = "";
-            placeholder.style.display = "block";
-            classLabel.textContent = "-";
-            classProfession.textContent = "-";
-            classDescription.textContent = "-";
-            indexLabel.textContent = "0 / 0";
-            if (assignBtn) assignBtn.disabled = true;
-            return;
-        }
-
-        const sameAsSelectedPlayer =
-            !!selectedPlayer && selectedPlayer.profession === cls.profession;
-
-        const takenByOther =
-            usedProfessions.includes(cls.profession) && !sameAsSelectedPlayer;
-
-        img.src = cls.tableau_path;
-        img.alt = cls.label;
-        img.style.display = "block";
-        placeholder.style.display = "none";
-
-        let suffix = "";
-        if (sameAsSelectedPlayer) {
-            suffix = " [ASSIGNED]";
-        } else if (takenByOther) {
-            suffix = " [TAKEN]";
-        }
-
-        classLabel.textContent = cls.label + suffix;
-        classProfession.textContent = cls.profession;
-        classDescription.textContent = cls.description || "-";
-        indexLabel.textContent = `${classIndex + 1} / ${classCatalog.length}`;
-
-        if (assignBtn) {
-            assignBtn.disabled = !selectedPlayer || takenByOther || sameAsSelectedPlayer;
-        }
-    }
-
-    function renderPlayers(lobbyState) {
-        const box = document.getElementById("players-box");
-        box.innerHTML = "";
-
-        const players = (lobbyState && lobbyState.players) ? lobbyState.players : [];
-        const firstMissingProfessionId = (players.find(p => !p.profession) || {}).player_id ?? null;
-
-        if (players.length === 0) {
-            box.textContent = "(no players)";
-            selectedPlayerId = null;
-            renderClassCard();
-            return;
-        }
-
-        if (!selectedPlayerId || !players.some(p => p.player_id === selectedPlayerId)) {
-            selectedPlayerId = players[0].player_id;
-
-            if (players[0].profession) {
-                const idx = classCatalog.findIndex(c => c.profession === players[0].profession);
-                if (idx >= 0) {
-                    classIndex = idx;
-                }
-            }
-        }
-
-        players.forEach((p, i) => {
-            const row = document.createElement("div");
-            row.className =
-                "player-row"
-                + (p.player_id === selectedPlayerId ? " selected" : "")
-                + (p.player_id === firstMissingProfessionId ? " missing-profession" : "");
-
-            row.onclick = () => {
-                selectedPlayerId = p.player_id;
-
-                if (p.profession) {
-                    const idx = classCatalog.findIndex(c => c.profession === p.profession);
-                    if (idx >= 0) {
-                        classIndex = idx;
-                    }
-                }
-
-                renderPlayers(lobbyState);
-                renderClassCard();
-            };
-
-            const left = document.createElement("div");
-            left.className = "player-name";
-
-            const prof = p.profession ? ` | class: ${p.profession}` : " | class: MISSING";
-            left.textContent = `Player ${i + 1} | ${p.display_name}${p.is_host ? " [HOST]" : ""}${prof}`;
-
-            const right = document.createElement("div");
-            if (!p.is_host) {
-                const btn = document.createElement("button");
-                btn.textContent = "Remove";
-                btn.onclick = (ev) => {
-                    ev.stopPropagation();
-                    removePlayer(p.player_id);
-                };
-                right.appendChild(btn);
-            }
-
-            row.appendChild(left);
-            row.appendChild(right);
-            box.appendChild(row);
-        });
-    }
-
-    function renderResponse(data) {
-        latestLobbyResponse = data;
-        usedProfessions = data.used_professions || [];
-        document.getElementById("lobby-box").textContent = JSON.stringify(data, null, 2);
-
-        const lobbyState = data.lobby_state || null;
-        renderPlayers(lobbyState);
-        renderClassCard();
-
-        const canStart = !!data.can_start_game;
-        document.getElementById("start-game-btn").disabled = !canStart;
-
-        if (data.missing_profession_player_id) {
-            showMessage("All players must have a profession assigned before starting the game.", "warning", "Missing profession");
-        } else {
-            showMessage("Lobby state loaded.", "info", "Info");
-        }
-    }
-
-    async function loadCatalog() {
-        const r = await fetch(lobbyApi("/character_catalog"));
-        const data = await r.json();
-        if (!r.ok) {
-            throw new Error(data.detail || "Failed to load character catalog.");
-        }
-        classCatalog = data.classes || [];
-        classIndex = 0;
-        renderClassCard();
-    }
-
-    async function loadLobby() {
-        clearError();
-        try {
-            const r = await fetch(lobbyApi("/state"));
-            const data = await r.json();
-
-            if (!r.ok) {
-                showError(data.detail || "Invalid lobby state");
-                setTimeout(() => {
-                    window.location.href = "/phase1";
-                }, 800);
-                return;
-            }
-
-            const bs = data.bootstrap_state || {};
-            if (bs.mode !== "hotseat" || bs.phase !== "lobby") {
-                showError("Lobby entered without valid hot-seat bootstrap.");
-                setTimeout(() => {
-                    window.location.href = "/phase1";
-                }, 800);
-                return;
-            }
-
-            renderResponse(data);
-        } catch (e) {
-            console.error(e);
-            showError("Failed to load lobby state.");
-            setTimeout(() => {
-                window.location.href = "/phase1";
-            }, 800);
-        }
-    }
-
-    async function addHotseatPlayer() {
-        clearError();
-        const display_name = document.getElementById("new-player-name").value.trim();
-        if (!display_name) {
-            showError("Player name is required.");
-            return;
-        }
-
-        const r = await fetch(lobbyApi("/add_hotseat_player"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({display_name})
-        });
-
-        const data = await r.json();
-        if (!r.ok) {
-            showError(data.detail || "Failed to add player.");
-            return;
-        }
-
-        const players = data.lobby_state?.players || [];
-        if (players.length) {
-            const newest = players[players.length - 1];
-            selectedPlayerId = newest.player_id;
-        }
-
-        document.getElementById("new-player-name").value = "";
-        await loadLobby();
-    }
-
-    async function removePlayer(playerId) {
-        clearError();
-        const r = await fetch(lobbyApi(`/remove_player/${playerId}`), {
-            method: "POST"
-        });
-
-        const data = await r.json();
-        if (!r.ok) {
-            showError(data.detail || "Failed to remove player.");
-            return;
-        }
-
-        await loadLobby();
-    }
-
-    async function clearSelectedClass() {
-        clearError();
-
-        if (!selectedPlayerId) {
-            showError("Select a player first.");
-            return;
-        }
-
-        const r = await fetch(lobbyApi("/clear_profession"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                player_id: selectedPlayerId
-            })
-        });
-
-        const data = await r.json();
-        if (!r.ok) {
-            showError(data.detail || "Failed to clear class.");
-            return;
-        }
-
-        await loadLobby();
-    }
-
-    function prevClass() {
-        if (!classCatalog.length) return;
-        classIndex = (classIndex - 1 + classCatalog.length) % classCatalog.length;
-        renderClassCard();
-    }
-
-    function nextClass() {
-        if (!classCatalog.length) return;
-        classIndex = (classIndex + 1) % classCatalog.length;
-        renderClassCard();
-    }
-
-    function getSelectedPlayer() {
-        const players = latestLobbyResponse?.lobby_state?.players || [];
-        return players.find(p => p.player_id === selectedPlayerId) || null;
-    }
-
-    async function assignCurrentClass() {
-        clearError();
-
-        if (!selectedPlayerId) {
-            showError("Select a player first.");
-            return;
-        }
-
-        const cls = currentClass();
-        if (!cls) {
-            showError("No class selected.");
-            return;
-        }
-
-        const selectedPlayer = getSelectedPlayer();
-        if (selectedPlayer && selectedPlayer.profession === cls.profession) {
-            showError("This player already has the selected class.");
-            return;
-        }
-
-        const r = await fetch(lobbyApi("/assign_profession"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                player_id: selectedPlayerId,
-                profession: cls.profession
-            })
-        });
-
-        const data = await r.json();
-        if (!r.ok) {
-            showError(data.detail || "Failed to assign class.");
-            return;
-        }
-
-        await loadLobby();
-    }
-
-    async function backToPhase1() {
-        await fetch(lobbyApi("/reset_to_phase1"), {method: "POST"});
-        window.location.href = "/phase1";
-    }
-
-    async function startGame() {
-        clearError();
-        const r = await fetch(lobbyApi("/start_game"), {method: "POST"});
-        const data = await r.json();
-
-        if (!r.ok) {
-            showError(data.detail || "Cannot start game.");
-            return;
-        }
-
-        window.location.href = data.redirect_to || "/phase3";
-    }
-
-    (async () => {
-        await loadCatalog();
-        await loadLobby();
-    })();
-</script>
+<script src="/static/js/phase2_lobby.js"></script>
 </body>
-</html>

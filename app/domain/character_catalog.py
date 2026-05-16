@@ -388,7 +388,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Argentus-large.png",
      "tableau_path": "static/media/hero-boards/Argentus-tiny.png",
      "icon_path": "static/media/hero-boards/Argentus-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Argentus-fig.png",
      "skills": ["skill_wiz_01", "skill_wiz_02"]},
 
     {"profession": "thief",
@@ -397,7 +397,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Aderyn-large.png",
      "tableau_path": "static/media/hero-boards/Aderyn-tiny.png",
      "icon_path": "static/media/hero-boards/Aderyn-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Aderyn-fig.png",
      "skills": ["skill_thi_01", "skill_thi_02"]},
 
     {"profession": "beasthunter",
@@ -406,7 +406,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Kirima-large.png",
      "tableau_path": "static/media/hero-boards/Kirima-tiny.png",
      "icon_path": "static/media/hero-boards/Kirima-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Kirima-fig.png",
      "skills": ["skill_bea_01", "skill_bea_02"]},
 
     {"profession": "warlock",
@@ -415,7 +415,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Xanros-large.png",
      "tableau_path": "static/media/hero-boards/Xanros-tiny.png",
      "icon_path": "static/media/hero-boards/Xanros-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Xanros-fig.png",
      "skills": ["skill_wlk_01", "skill_wlk_02"]},
 
     {"profession": "battlemage",
@@ -424,7 +424,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Markul-large.png",
      "tableau_path": "static/media/hero-boards/Markul-tiny.png",
      "icon_path": "static/media/hero-boards/Markul-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Markul-fig.png",
      "skills": ["skill_bat_01", "skill_bat_02"]},
 
     {"profession": "acrobat",
@@ -433,7 +433,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Hannah-large.png",
      "tableau_path": "static/media/hero-boards/Hannah-tiny.png",
      "icon_path": "static/media/hero-boards/Hannah-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Hannah-fig.png",
      "skills": ["skill_acr_01", "skill_acr_02"]},
 
     {"profession": "oracle",
@@ -442,7 +442,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Taia-large.png",
      "tableau_path": "static/media/hero-boards/Taia-tiny.png",
      "icon_path": "static/media/hero-boards/Taia-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Taia-fig.png",
      "skills": ["skill_ora_01", "skill_ora_02"]},
 
     {"profession": "alchemist",
@@ -451,7 +451,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Sidhar-large.png",
      "tableau_path": "static/media/hero-boards/Sidhar-tiny.png",
      "icon_path": "static/media/hero-boards/Sidhar-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Sidhar-fig.png",
      "skills": ["skill_alc_01", "skill_alc_02"]},
 
     {"profession": "barbarian",
@@ -460,7 +460,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Valduk-large.png",
      "tableau_path": "static/media/hero-boards/Valduk-tiny.png",
      "icon_path": "static/media/hero-boards/Valduk-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Valduk-fig.png",
      "skills": ["skill_bar_01", "skill_bar_02"]},
 
     {"profession": "warrior_princess",
@@ -469,7 +469,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Elspeth-large.png",
      "tableau_path": "static/media/hero-boards/Elspeth-tiny.png",
      "icon_path": "static/media/hero-boards/Elspeth-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Elspeth-fig.png",
      "skills": ["skill_pri_01", "skill_pri_02"]},
 
     {"profession": "ranger",
@@ -478,7 +478,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Lorraine-large.png",
      "tableau_path": "static/media/hero-boards/Lorraine-tiny.png",
      "icon_path": "static/media/hero-boards/Lorraine-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Lorraine-fig.png",
      "skills": ["skill_ran_01", "skill_ran_02"]},
 
     {"profession": "swordsman",
@@ -487,7 +487,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Victorius-large.png",
      "tableau_path": "static/media/hero-boards/Victorius-tiny.png",
      "icon_path": "static/media/hero-boards/Victorius-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Victorius-fig.png",
      "skills": ["skill_swo_01", "skill_swo_02"]},
 
     {"profession": "warrior",
@@ -496,7 +496,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Horan-large.png",
      "tableau_path": "static/media/hero-boards/Horan-tiny.png",
      "icon_path": "static/media/hero-boards/Horan-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Horan-fig.png",
      "skills": ["skill_wrr_01", "skill_wrr_02"]},
 
     {"profession": "scout",
@@ -505,7 +505,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Darius-large.png",
      "tableau_path": "static/media/hero-boards/Darius-tiny.png",
      "icon_path": "static/media/hero-boards/Darius-icon.png",
-     "figurine_path": None,
+     "figurine_path":"static/media/hero-boards/Darius-fig.png",
      "skills": ["skill_sco_01", "skill_sco_02"]},
 
     {"profession": "evil",
@@ -513,7 +513,7 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "image_path": "static/media/hero-boards/Karak-large.png",
      "tableau_path": "static/media/hero-boards/Karak-tiny.png",
      "icon_path": "static/media/hero-boards/Karak-icon.png",
-     "figurine_path": None,
+     "figurine_path": "static/media/hero-boards/Karak-fig.png",
      "skills": [],
      "selectable": False}
 ]

@@ -339,6 +339,8 @@ pre {
     overflow: hidden;
 
     box-sizing: border-box;
+
+    animation: player-row-enter 160ms ease-out;
 }
 
 /* Small hover feedback. Useful on touchscreen too, but not critical. */
@@ -2026,4 +2028,102 @@ pre {
     background: #1b102a;
     color: #d8b8ff;
     border: 2px solid #aa66ff;
+}
+
+/* =========================================================
+   41. PLAYER LIST TURN-CHANGE ANIMATION ONLY
+   No animation on normal refresh/re-render.
+   Animation only when JS marks a real active-player change.
+   ========================================================= */
+
+.player-row.turn-change-enter {
+    animation: player-row-turn-change-enter 180ms ease-out;
+}
+
+.player-row.active.turn-change-enter {
+    animation: active-player-turn-change-enter 260ms ease-out;
+}
+
+@keyframes player-row-turn-change-enter {
+    from {
+        opacity: 0.85;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes active-player-turn-change-enter {
+    0% {
+        opacity: 0.55;
+        transform: translateY(-16px) scale(0.985);
+    }
+
+    70% {
+        opacity: 1;
+        transform: translateY(2px) scale(1.005);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* =========================================================
+   42. MAP PLAYER FIGURINES
+   Replace round number markers with player figurine images.
+   ========================================================= */
+
+.map-player-figurine {
+    position: absolute;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    box-sizing: border-box;
+
+    pointer-events: none;
+
+    overflow: visible;
+
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.85));
+}
+
+.map-player-figurine img {
+    display: block;
+
+    max-width: 100%;
+    max-height: 100%;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+/* Active player gets a clear but not huge highlight. */
+.map-player-figurine.active {
+    filter:
+        drop-shadow(0 0 3px rgba(255, 255, 255, 0.95))
+        drop-shadow(0 2px 3px rgba(0, 0, 0, 0.9));
+}
+
+/* Fallback only: if figurine_path is missing. */
+.map-player-figurine-fallback {
+    border-radius: 50%;
+    border: 2px solid #333;
+
+    color: #000;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.map-player-figurine-fallback.active {
+    border: 3px solid #ffffff;
 }

@@ -244,7 +244,7 @@ MONSTER_POOL: List[MonsterArchetype] = (
     [monster(monster_id="SkeletonTurnkey",  strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 12 +
     [monster(monster_id="SkeletonWarrior",  strength=9,     loot_id="sword",    sort="UND", img_file="SkeletonWarrior.png")] * 5 +
     [monster(monster_id="SkeletonKing",     strength=10,    loot_id="axe",      sort="UND", img_file="SkeletonKing.png")] * 3 +
-    [monster(monster_id="SkeletalMage",     strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 200 +  # 2
+    [monster(monster_id="SkeletalMage",     strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 2 +  # 2
     [monster(monster_id="Mummy",            strength=7,     loot_id="fireball", sort="UND", img_file="Mummy.png")] * 8 +
     [monster(monster_id="Fallen",           strength=12,    loot_id="treasure", sort="UND", img_file="Fallen.png")] * 2 +
     [monster(monster_id="Dragon",           strength=15,    loot_id="ruby",     sort="LIV", img_file="Dragon.png")] * 1 +
@@ -254,11 +254,11 @@ MONSTER_POOL: List[MonsterArchetype] = (
 # )
 # MONSTER_POOL_EXT: List[MonsterArchetype] = (
 
-    [monster(monster_id="GiantSnake",       strength=7,     loot_id="p_bomb",   sort="LIV", img_file="GiantSnake.png")] * 6 +
-    [monster(monster_id="Tuneller",         strength=9,     loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 6 +
-    [monster(monster_id="ShadeGreen",       strength=7,     loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 6 +
-    [monster(monster_id="ShadeOrange",      strength=8,     loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 6 +
-    [monster(monster_id="SkeletalStealer",  strength=6,     loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 6
+    [monster(monster_id="GiantSnake",       strength=7,     loot_id="p_bomb",   sort="LIV", img_file="GiantSnake.png")] * 4 +
+    [monster(monster_id="Tuneller",         strength=9,     loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 2 +
+    [monster(monster_id="ShadeGreen",       strength=7,     loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 3 +
+    [monster(monster_id="ShadeOrange",      strength=8,     loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 1 +
+    [monster(monster_id="SkeletalStealer",  strength=6,     loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 4
 )
 
 # ============================================================

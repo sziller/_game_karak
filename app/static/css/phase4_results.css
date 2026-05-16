@@ -1,0 +1,436 @@
+/* =========================================================
+   PHASE 4 RESULTS
+   Extends phase3_game.css visual language.
+   ========================================================= */
+
+.results-shell {
+    grid-template-rows: 12% 76% 12%;
+}
+
+/* ---------------------------------------------------------
+   Header
+   --------------------------------------------------------- */
+
+.results-header {
+    display: grid;
+    grid-template-columns: 1fr 180px;
+    gap: 10px;
+
+    padding: 10px;
+
+    border-bottom: 1px solid #333;
+    background: #090909;
+
+    min-width: 0;
+    min-height: 0;
+}
+
+.results-title-block {
+    min-width: 0;
+    min-height: 0;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    overflow: hidden;
+}
+
+.results-title-block h1 {
+    margin: 0;
+
+    font-size: 24px;
+    line-height: 1.1;
+
+    color: #ddd;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.results-subtitle {
+    margin-top: 4px;
+
+    font-size: 12px;
+    color: #aaa;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.results-actions {
+    min-width: 0;
+    min-height: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.results-actions button {
+    width: 100%;
+}
+
+/* ---------------------------------------------------------
+   Main table area
+   --------------------------------------------------------- */
+
+.results-main {
+    padding: 10px;
+
+    min-width: 0;
+    min-height: 0;
+}
+
+.results-table-panel {
+    width: 100%;
+    height: 100%;
+
+    box-sizing: border-box;
+
+    overflow: hidden;
+}
+
+.results-table-root {
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    overflow: auto;
+}
+
+/* ---------------------------------------------------------
+   Results table
+   --------------------------------------------------------- */
+
+.results-table {
+    width: 100%;
+
+    border-collapse: collapse;
+    table-layout: fixed;
+
+    font-size: 12px;
+    color: #bbb;
+}
+
+.results-table th,
+.results-table td {
+    border: 1px solid #2a2a2a;
+
+    padding: 5px;
+
+    vertical-align: middle;
+    text-align: left;
+
+    overflow: hidden;
+}
+
+.results-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+
+    background: #111;
+    color: #ddd;
+
+    text-align: center;
+}
+
+.results-sort-btn {
+    width: 100%;
+    height: 28px;
+
+    padding: 2px 4px;
+
+    font-size: 16px;
+    line-height: 1;
+
+    border: 1px solid #444;
+    background: #181818;
+    color: #ddd;
+
+    cursor: pointer;
+}
+
+.results-sort-btn:hover {
+    background: #222822;
+}
+
+.results-sort-btn.active-sort {
+    border-color: #88cc88;
+    background: #112211;
+    color: #d8ffd8;
+}
+
+.results-row {
+    background: #101010;
+}
+
+.results-row:nth-child(even) {
+    background: #0d0d0d;
+}
+
+.results-row:hover {
+    background: #182218;
+}
+
+.results-rank-cell {
+    text-align: center;
+    font-size: 18px;
+    font-weight: bold;
+    color: #ddd;
+}
+
+.results-number-cell {
+    text-align: center;
+    font-weight: bold;
+    color: #ddd;
+}
+
+.results-icon-cell {
+    text-align: center;
+}
+
+.results-player-icon {
+    display: block;
+
+    width: 42px;
+    height: 42px;
+
+    margin: 0 auto;
+
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+.results-player-icon-placeholder {
+    width: 42px;
+    height: 42px;
+
+    margin: 0 auto;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid #333;
+    background: #151515;
+    color: #777;
+
+    font-size: 10px;
+}
+
+.results-player-name {
+    font-weight: bold;
+    color: #ddd;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.results-skill-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    min-width: 0;
+}
+
+.results-skill-chip {
+    min-width: 0;
+
+    padding: 2px 4px;
+
+    border: 1px solid #333;
+    background: #151515;
+    color: #bbb;
+
+    font-size: 10px;
+    line-height: 1.1;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.results-monster-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    min-width: 0;
+
+    font-size: 11px;
+}
+
+.results-monster-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+
+    min-width: 0;
+}
+
+.results-monster-name {
+    min-width: 0;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.results-monster-count {
+    flex: 0 0 auto;
+
+    font-weight: bold;
+    color: #ddd;
+}
+
+/* ---------------------------------------------------------
+   Column sizing
+   --------------------------------------------------------- */
+
+.results-col-rank {
+    width: 48px;
+}
+
+.results-col-treasure {
+    width: 58px;
+}
+
+.results-col-icon {
+    width: 58px;
+}
+
+.results-col-name {
+    width: 130px;
+}
+
+.results-col-skills {
+    width: 210px;
+}
+
+.results-col-target-kills {
+    width: 130px;
+}
+
+.results-col-all-kills {
+    width: 130px;
+}
+
+.results-col-pvp {
+    width: 58px;
+}
+
+.results-col-inventory {
+    width: 150px;
+}
+
+/* ---------------------------------------------------------
+   Mini inventory inside results table
+   Reuses conceptual Phase 3 mini inventory but tighter.
+   --------------------------------------------------------- */
+
+.results-mini-inventory {
+    display: grid;
+    grid-template-rows: repeat(4, 20px);
+    gap: 2px;
+
+    min-width: 0;
+}
+
+.results-mini-inv-row {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    gap: 3px;
+
+    min-width: 0;
+
+    border: 1px solid #333;
+    background: #151515;
+
+    padding: 1px 2px;
+}
+
+.results-mini-inv-label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    color: #888899;
+    font-weight: bold;
+    font-size: 10px;
+}
+
+.results-mini-inv-slots {
+    display: flex;
+    gap: 2px;
+
+    min-width: 0;
+    overflow: hidden;
+}
+
+.results-mini-inv-slot {
+    flex: 0 0 16px;
+
+    width: 16px;
+    height: 16px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid #2a2a2a;
+    background: #0f0f0f;
+
+    overflow: hidden;
+}
+
+.results-mini-inv-icon {
+    display: block;
+
+    max-width: 14px;
+    max-height: 14px;
+
+    width: auto;
+    height: auto;
+
+    object-fit: contain;
+}
+
+.results-mini-empty-dot {
+    color: #555;
+    font-size: 11px;
+    line-height: 1;
+}
+
+.results-mini-treasure {
+    display: flex;
+    align-items: center;
+
+    color: #ddd;
+    font-weight: bold;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------------
+   Footer
+   --------------------------------------------------------- */
+
+.results-footer {
+    padding: 10px;
+
+    border-top: 1px solid #333;
+    background: #090909;
+
+    min-width: 0;
+    min-height: 0;
+}

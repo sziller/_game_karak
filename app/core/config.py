@@ -1,6 +1,16 @@
 GENERAL = {"max_of_players": 5,
            "room_x_karak_limit": 5,
-           "curse_room_trigers": [1, 2, 3]}
+           "curse_room_triggers": [1, 2, 3],
+           "game_mode": "purge",    # purge: certain set of monsters are killed at the end of any players turn
+                                    # cave_collapse:    at the end of purge, game goes on and players must escape a
+                                    #                   collapse style dungeon destruction
+                                    # firestorm:        at the end of purge, game goes on and players must escape a
+                                    #                   pathing based dungeon destruction
+                                    # timed:            game ends after a given time
+                                    # turn_based:       game ends after a fixed amount of turns (*nr_of_players)
+                                    # on_demand:        game ends once an "END GAME" button is bushed
+                                    # never:            gema never ends
+           "game_mode_details": {"monsters": ["dragon"], "number_of_monsters": 1, "allow_early_escape": True}}
 
 PLAYER_FEATURES = {"max_hp": 5,
                    "total_of_scrolls": 3,
