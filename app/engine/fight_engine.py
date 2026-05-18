@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from engine.fight_models import FightContext, FightParticipantRef, FightState
+from engine.fight_models import FightContext, FightParticipantRef, FightRole, FightState
 from engine.fight_sheet_builder import (
     apply_reroll_both_dice_to_player_side,
     apply_reroll_one_die_to_player_side,
@@ -80,17 +80,35 @@ def _apply_outcome_modifiers(*, raw_outcome: FightOutcome, player: Player) -> tu
 def _is_fight_resolvable(fight_state: FightState) -> tuple[bool, list[str]]:
     missing: list[str] = []
 
-    # Current canonical monster fight rule:
-    # challenged side is player and needs a tossed dice state.
-    side = fight_state.challenged_side
+    if fight_state.context.fight_kind == "monster":
+        side = fight_state.challenged_side
 
-    if side.participant.participant_kind == "player":
-        if side.dice_state is None or not side.dice_state.has_been_tossed:
-            missing.append("challenged_player_dice_toss")
+        if side.participant.participant_kind == "player":
+            if side.dice_state is None or not side.dice_state.has_been_tossed:
+                missing.append("challenged_player_dice_toss")
 
-    return len(missing) == 0, missing
+        return len(missing) == 0, missing
 
-def _rebuild_fight_prediction(*, fight_state: FightState, player: Player) -> FightState:
+    if fight_state.context.fight_kind == "arena_pvp":
+        if "initiator" not in fight_state.committed_roles:
+            missing.append("initiator_commit")
+
+        if "challenged" not in fight_state.committed_roles:
+            missing.append("challenged_commit")
+
+        for role, side in (
+            ("initiator", fight_state.initiator_side),
+            ("challenged", fight_state.challenged_side),
+        ):
+            if side.participant.participant_kind == "player":
+                if side.dice_state is None or not side.dice_state.has_been_tossed:
+                    missing.append(f"{role}_player_dice_toss")
+
+        return len(missing) == 0, missing
+
+    raise ValueError(f"Unsupported fight kind: {fight_state.context.fight_kind!r}")
+
+def _rebuild_fight_prediction(*, fight_state: FightState, player: Optional[Player] = None) -> FightState:
     initiator_total = fight_state.initiator_side.total
     challenged_total = fight_state.challenged_side.total
 
@@ -101,10 +119,14 @@ def _rebuild_fight_prediction(*, fight_state: FightState, player: Player) -> Fig
         challenged_total=challenged_total,
     )
 
-    predicted_outcome, modifiers = _apply_outcome_modifiers(
-        raw_outcome=raw_outcome,
-        player=player,
-    )
+    if player is not None:
+        predicted_outcome, modifiers = _apply_outcome_modifiers(
+            raw_outcome=raw_outcome,
+            player=player,
+        )
+    else:
+        predicted_outcome = raw_outcome
+        modifiers = []
 
     fight_state.prediction.initiator_total = initiator_total
     fight_state.prediction.challenged_total = challenged_total
@@ -113,9 +135,12 @@ def _rebuild_fight_prediction(*, fight_state: FightState, player: Player) -> Fig
     fight_state.prediction.is_resolvable = is_resolvable
     fight_state.prediction.missing_inputs = missing_inputs
     fight_state.prediction.outcome_modifiers = modifiers
-    if is_resolvable:
-        fight_state.prediction.player_result = _derive_player_result_for_monster_fight(fight_state=fight_state,
-                                                                                       outcome=predicted_outcome)
+
+    if is_resolvable and fight_state.context.fight_kind == "monster":
+        fight_state.prediction.player_result = _derive_player_result_for_monster_fight(
+            fight_state=fight_state,
+            outcome=predicted_outcome,
+        )
     else:
         fight_state.prediction.player_result = None
     return fight_state
@@ -161,11 +186,14 @@ def start_monster_fight_state(*,
                            monster_tile_discovered_this_turn=monster_tile_discovered_this_turn)
     initiator_side = build_monster_side_state(participant=initiator,
                                               monster_id=monster_id)
-    challenged_side = build_player_side_state(participant=challenged,
-                                              player=player,
-                                              monster_id=monster_id,
-                                              is_before_second_action=context.is_before_second_action,
-                                              monster_tile_discovered_this_turn=context.monster_tile_discovered_this_turn)
+    challenged_side = build_player_side_state(
+        participant=challenged,
+        player=player,
+        monster_id=monster_id,
+        fight_kind="monster",
+        is_before_second_action=context.is_before_second_action,
+        monster_tile_discovered_this_turn=context.monster_tile_discovered_this_turn,
+    )
     fight_state = FightState(context=context,
                              initiator_side=initiator_side,
                              challenged_side=challenged_side,
@@ -175,28 +203,210 @@ def start_monster_fight_state(*,
                                             player=player)
     return fight_state
 
+def start_arena_pvp_fight_state(
+    *,
+    initiator_player: Player,
+    challenged_player: Player,
+    tile_x: int,
+    tile_y: int,
+    initiator_is_before_second_action: bool = False,
+    challenged_is_before_second_action: bool = True,
+) -> FightState:
+    """
+    Build an Arena PvP fight state.
+
+    Canonical role assignment:
+    - initiator  = active / entering / challenging player
+    - challenged = summoned player
+
+    Arena UX:
+    - initiator prepares and commits first
+    - challenged acts only after initiator side is finalized
+    """
+    initiator = FightParticipantRef(
+        participant_kind="player",
+        role="initiator",
+        display_name=initiator_player.display_name or f"Player #{initiator_player.player_id}",
+        player_id=initiator_player.player_id,
+    )
+
+    challenged = FightParticipantRef(
+        participant_kind="player",
+        role="challenged",
+        display_name=challenged_player.display_name or f"Player #{challenged_player.player_id}",
+        player_id=challenged_player.player_id,
+    )
+
+    context = FightContext(
+        fight_kind="arena_pvp",
+        tile_x=tile_x,
+        tile_y=tile_y,
+        initiator=initiator,
+        challenged=challenged,
+        is_before_second_action=initiator_is_before_second_action,
+        monster_tile_discovered_this_turn=False,
+    )
+
+    initiator_side = build_player_side_state(
+        participant=initiator,
+        player=initiator_player,
+        monster_id=None,
+        fight_kind="arena_pvp",
+        is_before_second_action=initiator_is_before_second_action,
+        monster_tile_discovered_this_turn=False,
+    )
+
+    challenged_side = build_player_side_state(
+        participant=challenged,
+        player=challenged_player,
+        monster_id=None,
+        fight_kind="arena_pvp",
+        is_before_second_action=challenged_is_before_second_action,
+        monster_tile_discovered_this_turn=False,
+    )
+
+    fight_state = FightState(
+        context=context,
+        initiator_side=initiator_side,
+        challenged_side=challenged_side,
+        phase="awaiting_initiator",
+        outcome=None,
+    )
+
+    # Temporary prediction rebuild:
+    # In Step 4 we will make this fully side-aware and phase-aware.
+    # For now, pass initiator_player so prediction object is populated.
+    fight_state = _rebuild_fight_prediction(
+        fight_state=fight_state,
+        player=initiator_player,
+    )
+
+    return fight_state
 
 # ============================================================
 # Fight state rebuild helpers
 # ============================================================
 
-def reroll_die_for_challenged_player_side(
+def _get_side_by_role(
+    *,
+    fight_state: FightState,
+    role: FightRole,
+):
+    if role == "initiator":
+        return fight_state.initiator_side
+
+    if role == "challenged":
+        return fight_state.challenged_side
+
+    raise ValueError(f"Unsupported fight role: {role!r}")
+
+
+def _set_side_by_role(
+    *,
+    fight_state: FightState,
+    role: FightRole,
+    side,
+) -> None:
+    if role == "initiator":
+        fight_state.initiator_side = side
+        return
+
+    if role == "challenged":
+        fight_state.challenged_side = side
+        return
+
+    raise ValueError(f"Unsupported fight role: {role!r}")
+
+
+def _get_monster_id_for_player_side_rebuild(
+    *,
+    fight_state: FightState,
+) -> Optional[str]:
+    """
+    Return monster_id only for monster fights.
+
+    In monster fights:
+    - initiator is the monster
+    - challenged is the player
+
+    In Arena PvP:
+    - both sides are players
+    - monster_id must be None
+    """
+    if fight_state.context.fight_kind != "monster":
+        return None
+
+    return fight_state.context.initiator.monster_id
+
+
+def _rebuild_player_side_by_role(
     *,
     fight_state: FightState,
     player: Player,
-    die_index: int,
-    skill_id: str) -> FightState:
-    """
-    Reroll one die for the challenged player side.
-
-    Supported:
-    - skill_swo_01
-    - skill_pri_01
-    """
-    side = fight_state.challenged_side
+    role: FightRole,
+) -> FightState:
+    side = _get_side_by_role(fight_state=fight_state, role=role)
 
     if side.participant.participant_kind != "player":
-        raise ValueError("Challenged side is not a player.")
+        raise ValueError(f"{role} side is not a player.")
+
+    rebuilt = build_player_side_state(
+        participant=side.participant,
+        player=player,
+        monster_id=_get_monster_id_for_player_side_rebuild(fight_state=fight_state),
+        fight_kind=fight_state.context.fight_kind,
+        is_before_second_action=fight_state.context.is_before_second_action,
+        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
+        existing_dice_state=side.dice_state,
+        existing_choices=side.choices,
+    )
+
+    _set_side_by_role(
+        fight_state=fight_state,
+        role=role,
+        side=rebuilt,
+    )
+
+    if fight_state.context.fight_kind == "monster":
+        fight_state.phase = "ready"
+    elif fight_state.context.fight_kind == "arena_pvp":
+        # Keep Arena phase until commit/phase transition.
+        pass
+    else:
+        raise ValueError(f"Unsupported fight kind: {fight_state.context.fight_kind!r}")
+
+    fight_state = _rebuild_fight_prediction(
+        fight_state=fight_state,
+        player=player,
+    )
+
+    return fight_state
+
+def reroll_die_for_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    role: FightRole = "challenged",
+    die_index: int,
+    skill_id: str,
+) -> FightState:
+    """
+    Reroll one die for a selected player side.
+    """
+    _ensure_role_can_edit_fight(fight_state=fight_state, role=role)
+    side = _get_side_by_role(
+        fight_state=fight_state,
+        role=role,
+    )
+
+    if side.participant.participant_kind != "player":
+        raise ValueError(f"{role} side is not a player.")
+
+    if side.participant.player_id != player.player_id:
+        raise ValueError(
+            f"Player #{player.player_id} cannot act for {role} side "
+            f"owned by player #{side.participant.player_id}."
+        )
 
     apply_reroll_one_die_to_player_side(
         side,
@@ -205,25 +415,109 @@ def reroll_die_for_challenged_player_side(
         skill_id=skill_id,
     )
 
-    rebuilt = build_player_side_state(
-        participant=side.participant,
-        player=player,
-        monster_id=fight_state.context.initiator.monster_id,
-        is_before_second_action=fight_state.context.is_before_second_action,
-        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
-        existing_dice_state=side.dice_state,
-        existing_choices=side.choices,
-    )
-
-    fight_state.challenged_side = rebuilt
-    fight_state.phase = "ready"
-
-    fight_state = _rebuild_fight_prediction(
+    return _rebuild_player_side_by_role(
         fight_state=fight_state,
         player=player,
+        role=role,
     )
 
-    return fight_state
+def _ensure_role_can_edit_fight(
+    *,
+    fight_state: FightState,
+    role: FightRole,
+) -> None:
+    """
+    Validate whether a role may currently modify its fight side.
+
+    Monster fight:
+    - only challenged player side is editable.
+
+    Arena PvP:
+    - initiator edits first
+    - then commits
+    - challenged edits second
+    """
+    if role in fight_state.committed_roles:
+        raise ValueError(f"{role} side is already committed.")
+
+    if fight_state.context.fight_kind == "monster":
+        if role != "challenged":
+            raise ValueError("Monster fight only allows challenged player side actions.")
+        return
+
+    if fight_state.context.fight_kind == "arena_pvp":
+        if fight_state.phase == "awaiting_initiator":
+            if role != "initiator":
+                raise ValueError("Arena PvP is waiting for initiator actions.")
+            return
+
+        if fight_state.phase == "awaiting_challenged":
+            if role != "challenged":
+                raise ValueError("Arena PvP is waiting for challenged player actions.")
+            return
+
+        raise ValueError(f"Arena PvP side actions are not allowed in phase {fight_state.phase!r}.")
+
+    raise ValueError(f"Unsupported fight kind: {fight_state.context.fight_kind!r}")
+
+def reroll_die_for_challenged_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    die_index: int,
+    skill_id: str,
+) -> FightState:
+    """
+    Compatibility wrapper.
+
+    Supported:
+    - skill_swo_01
+    - skill_pri_01
+    """
+    return reroll_die_for_player_side(
+        fight_state=fight_state,
+        player=player,
+        role="challenged",
+        die_index=die_index,
+        skill_id=skill_id,
+    )
+
+def reroll_both_dice_for_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    role: FightRole = "challenged",
+    skill_id: str,
+) -> FightState:
+    """
+    Reroll both dice for a selected player side.
+    """
+    _ensure_role_can_edit_fight(fight_state=fight_state, role=role)
+    side = _get_side_by_role(
+        fight_state=fight_state,
+        role=role,
+    )
+
+    if side.participant.participant_kind != "player":
+        raise ValueError(f"{role} side is not a player.")
+
+    if side.participant.player_id != player.player_id:
+        raise ValueError(
+            f"Player #{player.player_id} cannot act for {role} side "
+            f"owned by player #{side.participant.player_id}."
+        )
+
+    apply_reroll_both_dice_to_player_side(
+        side,
+        player=player,
+        skill_id=skill_id,
+    )
+
+    return _rebuild_player_side_by_role(
+        fight_state=fight_state,
+        player=player,
+        role=role,
+    )
 
 def reroll_both_dice_for_challenged_player_side(
     *,
@@ -232,79 +526,105 @@ def reroll_both_dice_for_challenged_player_side(
     skill_id: str,
 ) -> FightState:
     """
-    Reroll both dice for the challenged player side.
+    Compatibility wrapper.
 
     Supported:
     - skill_wrr_01
     """
-    side = fight_state.challenged_side
+    return reroll_both_dice_for_player_side(
+        fight_state=fight_state,
+        player=player,
+        role="challenged",
+        skill_id=skill_id,
+    )
+
+def toss_for_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    role: FightRole = "challenged",
+) -> FightState:
+    """
+    Toss 2 dice for a selected player side.
+
+    Default role is 'challenged' to preserve existing monster-fight behavior.
+    """
+    _ensure_role_can_edit_fight(fight_state=fight_state, role=role)
+    side = _get_side_by_role(
+        fight_state=fight_state,
+        role=role,
+    )
 
     if side.participant.participant_kind != "player":
-        raise ValueError("Challenged side is not a player.")
+        raise ValueError(f"{role} side is not a player.")
 
-    apply_reroll_both_dice_to_player_side(
+    if side.participant.player_id != player.player_id:
+        raise ValueError(
+            f"Player #{player.player_id} cannot act for {role} side "
+            f"owned by player #{side.participant.player_id}."
+        )
+
+    apply_toss_to_player_side(side, player=player)
+
+    return _rebuild_player_side_by_role(
+        fight_state=fight_state,
+        player=player,
+        role=role,
+    )
+
+
+def toss_for_challenged_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+) -> FightState:
+    """
+    Compatibility wrapper.
+
+    Monster fights use the challenged player side.
+    """
+    return toss_for_player_side(
+        fight_state=fight_state,
+        player=player,
+        role="challenged",
+    )
+
+def toggle_skill_for_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    role: FightRole = "challenged",
+    skill_id: str,
+) -> FightState:
+    """
+    Toggle one manual combat skill on a selected player side.
+    """
+    _ensure_role_can_edit_fight(fight_state=fight_state, role=role)
+    side = _get_side_by_role(
+        fight_state=fight_state,
+        role=role,
+    )
+
+    if side.participant.participant_kind != "player":
+        raise ValueError(f"{role} side is not a player.")
+
+    if side.participant.player_id != player.player_id:
+        raise ValueError(
+            f"Player #{player.player_id} cannot act for {role} side "
+            f"owned by player #{side.participant.player_id}."
+        )
+
+    toggle_manual_fight_skill_for_player_side(
         side,
         player=player,
         skill_id=skill_id,
     )
 
-    rebuilt = build_player_side_state(
-        participant=side.participant,
-        player=player,
-        monster_id=fight_state.context.initiator.monster_id,
-        is_before_second_action=fight_state.context.is_before_second_action,
-        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
-        existing_dice_state=side.dice_state,
-        existing_choices=side.choices,
-    )
-
-    fight_state.challenged_side = rebuilt
-    fight_state.phase = "ready"
-
-    fight_state = _rebuild_fight_prediction(
+    return _rebuild_player_side_by_role(
         fight_state=fight_state,
         player=player,
+        role=role,
     )
-
-    return fight_state
-
-
-def toss_for_challenged_player_side(*,
-                                    fight_state: FightState,
-                                    player: Player) -> FightState:
-    """
-    Toss 2 dice for the challenged player side, then rebuild that side table.
-
-    Development/testing note:
-    - Repeated toss is intentionally allowed for now.
-    - This makes it easy to manually generate edge cases.
-    """
-    side = fight_state.challenged_side
-
-    if side.participant.participant_kind != "player":
-        raise ValueError("Challenged side is not a player.")
-
-    apply_toss_to_player_side(side, player=player)
-
-    rebuilt = build_player_side_state(
-        participant=side.participant,
-        player=player,
-        monster_id=fight_state.context.initiator.monster_id,
-        is_before_second_action=fight_state.context.is_before_second_action,
-        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
-        existing_dice_state=side.dice_state,
-        existing_choices=side.choices,
-    )
-
-    fight_state.challenged_side = rebuilt
-    fight_state.phase = "ready"
-
-    fight_state = _rebuild_fight_prediction(
-        fight_state=fight_state,
-        player=player,
-    )
-
-    return fight_state
 
 def toggle_skill_for_challenged_player_side(
     *,
@@ -313,61 +633,48 @@ def toggle_skill_for_challenged_player_side(
     skill_id: str,
 ) -> FightState:
     """
-    Toggle one manual combat skill on the challenged player side.
+    Compatibility wrapper.
 
     Currently implemented:
     - skill_wlk_01
     """
-    side = fight_state.challenged_side
-
-    if side.participant.participant_kind != "player":
-        raise ValueError("Challenged side is not a player.")
-
-    toggle_manual_fight_skill_for_player_side(
-        side,
+    return toggle_skill_for_player_side(
+        fight_state=fight_state,
         player=player,
+        role="challenged",
         skill_id=skill_id,
     )
 
-    rebuilt = build_player_side_state(
-        participant=side.participant,
-        player=player,
-        monster_id=fight_state.context.initiator.monster_id,
-        is_before_second_action=fight_state.context.is_before_second_action,
-        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
-        existing_dice_state=side.dice_state,
-        existing_choices=side.choices,
-    )
 
-    fight_state.challenged_side = rebuilt
-    fight_state.phase = "ready"
-
-    fight_state = _rebuild_fight_prediction(
-        fight_state=fight_state,
-        player=player,
-    )
-
-    return fight_state
-
-def toggle_scroll_for_challenged_player_side(
+def toggle_scroll_for_player_side(
     *,
     fight_state: FightState,
     player: Player,
+    role: FightRole = "challenged",
     slot_id: str,
 ) -> FightState:
     """
-    Toggle one combat scroll slot on the challenged player side, then rebuild
-    the side table and fight prediction.
+    Toggle one combat scroll slot on a selected player side.
 
     slot_id format:
     - scroll_0
     - scroll_1
     - scroll_2
     """
-    side = fight_state.challenged_side
+    _ensure_role_can_edit_fight(fight_state=fight_state, role=role)
+    side = _get_side_by_role(
+        fight_state=fight_state,
+        role=role,
+    )
 
     if side.participant.participant_kind != "player":
-        raise ValueError("Challenged side is not a player.")
+        raise ValueError(f"{role} side is not a player.")
+
+    if side.participant.player_id != player.player_id:
+        raise ValueError(
+            f"Player #{player.player_id} cannot act for {role} side "
+            f"owned by player #{side.participant.player_id}."
+        )
 
     if not slot_id.startswith("scroll_"):
         raise ValueError("Invalid scroll slot id.")
@@ -389,27 +696,101 @@ def toggle_scroll_for_challenged_player_side(
     else:
         side.choices.selected_scroll_slot_ids.add(slot_id)
 
-    rebuilt = build_player_side_state(participant=side.participant,
-                                      player=player,
-                                      monster_id=fight_state.context.initiator.monster_id,
-                                      is_before_second_action=fight_state.context.is_before_second_action,
-                                      monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
-                                      existing_dice_state=side.dice_state,
-                                      existing_choices=side.choices)
-
-    fight_state.challenged_side = rebuilt
-    fight_state.phase = "ready"
-
-    fight_state = _rebuild_fight_prediction(
+    return _rebuild_player_side_by_role(
         fight_state=fight_state,
         player=player,
+        role=role,
     )
 
-    return fight_state
+
+def toggle_scroll_for_challenged_player_side(
+    *,
+    fight_state: FightState,
+    player: Player,
+    slot_id: str,
+) -> FightState:
+    """
+    Compatibility wrapper.
+
+    Toggles one combat scroll slot on the challenged player side.
+    """
+    return toggle_scroll_for_player_side(
+        fight_state=fight_state,
+        player=player,
+        role="challenged",
+        slot_id=slot_id,
+    )
 
 # ============================================================
 # Outcome resolution
 # ============================================================
+
+def commit_fight_role(
+    *,
+    fight_state: FightState,
+    role: FightRole,
+) -> FightState:
+    """
+    Commit/freeze one fight side.
+
+    Monster fight:
+    - currently no explicit commit is needed.
+    - challenged side may be committed as compatibility, but this is optional.
+
+    Arena PvP:
+    - initiator commits first
+    - then challenged commits
+    - once both are committed and dice exist, fight becomes ready
+    """
+    side = _get_side_by_role(
+        fight_state=fight_state,
+        role=role,
+    )
+
+    if side.participant.participant_kind == "player":
+        if side.dice_state is None or not side.dice_state.has_been_tossed:
+            raise ValueError(f"{role} player must toss dice before committing.")
+
+    if role in fight_state.committed_roles:
+        raise ValueError(f"{role} side is already committed.")
+
+    if fight_state.context.fight_kind == "monster":
+        if role != "challenged":
+            raise ValueError("Monster fight only allows challenged side commit.")
+
+        fight_state.committed_roles.add(role)
+        fight_state.phase = "ready"
+        return fight_state
+
+    if fight_state.context.fight_kind == "arena_pvp":
+        if role == "initiator":
+            if fight_state.phase != "awaiting_initiator":
+                raise ValueError("Arena initiator can only commit during awaiting_initiator phase.")
+
+            fight_state.committed_roles.add("initiator")
+            fight_state.phase = "awaiting_challenged"
+            fight_state = _rebuild_fight_prediction(
+                fight_state=fight_state,
+                player=None,  # see next note
+            )
+            return fight_state
+
+        if role == "challenged":
+            if fight_state.phase != "awaiting_challenged":
+                raise ValueError("Arena challenged side can only commit during awaiting_challenged phase.")
+
+            if "initiator" not in fight_state.committed_roles:
+                raise ValueError("Arena initiator must commit before challenged side.")
+
+            fight_state.committed_roles.add("challenged")
+            fight_state.phase = "ready"
+            fight_state = _rebuild_fight_prediction(
+                fight_state=fight_state,
+                player=None,  # see next note
+            )
+            return fight_state
+
+    raise ValueError(f"Unsupported fight kind/role combination: {fight_state.context.fight_kind!r}/{role!r}")
 
 def resolve_fight_outcome(fight_state: FightState) -> FightOutcome:
     """

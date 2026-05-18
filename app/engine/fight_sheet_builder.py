@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from typing import Optional
-from core.config import SKILL_RULES
+from core.config import SKILL_RULES, PVP_COMBAT_RULES
 
 from engine.fight_models import DiceState, FightParticipantRef, FightRow, FightRowButton, FightSideState, PlayerFightChoices
 from domain.game_entities import ITEM_FEATURES, get_monster_by_id
@@ -53,6 +53,7 @@ def build_player_side_state(
     participant: FightParticipantRef,
     player: Player,
     monster_id: Optional[str] = None,
+    fight_kind: str = "monster",
     is_before_second_action: bool = False,
     monster_tile_discovered_this_turn: bool = False,
     existing_dice_state: Optional[DiceState] = None,
@@ -73,13 +74,40 @@ def build_player_side_state(
     choices = existing_choices if existing_choices is not None else PlayerFightChoices()
 
     rows: list[FightRow] = []
+    opponent_sort: Optional[str] = None
+
+    if fight_kind == "arena_pvp":
+        raw_pvp_sort = PVP_COMBAT_RULES.get("player_sort_for_weapon_effects")
+
+        if raw_pvp_sort not in (None, "LIV", "UND"):
+            raise ValueError(
+                "PVP_COMBAT_RULES['player_sort_for_weapon_effects'] "
+                "must be None, 'LIV', or 'UND'."
+            )
+
+        opponent_sort = raw_pvp_sort
 
     rows.append(_build_toss_row(dice_state, player=player, choices=choices))
-    rows.append(_build_weapon_row(player, monster_id=monster_id))
-    rows.append(_build_skill_auto_row(player,
-                                      dice_state=dice_state,
-                                      is_before_second_action=is_before_second_action,
-                                      monster_tile_discovered_this_turn=monster_tile_discovered_this_turn))
+
+    rows.append(
+        _build_weapon_row(
+            player,
+            monster_id=monster_id,
+            opponent_sort=opponent_sort,
+        )
+    )
+
+    rows.append(
+        _build_skill_auto_row(
+            player,
+            dice_state=dice_state,
+            fight_kind=fight_kind,
+            monster_id=monster_id,
+            is_before_second_action=is_before_second_action,
+            monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
+        )
+    )
+    
     rows.append(_build_skill_manual_row(player, choices))
     rows.append(_build_scroll_manual_row(player, choices))
     rows.append(_build_result_row(rows))
@@ -456,6 +484,7 @@ def _get_weapon_strength_for_fight(
     item_id: str,
     player: Player,
     monster_id: Optional[str],
+    opponent_sort: Optional[str] = None,
 ) -> tuple[int, Optional[str]]:
     """
     Calculate one weapon's fight strength.
@@ -478,24 +507,31 @@ def _get_weapon_strength_for_fight(
         value = 3
         note = "skill_bat_01: sword counts as +3"
 
-    if monster_id is not None:
+    effective_opponent_sort = opponent_sort
+
+    if effective_opponent_sort is None and monster_id is not None:
         monster = get_monster_by_id(monster_id)
-        monster_sort = monster.get("sort")
+        effective_opponent_sort = monster.get("sort")
 
-        effect = feat.get("effect")
+    effect = feat.get("effect")
 
-        if effect == "LIV+1" and monster_sort == "LIV":
-            value += 1
-            note = "weapon effect: +1 against living monster"
+    if effect == "LIV+1" and effective_opponent_sort == "LIV":
+        value += 1
+        note = "weapon effect: +1 against living opponent"
 
-        if effect == "UND+1" and monster_sort == "UND":
-            value += 1
-            note = "weapon effect: +1 against undead monster"
+    if effect == "UND+1" and effective_opponent_sort == "UND":
+        value += 1
+        note = "weapon effect: +1 against undead opponent"
 
     return value, note
 
 
-def _build_weapon_row(player: Player, *, monster_id: Optional[str] = None) -> FightRow:
+def _build_weapon_row(
+    player: Player,
+    *,
+    monster_id: Optional[str] = None,
+    opponent_sort: Optional[str] = None,
+) -> FightRow:
     """
     Sum weapon-like combat modifiers.
 
@@ -531,6 +567,7 @@ def _build_weapon_row(player: Player, *, monster_id: Optional[str] = None) -> Fi
             item_id=item_id,
             player=player,
             monster_id=monster_id,
+            opponent_sort=opponent_sort,
         )
 
         weapon_parts.append(f"{item_id}({value:+d})")
@@ -568,15 +605,36 @@ def _build_weapon_row(player: Player, *, monster_id: Optional[str] = None) -> Fi
 def _get_beasthunter_context_bonus(
     player: Player,
     *,
+    fight_kind: str,
+    monster_id: Optional[str],
     monster_tile_discovered_this_turn: bool,
 ) -> int:
     """
-    skill_bea_01.
+    skill_bea_01 / Ambush.
 
-    Beasthunter receives +1 strength if the monster's tile was NOT discovered
-    during the current player's current turn.
+    Default:
+    - applies only against monsters.
+
+    Optional config:
+    - SKILL_RULES["skill_bea_01"]["allow_in_arena_pvp"] = True
+      allows this bonus in Arena PvP as well.
     """
     if not player.is_skill_active("skill_bea_01"):
+        return 0
+
+    if fight_kind == "arena_pvp":
+        allow_in_arena_pvp = bool(
+            SKILL_RULES
+            .get("skill_bea_01", {})
+            .get("allow_in_arena_pvp", False)
+        )
+
+        if not allow_in_arena_pvp:
+            return 0
+
+        return 1
+
+    if monster_id is None:
         return 0
 
     if not monster_tile_discovered_this_turn:
@@ -702,6 +760,8 @@ def _build_skill_auto_row(
     player: Player,
     *,
     dice_state: DiceState,
+    fight_kind: str = "monster",
+    monster_id: Optional[str] = None,
     is_before_second_action: bool = False,
     monster_tile_discovered_this_turn: bool = False,
 ) -> FightRow:
@@ -737,10 +797,10 @@ def _build_skill_auto_row(
         parts.append(f"skill_ora_01({oracle_bonus:+d})")
         notes.append("Oracle bonus: fight happened before the second action.")
 
-    beasthunter_bonus = _get_beasthunter_context_bonus(
-        player,
-        monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
-    )
+    beasthunter_bonus = _get_beasthunter_context_bonus(player,
+                                                       fight_kind=fight_kind,
+                                                       monster_id=monster_id,
+                                                       monster_tile_discovered_this_turn=monster_tile_discovered_this_turn)
     if beasthunter_bonus:
         total += beasthunter_bonus
         parts.append(f"skill_bea_01({beasthunter_bonus:+d})")

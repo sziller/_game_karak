@@ -139,7 +139,7 @@ TILE_POOL: List[TileArchetype] = (
         img_base="tile_xA",
         doors={"N": True, "E": False, "S": True, "W": False},
         feature="arena",
-    )] * 6 +
+    )] * 600 +  # 6 by default!!!
 
     # Curse room (cross)
     [tile(

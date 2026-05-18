@@ -13,10 +13,17 @@ from domain.game_entities import TILE_POOL as _TILE_POOL, MONSTER_POOL as _MONST
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
 
-from engine.fight_engine import (resolve_fight_state, start_monster_fight_state,
-                                 reroll_die_for_challenged_player_side, reroll_both_dice_for_challenged_player_side,
-                                 toggle_scroll_for_challenged_player_side, toggle_skill_for_challenged_player_side,
-                                 toss_for_challenged_player_side)
+from engine.fight_engine import (
+    resolve_fight_state,
+    start_monster_fight_state,
+    start_arena_pvp_fight_state,
+    commit_fight_role,
+    reroll_die_for_player_side,
+    reroll_both_dice_for_player_side,
+    toggle_scroll_for_player_side,
+    toggle_skill_for_player_side,
+    toss_for_player_side,
+)
 from engine.fight_models import FightState
 
 # --------------------------
@@ -74,7 +81,7 @@ class TileNode:
         doors_base: Dict[DIRECTION, bool],   # <-- NEW
         rotation_q: int = 0,
         monster_id: Optional[str] = None,
-        
+        arena_pvp_used: bool = False,
         tool: Optional[str] = None,
         feature: Optional[str] = None,
     ):
@@ -90,6 +97,7 @@ class TileNode:
         self.doors = rotate_doors_clockwise(doors_base, rotation_q)  # <-- DERIVED
 
         self.monster_id = monster_id
+        self.arena_pvp_used = bool(arena_pvp_used)
         self.object_id: Optional[str] = None
         
         self.tool = tool
@@ -123,6 +131,7 @@ class TileNode:
 
             "tool": self.tool,
             "feature": self.feature,
+            "arena_pvp_used": self.arena_pvp_used
         }
 
 
@@ -131,6 +140,7 @@ TurnMode = Literal[
     "pending_tile",
     "awaiting_monster_choice",
     "awaiting_monster_encounter",
+    "awaiting_arena_target_choice",
     "fight",
     "awaiting_curse_choice",
     "awaiting_poison_choice",
@@ -202,6 +212,18 @@ class TurnState:
     #     "must_fight_reason": str | None,
     # }
     pending_monster_encounter: Optional[dict[str, Any]] = None
+    # Pending Arena PvP trigger.
+    # Used while mode == "awaiting_arena_target_choice".
+    #
+    # Shape:
+    # {
+    #     "tile_x": int,
+    #     "tile_y": int,
+    #     "triggered_by_player_id": int,
+    #     "requires_target": "player",
+    #     "reason": "first_arena_entry",
+    # }
+    pending_arena_pvp: Optional[dict[str, Any]] = None
     # Item-use lock:
     # Once a fight is entered, active costless items are blocked for the rest of the turn,
     # unless the turn explicitly continues after combat by a continuation rule
@@ -247,6 +269,7 @@ class TurnState:
                 "pending_discovery": self.pending_discovery,
                 "pending_monster_choice": self.pending_monster_choice,
                 "pending_monster_encounter": self.pending_monster_encounter,
+                "pending_arena_pvp": self.pending_arena_pvp,
                 "item_use_locked_by_combat": self.item_use_locked_by_combat,
                 "last_valid_safe_tile": self.last_valid_safe_tile,
                 "ground_snapshot_item_id": self.ground_snapshot_item_id,
@@ -336,6 +359,8 @@ class StartFightFreeAction(FreeAction):
 
 @dataclass
 class TossFightFreeAction(FreeAction):
+    role: Literal["initiator", "challenged"] = "challenged"
+
     def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_toss_fight_free_action(self)
 
@@ -343,6 +368,7 @@ class TossFightFreeAction(FreeAction):
 @dataclass
 class ToggleFightScrollFreeAction(FreeAction):
     slot_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
 
     def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_toggle_fight_scroll_free_action(self)
@@ -353,7 +379,40 @@ class ResolveFightFreeAction(FreeAction):
     def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_resolve_fight_free_action(self)
 
+@dataclass
+class RerollFightDieFreeAction(FreeAction):
+    die_index: int
+    skill_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
 
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_reroll_fight_die_free_action(self)
+
+
+@dataclass
+class RerollFightBothFreeAction(FreeAction):
+    skill_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
+
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_reroll_fight_both_free_action(self)
+
+
+@dataclass
+class ToggleFightSkillFreeAction(FreeAction):
+    skill_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
+
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_toggle_fight_skill_free_action(self)
+
+@dataclass
+class CommitFightRoleFreeAction(FreeAction):
+    role: Literal["initiator", "challenged"]
+
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_commit_fight_role_free_action(self)
+    
 @dataclass
 class CurseFreeAction(FreeAction):
     target_player_id: int
@@ -482,6 +541,13 @@ class RedrawMonsterCandidateAction(FreeAction):
     """
     def execute(self, graph: "DungeonGraph") -> dict:
         return graph._execute_redraw_monster_candidate_action(self)
+    
+@dataclass
+class ChooseArenaOpponentFreeAction(FreeAction):
+    target_player_id: int
+
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_choose_arena_opponent_free_action(self)
     
 # --------------------------
 # Engine
@@ -747,6 +813,11 @@ class DungeonGraph:
             row["index"] = index
 
         return row
+    
+    def choose_arena_opponent(self, target_player_id: int) -> dict:
+        return self.execute_runtime_action(
+            ChooseArenaOpponentFreeAction(target_player_id=target_player_id)
+        )
 
     def _return_monster_candidates_to_pool(
             self,
@@ -771,6 +842,34 @@ class DungeonGraph:
         monster = self.monster_pool.pop(idx)
 
         return dict(monster)
+    
+    def _get_player_for_fight_role(
+            self,
+            *,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ) -> Player:
+        if role == "initiator":
+            side = fight_state.initiator_side
+        elif role == "challenged":
+            side = fight_state.challenged_side
+        else:
+            raise ValueError(f"Unsupported fight role: {role!r}")
+
+        participant = side.participant
+
+        if participant.participant_kind != "player":
+            raise ValueError(f"{role} side is not controlled by a player.")
+
+        if participant.player_id is None:
+            raise ValueError(f"{role} player side has no player_id.")
+
+        player = self._find_player_by_player_id(participant.player_id)
+
+        if player is None:
+            raise ValueError(f"{role} player not found.")
+
+        return player
 
     def _get_pending_monster_choice_tile(self) -> TileNode:
         turn = self.ensure_turn_active()
@@ -1014,7 +1113,255 @@ class DungeonGraph:
             "active_player": self.serialize_active_player(),
             "players": self.serialize_players(),
         }
+    
+    def _execute_choose_arena_opponent_free_action(
+            self,
+            action: ChooseArenaOpponentFreeAction,
+    ) -> dict:
+        """
+        Resolve Arena target choice:
+        - active player chooses one conscious co-player
+        - chosen player is teleported to the Arena tile
+        - Arena is marked permanently used
+        - Arena PvP fight state is created
+        """
+        turn, active = self.ensure_active_player_owns_turn()
 
+        if turn.mode != "awaiting_arena_target_choice":
+            raise ValueError(f"Cannot choose Arena opponent while turn mode is '{turn.mode}'.")
+
+        pending = turn.pending_arena_pvp
+        if not pending:
+            raise ValueError("No pending Arena PvP target choice.")
+
+        if int(pending["triggered_by_player_id"]) != active.player_id:
+            raise ValueError("Only the Arena trigger player may choose the opponent.")
+
+        target = self._find_player_by_player_id(action.target_player_id)
+        if target is None:
+            raise ValueError("Arena opponent not found.")
+
+        if target.player_id == active.player_id:
+            raise ValueError("Cannot challenge yourself in Arena.")
+
+        if not target.is_conscious:
+            raise ValueError("Cannot challenge an unconscious player in Arena.")
+
+        tile_x = int(pending["tile_x"])
+        tile_y = int(pending["tile_y"])
+
+        arena_tile = self.get_tile(tile_x, tile_y)
+        if arena_tile is None:
+            raise ValueError("Arena tile not found.")
+
+        if arena_tile.feature != "arena":
+            raise ValueError("Pending Arena target choice does not point to an Arena tile.")
+
+        if bool(getattr(arena_tile, "arena_pvp_used", False)):
+            raise ValueError("This Arena has already been used.")
+
+        # --------------------------------------------------
+        # Teleport challenged player to Arena.
+        # This is an off-turn relocation. It should not trigger Arena again
+        # and should not change turn ownership.
+        # --------------------------------------------------
+        target_old_position = {"x": target.x, "y": target.y}
+
+        target.x = arena_tile.x
+        target.y = arena_tile.y
+
+        target_entry_result = self._after_player_entered_tile(
+            player=target,
+            tile=arena_tile,
+            entry_cause="arena_summon",
+            is_turn_owner=False,
+        )
+
+        # --------------------------------------------------
+        # Permanently deactivate this Arena.
+        # Important: mark before fight resolution. Even if something later
+        # fails, this Arena has been activated.
+        # --------------------------------------------------
+        arena_tile.arena_pvp_used = True
+
+        initiator_is_before_second_action = self._is_fight_before_second_action(turn)
+
+        # Challenged player is acting outside their own turn.
+        # This currently activates Oracle skill_ora_01 through the existing
+        # is_before_second_action flag.
+        challenged_is_before_second_action = True
+
+        self.current_fight_state = start_arena_pvp_fight_state(
+            initiator_player=active,
+            challenged_player=target,
+            tile_x=arena_tile.x,
+            tile_y=arena_tile.y,
+            initiator_is_before_second_action=initiator_is_before_second_action,
+            challenged_is_before_second_action=challenged_is_before_second_action,
+        )
+
+        turn.pending_arena_pvp = None
+        turn.pending_monster_encounter = None
+        turn.item_use_locked_by_combat = True
+
+        self.set_turn_mode("fight")
+
+        return {
+            "ok": True,
+            "status": "arena_pvp_fight_started",
+            "action_kind": action.kind,
+            "arena": {
+                "tile_x": arena_tile.x,
+                "tile_y": arena_tile.y,
+                "arena_pvp_used": arena_tile.arena_pvp_used,
+            },
+            "initiator_player_id": active.player_id,
+            "challenged_player_id": target.player_id,
+            "challenged_player_teleport": {
+                "from": target_old_position,
+                "to": {"x": target.x, "y": target.y},
+                "entry": target_entry_result,
+            },
+            "fight": self.current_fight_state.to_dict(),
+            "tile": arena_tile.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+    
+    def _execute_toggle_fight_skill_free_action(self, action: ToggleFightSkillFreeAction) -> dict:
+        """
+        Backend implementation for toggling one manual combat skill in the current fight.
+        """
+        turn, _active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "fight":
+            raise ValueError(f"Cannot toggle fight skill while turn mode is '{turn.mode}'.")
+
+        if self.current_fight_state is None:
+            raise ValueError("No active fight state.")
+
+        acting_player = self._get_player_for_fight_role(
+            fight_state=self.current_fight_state,
+            role=action.role,
+        )
+
+        self.current_fight_state = toggle_skill_for_player_side(
+            fight_state=self.current_fight_state,
+            player=acting_player,
+            role=action.role,
+            skill_id=action.skill_id,
+        )
+
+        return {
+            "ok": True,
+            "status": "fight_skill_toggled",
+            "action_kind": action.kind,
+            "role": action.role,
+            "acting_player_id": acting_player.player_id,
+            "fight": self.current_fight_state.to_dict(),
+            "turn": self.serialize_turn_state(),
+        }
+    
+    def _execute_reroll_fight_die_free_action(self, action: RerollFightDieFreeAction) -> dict:
+        turn, _active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "fight":
+            raise ValueError(f"Cannot reroll fight die while turn mode is '{turn.mode}'.")
+
+        if self.current_fight_state is None:
+            raise ValueError("No active fight state.")
+
+        acting_player = self._get_player_for_fight_role(
+            fight_state=self.current_fight_state,
+            role=action.role,
+        )
+
+        self.current_fight_state = reroll_die_for_player_side(
+            fight_state=self.current_fight_state,
+            player=acting_player,
+            role=action.role,
+            die_index=action.die_index,
+            skill_id=action.skill_id,
+        )
+
+        return {
+            "ok": True,
+            "status": "fight_die_rerolled",
+            "action_kind": action.kind,
+            "role": action.role,
+            "acting_player_id": acting_player.player_id,
+            "die_index": action.die_index,
+            "skill_id": action.skill_id,
+            "fight": self.current_fight_state.to_dict(),
+            "turn": self.serialize_turn_state(),
+        }
+    
+    def commit_current_fight_role(
+            self,
+            role: Literal["initiator", "challenged"],
+    ) -> dict:
+        return self.execute_runtime_action(
+            CommitFightRoleFreeAction(role=role)
+        )
+    
+    def _execute_commit_fight_role_free_action(self, action: CommitFightRoleFreeAction) -> dict:
+        turn, _active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "fight":
+            raise ValueError(f"Cannot commit fight role while turn mode is '{turn.mode}'.")
+
+        if self.current_fight_state is None:
+            raise ValueError("No active fight state.")
+
+        self.current_fight_state = commit_fight_role(
+            fight_state=self.current_fight_state,
+            role=action.role,
+        )
+
+        return {
+            "ok": True,
+            "status": "fight_role_committed",
+            "action_kind": action.kind,
+            "role": action.role,
+            "fight": self.current_fight_state.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+
+    def _execute_reroll_fight_both_free_action(self, action: RerollFightBothFreeAction) -> dict:
+        turn, _active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "fight":
+            raise ValueError(f"Cannot reroll fight dice while turn mode is '{turn.mode}'.")
+
+        if self.current_fight_state is None:
+            raise ValueError("No active fight state.")
+
+        acting_player = self._get_player_for_fight_role(
+            fight_state=self.current_fight_state,
+            role=action.role,
+        )
+
+        self.current_fight_state = reroll_both_dice_for_player_side(
+            fight_state=self.current_fight_state,
+            player=acting_player,
+            role=action.role,
+            skill_id=action.skill_id,
+        )
+
+        return {
+            "ok": True,
+            "status": "fight_both_dice_rerolled",
+            "action_kind": action.kind,
+            "role": action.role,
+            "acting_player_id": acting_player.player_id,
+            "skill_id": action.skill_id,
+            "fight": self.current_fight_state.to_dict(),
+            "turn": self.serialize_turn_state(),
+        }
+    
     def confirm_monster_candidate(self, candidate_index: int) -> dict:
         return self.execute_runtime_action(
             ConfirmMonsterCandidateFreeAction(candidate_index=candidate_index)
@@ -1558,14 +1905,24 @@ class DungeonGraph:
                 is_turn_owner=True,
             )
 
+            arena_triggered = bool(
+                entry_result
+                and entry_result.get("arena_pvp")
+                and entry_result["arena_pvp"].get("requires_target") == "player"
+            )
+
             monster_encounter = None
 
-            if self._tile_has_active_monster(target):
+            if arena_triggered:
+                monster_encounter = None
+
+            elif self._tile_has_active_monster(target):
                 monster_encounter = self._maybe_enter_monster_encounter_after_entry(
                     player=active,
                     tile=target,
                     entry_cause="move",
                 )
+
             else:
                 # Empty tile, chest tile, future escape gate, etc. are retreat-safe.
                 self.register_tile_as_last_valid_safe_if_possible(tile=target)
@@ -1580,7 +1937,9 @@ class DungeonGraph:
             return {
                 "ok": True,
                 "status": (
-                    "moved_awaiting_monster_encounter"
+                    "moved_awaiting_arena_target_choice"
+                    if arena_triggered
+                    else "moved_awaiting_monster_encounter"
                     if monster_encounter
                     else "moved"
                 ),
@@ -2496,6 +2855,7 @@ class DungeonGraph:
                 "tile_type": tile.tile_type,
                 "feature": tile.feature,
             },
+            "arena_pvp": None,
             "curse_room": None,
         }
 
@@ -2510,7 +2870,16 @@ class DungeonGraph:
                 "tile": tile.to_dict(),
                 **curse_result,
             }
+        
+        arena_result = self._maybe_enter_arena_target_choice_after_entry(
+            player=player,
+            tile=tile,
+            entry_cause=entry_cause,
+            is_turn_owner=is_turn_owner,
+        )
 
+        result["arena_pvp"] = arena_result
+        
         return result
 
     def _continue_after_tile_population(self, *, tile: TileNode) -> dict:
@@ -2553,7 +2922,16 @@ class DungeonGraph:
                     is_turn_owner=True,
                 )
 
-                if self._tile_has_active_monster(tile):
+                arena_triggered = bool(
+                    entry_result
+                    and entry_result.get("arena_pvp")
+                    and entry_result["arena_pvp"].get("requires_target") == "player"
+                )
+
+                if arena_triggered:
+                    monster_encounter = None
+
+                elif self._tile_has_active_monster(tile):
                     # Do NOT mark active monster tile as safe.
                     monster_encounter = self._maybe_enter_monster_encounter_after_entry(
                         player=active,
@@ -2574,12 +2952,20 @@ class DungeonGraph:
         turn.pending_discovery = None
         turn.pending_monster_choice = None
 
-        if monster_encounter is None:
+        arena_triggered_final = bool(
+            entry_result
+            and entry_result.get("arena_pvp")
+            and entry_result["arena_pvp"].get("requires_target") == "player"
+        )
+
+        if arena_triggered_final:
+            # Keep mode as awaiting_arena_target_choice.
+            self.snapshot_active_ground_item()
+        elif monster_encounter is None:
             self.set_turn_mode("idle")
             self.snapshot_active_ground_item()
         else:
             # Keep mode as awaiting_monster_encounter.
-            # Snapshot current ground anyway, but inventory should normally be blocked by mode.
             self.snapshot_active_ground_item()
 
         self.current_fight_state = None
@@ -2587,7 +2973,9 @@ class DungeonGraph:
         return {
             "ok": True,
             "status": (
-                "reveal_completed_awaiting_monster_encounter"
+                "reveal_completed_awaiting_arena_target_choice"
+                if arena_triggered_final
+                else "reveal_completed_awaiting_monster_encounter"
                 if monster_encounter
                 else "reveal_completed"
             ),
@@ -3022,6 +3410,9 @@ class DungeonGraph:
 
         if turn.mode == "awaiting_monster_encounter":
             raise ValueError("Cannot end turn before resolving monster encounter.")
+        
+        if turn.mode == "awaiting_arena_target_choice":
+            raise ValueError("Cannot end turn before choosing Arena opponent.")
 
         if turn.pending_item_pickup:
             raise ValueError("Cannot end turn before resolving item pickup.")
@@ -3037,6 +3428,11 @@ class DungeonGraph:
 
         if turn.pending_forced_fight:
             raise ValueError("Cannot end turn before resolving forced fight.")
+        
+        if turn.pending_arena_pvp:
+            raise ValueError("Cannot end turn before resolving Arena target choice.")
+        
+        
 
         return self._finalize_current_turn_and_advance(end_cause="manual_end_turn")
 
@@ -3095,8 +3491,10 @@ class DungeonGraph:
     def _execute_toss_fight_free_action(self, action: TossFightFreeAction) -> dict:
         """
         Backend implementation for tossing dice in the current fight.
+
+        Default role is 'challenged', preserving existing monster-fight behavior.
         """
-        turn, active = self.ensure_active_player_owns_turn()
+        turn, _active = self.ensure_active_player_owns_turn()
 
         if turn.mode != "fight":
             raise ValueError(f"Cannot toss fight dice while turn mode is '{turn.mode}'.")
@@ -3104,15 +3502,23 @@ class DungeonGraph:
         if self.current_fight_state is None:
             raise ValueError("No active fight state.")
 
-        self.current_fight_state = toss_for_challenged_player_side(
+        acting_player = self._get_player_for_fight_role(
             fight_state=self.current_fight_state,
-            player=active,
+            role=action.role,
+        )
+
+        self.current_fight_state = toss_for_player_side(
+            fight_state=self.current_fight_state,
+            player=acting_player,
+            role=action.role,
         )
 
         return {
             "ok": True,
             "status": "fight_tossed",
             "action_kind": action.kind,
+            "role": action.role,
+            "acting_player_id": acting_player.player_id,
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
@@ -3121,7 +3527,7 @@ class DungeonGraph:
         """
         Backend implementation for toggling one combat scroll in the current fight.
         """
-        turn, active = self.ensure_active_player_owns_turn()
+        turn, _active = self.ensure_active_player_owns_turn()
 
         if turn.mode != "fight":
             raise ValueError(f"Cannot toggle fight scroll while turn mode is '{turn.mode}'.")
@@ -3129,9 +3535,15 @@ class DungeonGraph:
         if self.current_fight_state is None:
             raise ValueError("No active fight state.")
 
-        self.current_fight_state = toggle_scroll_for_challenged_player_side(
+        acting_player = self._get_player_for_fight_role(
             fight_state=self.current_fight_state,
-            player=active,
+            role=action.role,
+        )
+
+        self.current_fight_state = toggle_scroll_for_player_side(
+            fight_state=self.current_fight_state,
+            player=acting_player,
+            role=action.role,
             slot_id=action.slot_id,
         )
 
@@ -3139,6 +3551,8 @@ class DungeonGraph:
             "ok": True,
             "status": "fight_scroll_toggled",
             "action_kind": action.kind,
+            "role": action.role,
+            "acting_player_id": acting_player.player_id,
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
@@ -3175,6 +3589,17 @@ class DungeonGraph:
         fight_state = self.current_fight_state
         if fight_state is None:
             raise ValueError("No active fight state.")
+
+        # --------------------------------------------------------------
+        # Step 4 guard:
+        # Arena PvP has phase-aware fight preparation now, but its
+        # runtime consequences are implemented in Step 5.
+        #
+        # This must be before monster/tile validation, because Arena tiles
+        # do not contain monsters.
+        # --------------------------------------------------------------
+        if fight_state.context.fight_kind == "arena_pvp":
+            raise ValueError("Arena PvP resolution is not implemented until Step 5.")
 
         tile = self.get_active_tile()
         if tile is None:
@@ -4188,6 +4613,105 @@ class DungeonGraph:
         self.set_turn_mode("awaiting_monster_encounter")
 
         return encounter
+    
+    def _tile_is_unused_arena(self, tile: Optional[TileNode]) -> bool:
+        if tile is None:
+            return False
+
+        return (
+            tile.feature == "arena"
+            and not bool(getattr(tile, "arena_pvp_used", False))
+        )
+
+
+    def _build_arena_target_choice_for_active_player(
+            self,
+            *,
+            player: Player,
+            tile: TileNode,
+            entry_cause: str,
+    ) -> dict[str, Any]:
+        return {
+            "tile_x": tile.x,
+            "tile_y": tile.y,
+            "triggered_by_player_id": player.player_id,
+            "entered_by": entry_cause,
+            "requires_target": "player",
+            "reason": "first_arena_entry",
+            "eligible_targets": [
+                {
+                    "player_id": p.player_id,
+                    "display_name": p.display_name,
+                    "profession": p.profession,
+                    "hp": {
+                        "current": p.hp,
+                        "max": p.max_hp,
+                    },
+                    "status": {
+                        "is_conscious": p.is_conscious,
+                        "is_cursed": getattr(p, "is_cursed", False),
+                        "is_poisoned": bool(getattr(p, "poisoned_skill_ids", set())),
+                    },
+                    "inventory": p.inventory.to_dict(),
+                    "skills": sorted(p.skills),
+                    "skills_ui": self.build_skill_ui_for_player(p),
+                }
+                for p in self.players
+                if p.player_id != player.player_id and p.is_conscious
+            ],
+        }
+
+
+    def _maybe_enter_arena_target_choice_after_entry(
+            self,
+            *,
+            player: Player,
+            tile: TileNode,
+            entry_cause: str,
+            is_turn_owner: bool,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Enter Arena PvP target-choice mode after the active player enters
+        an unused Arena tile.
+
+        Rule:
+        - Arena triggers only once per tile.
+        - Trigger is on entry, not reveal.
+        - Only the active turn owner can trigger Arena PvP.
+        """
+        if not is_turn_owner:
+            return None
+
+        turn = self.ensure_turn_active()
+
+        if player.player_id != turn.owner_player_id:
+            return None
+
+        if not self._tile_is_unused_arena(tile):
+            return None
+
+        eligible_targets = [
+            p for p in self.players
+            if p.player_id != player.player_id and p.is_conscious
+        ]
+
+        if not eligible_targets:
+            # No legal opponent: leave Arena unused.
+            return {
+                "triggered": False,
+                "reason": "no_eligible_targets",
+            }
+
+        arena_choice = self._build_arena_target_choice_for_active_player(
+            player=player,
+            tile=tile,
+            entry_cause=entry_cause,
+        )
+
+        turn.pending_arena_pvp = arena_choice
+        self.set_turn_mode("awaiting_arena_target_choice")
+
+        return arena_choice
 
     def _validate_and_apply_monster_skip_before_move(self) -> dict[str, Any]:
         """
@@ -5561,71 +6085,71 @@ class DungeonGraph:
             raise ValueError("No active fight state.")
         return self.current_fight_state.to_dict()
 
-    def toss_current_fight(self) -> dict:
+    def toss_current_fight(self, role: Literal["initiator", "challenged"] = "challenged") -> dict:
         """
         Compatibility wrapper.
-        Later endpoints may directly instantiate TossFightFreeAction.
+        Defaults to challenged for existing monster fights.
         """
-        return self.execute_runtime_action(TossFightFreeAction())
+        return self.execute_runtime_action(TossFightFreeAction(role=role))
 
-    def reroll_current_fight_die(self, die_index: int, skill_id: str) -> dict:
-        if self.current_fight_state is None:
-            raise ValueError("No current fight state.")
-
-        active = self.get_active_player()
-        if active is None:
-            raise ValueError("No active player.")
-
-        self.current_fight_state = reroll_die_for_challenged_player_side(fight_state=self.current_fight_state,
-                                                                         player=active,
-                                                                         die_index=die_index,
-                                                                         skill_id=skill_id)
-        return self.current_fight_state.to_dict()
-
-    def reroll_current_fight_both_dice(self, skill_id: str) -> dict:
-        if self.current_fight_state is None:
-            raise ValueError("No current fight state.")
-
-        active = self.get_active_player()
-        if active is None:
-            raise ValueError("No active player.")
-
-        self.current_fight_state = reroll_both_dice_for_challenged_player_side(
-            fight_state=self.current_fight_state,
-            player=active,
-            skill_id=skill_id,
+    def reroll_current_fight_die(
+            self,
+            die_index: int,
+            skill_id: str,
+            role: Literal["initiator", "challenged"] = "challenged",
+    ) -> dict:
+        return self.execute_runtime_action(
+            RerollFightDieFreeAction(
+                die_index=die_index,
+                skill_id=skill_id,
+                role=role,
+            )
         )
 
-        return self.current_fight_state.to_dict()
+    def reroll_current_fight_both_dice(
+            self,
+            skill_id: str,
+            role: Literal["initiator", "challenged"] = "challenged",
+    ) -> dict:
+        return self.execute_runtime_action(
+            RerollFightBothFreeAction(
+                skill_id=skill_id,
+                role=role,
+            )
+        )
 
-    def toggle_current_fight_skill(self, skill_id: str) -> dict:
+    def toggle_current_fight_skill(
+            self,
+            skill_id: str,
+            role: Literal["initiator", "challenged"] = "challenged",
+    ) -> dict:
         """
         Toggle one manual combat skill in the current fight.
 
-        Currently implemented:
-        - skill_wlk_01
+        Defaults to challenged for existing monster fights.
         """
-        if self.current_fight_state is None:
-            raise ValueError("No current fight state.")
-
-        active = self.get_active_player()
-        if active is None:
-            raise ValueError("No active player.")
-
-        self.current_fight_state = toggle_skill_for_challenged_player_side(
-            fight_state=self.current_fight_state,
-            player=active,
-            skill_id=skill_id,
+        return self.execute_runtime_action(
+            ToggleFightSkillFreeAction(
+                skill_id=skill_id,
+                role=role,
+            )
         )
 
-        return self.current_fight_state.to_dict()
-    
-    def toggle_current_fight_scroll(self, slot_id: str) -> dict:
+    def toggle_current_fight_scroll(
+            self,
+            slot_id: str,
+            role: Literal["initiator", "challenged"] = "challenged",
+    ) -> dict:
         """
         Compatibility wrapper.
-        Later endpoints may directly instantiate ToggleFightScrollFreeAction.
+        Defaults to challenged for existing monster fights.
         """
-        return self.execute_runtime_action(ToggleFightScrollFreeAction(slot_id=slot_id))
+        return self.execute_runtime_action(
+            ToggleFightScrollFreeAction(
+                slot_id=slot_id,
+                role=role,
+            )
+        )
 
     def resolve_current_fight(self) -> dict:
         """

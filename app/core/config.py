@@ -17,6 +17,20 @@ PLAYER_FEATURES = {"max_hp": 5,
                    "total_of_weapons": 2,
                    "total_of_keys": 1}
 
+# PvP-specific combat interpretation.
+PVP_COMBAT_RULES = {
+    # None:
+    #   Players have no monster sort in PvP. LIV+1 / UND+1 weapon effects do not apply.
+    #
+    # "LIV":
+    #   Players count as living in PvP. LIV+1 weapon effects apply.
+    #
+    # "UND":
+    #   Players count as undead in PvP. UND+1 weapon effects apply.
+    "player_sort_for_weapon_effects": None,
+}
+
+
 TURN_RULES = {"total_of_actions": 4,
               "teleport_action_prices": {"portal": 1,
                                          "skill_bea_02": 1,
@@ -25,6 +39,7 @@ TURN_RULES = {"total_of_actions": 4,
 
 SKILL_RULES = {"skill_acr_02": {"total_of_actions_override": 8},
                "skill_wiz_02": {"allow_blink_discovered_only": True},
+               "skill_bea_01": {"allow_in_arena_pvp": False},
                "skill_bea_02": {"allow_wounded_only": True},
                "skill_bar_02": {"dmg_groups": {0: [5], 1: [4, 3], 2: [2, 1]}}}
 

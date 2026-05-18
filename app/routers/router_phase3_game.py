@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 from dto import (
     MoveRequest,
@@ -22,7 +22,12 @@ class SelectActivePlayerRequest(BaseModel):
     
 class FightToggleScrollRequest(BaseModel):
     slot_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
 
+
+class FightTossRequest(BaseModel):
+    role: Literal["initiator", "challenged"] = "challenged"
+    
     
 class InventorySlotActionRequest(BaseModel):
     slot_group: str
@@ -52,6 +57,7 @@ class PoisonChoiceRequest(BaseModel):
 
 class ToggleSkillUiRequest(BaseModel):
     skill_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
 
 
 class SetSkillUiValueRequest(BaseModel):
@@ -62,10 +68,12 @@ class SetSkillUiValueRequest(BaseModel):
 class FightRerollDieRequest(BaseModel):
     die_index: int = Field(..., ge=1, le=2)
     skill_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
     
     
 class FightRerollBothRequest(BaseModel):
     skill_id: str
+    role: Literal["initiator", "challenged"] = "challenged"
 
 
 class SkillTeleportPlayerRequest(BaseModel):
@@ -84,6 +92,14 @@ class KoReactionFountainChoiceRequest(BaseModel):
     
 class ConfirmMonsterCandidateRequest(BaseModel):
     candidate_index: int = Field(..., ge=0)
+
+
+class ArenaOpponentChoiceRequest(BaseModel):
+    target_player_id: int = Field(..., ge=0)
+    
+
+class FightCommitRoleRequest(BaseModel):
+    role: Literal["initiator", "challenged"]
     
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
@@ -290,15 +306,19 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.get_current_fight_state()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
     @router.post(
         "/fight/toss",
         summary="Toss dice for current fight",
-        description="Tosses the challenged player's 2 dice and rebuilds the fight table.",
+        description=(
+                "Tosses dice for the selected player side and rebuilds the fight table. "
+                "Defaults to challenged side for existing monster fights."
+        ),
     )
-    def fight_toss():
+    def fight_toss(req: Optional[FightTossRequest] = None):
         try:
-            return graph.toss_current_fight()
+            role = req.role if req is not None else "challenged"
+            return graph.toss_current_fight(role=role)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -311,6 +331,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.reroll_current_fight_die(
                 die_index=req.die_index,
                 skill_id=req.skill_id,
+                role=req.role,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -323,6 +344,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         try:
             return graph.reroll_current_fight_both_dice(
                 skill_id=req.skill_id,
+                role=req.role,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -334,7 +356,10 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     )
     def fight_toggle_scroll(req: FightToggleScrollRequest):
         try:
-            return graph.toggle_current_fight_scroll(req.slot_id)
+            return graph.toggle_current_fight_scroll(
+                slot_id=req.slot_id,
+                role=req.role,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -345,7 +370,24 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     )
     def fight_toggle_skill(req: ToggleSkillUiRequest):
         try:
-            return graph.toggle_current_fight_skill(req.skill_id)
+            return graph.toggle_current_fight_skill(
+                skill_id=req.skill_id,
+                role=req.role,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @router.post(
+        "/fight/commit_role",
+        summary="Commit one fight side",
+        description=(
+            "Freezes one fight side. "
+            "Arena PvP uses this to commit the initiator before challenged player interaction."
+        ),
+    )
+    def fight_commit_role(req: FightCommitRoleRequest):
+        try:
+            return graph.commit_current_fight_role(req.role)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     
@@ -357,6 +399,20 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def fight_resolve():
         try:
             return graph.resolve_current_fight()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @router.post(
+        "/arena/choose_opponent",
+        summary="Choose Arena PvP opponent",
+        description=(
+            "Chooses the challenged player after the active player enters an unused Arena. "
+            "The chosen player is teleported to the Arena tile and an Arena PvP fight state is created."
+        ),
+    )
+    def arena_choose_opponent(req: ArenaOpponentChoiceRequest):
+        try:
+            return graph.choose_arena_opponent(req.target_player_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     

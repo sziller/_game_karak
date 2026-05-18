@@ -518,7 +518,6 @@ CHARACTER_CLASSES: list[CharacterClassInfo] = [
      "selectable": False}
 ]
 
-
 def resolve_skill(skill_id: str) -> SkillInfo:
     if skill_id not in SKILL_CATALOG:
         raise KeyError(f"Unknown skill_id: {skill_id}")

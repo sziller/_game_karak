@@ -355,7 +355,7 @@ class FightState:
     initiator_side: FightSideState
     challenged_side: FightSideState
     prediction: FightPrediction = field(default_factory=FightPrediction)
-
+    committed_roles: set[FightRole] = field(default_factory=set)
     phase: str = "created"
     outcome: Optional[Literal["initiator_win", "challenged_win", "draw"]] = None
     player_result: Optional[Literal["win", "loss", "tie"]] = None
@@ -366,10 +366,27 @@ class FightState:
             "initiator_side": self.initiator_side.to_dict(),
             "challenged_side": self.challenged_side.to_dict(),
             "prediction": self.prediction.to_dict(),
+            "committed_roles": sorted(self.committed_roles),
+            "editable_role": self.get_editable_role(),
             "phase": self.phase,
             "outcome": self.outcome,
             "player_result": self.player_result,
         }
+    
+    def get_editable_role(self) -> Optional[FightRole]:
+        if self.phase == "awaiting_initiator":
+            return "initiator"
+
+        if self.phase == "awaiting_challenged":
+            return "challenged"
+
+        if self.phase in ("created", "ready"):
+            # Monster-fight compatibility:
+            # monster side is fixed; challenged player is editable.
+            if self.context.fight_kind == "monster":
+                return "challenged"
+
+        return None
 
 
 if __name__ == "__main__":
