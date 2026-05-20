@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict, Literal, Optional, List, Any
 from typing import NamedTuple
+from collections import Counter
 
 # ============================================================
 # Tile archetypes (static, pooled content)
@@ -102,7 +103,7 @@ TILE_POOL: List[TileArchetype] = (
         tile_type="room",
         img_base="tile_rX",
         doors={"N": True, "E": True, "S": True, "W": True},
-    )] * 16 +
+    )] * (16 + 5) +
 
     # Room T (3 exits)
     [tile(
@@ -110,7 +111,7 @@ TILE_POOL: List[TileArchetype] = (
         tile_type="room",
         img_base="tile_rT",
         doors={"N": True, "E": True, "S": True, "W": False},
-    )] * 17 +
+    )] * (17 + 5) +
 
     # Room I (2 opposite exits)
     [tile(
@@ -118,7 +119,7 @@ TILE_POOL: List[TileArchetype] = (
         tile_type="room",
         img_base="tile_rI",
         doors={"N": True, "E": False, "S": True, "W": False},
-    )] * 13 +
+    )] * (13 + 3) +
 
     # Room L (corner exits)
     [tile(
@@ -126,7 +127,7 @@ TILE_POOL: List[TileArchetype] = (
         tile_type="room",
         img_base="tile_rL",
         doors={"N": True, "E": True, "S": False, "W": False},
-    )] * 15 +
+    )] * (15 + 9) +
 
     # --------------------------------------------------------
     # SPECIAL ROOMS (XR)
@@ -139,7 +140,7 @@ TILE_POOL: List[TileArchetype] = (
         img_base="tile_xA",
         doors={"N": True, "E": False, "S": True, "W": False},
         feature="arena",
-    )] * 600 +  # 6 by default!!!
+    )] * 60 +  # 6 by default!!!
 
     # Curse room (cross)
     [tile(
@@ -239,8 +240,8 @@ class MonsterArchetype(TypedDict):
 
 MONSTER_POOL: List[MonsterArchetype] = (
     [monster(monster_id="GiantRat",         strength=5,     loot_id="dagger",   sort="LIV", img_file="GiantRat.png")] * 8 +
-    [monster(monster_id="GiantSpider",      strength=6,     loot_id="heal",     sort="LIV", img_file="GiantSpider.png")] * 8 +  # 4
-    [monster(monster_id="GiantBat",         strength=6,     loot_id="thorn",    sort="LIV", img_file="GiantBat.png")] * 12 +    # 6
+    [monster(monster_id="GiantSpider",      strength=6,     loot_id="heal",     sort="LIV", img_file="GiantSpider.png")] * 4 +  # 4
+    [monster(monster_id="GiantBat",         strength=6,     loot_id="thorn",    sort="LIV", img_file="GiantBat.png")] * 6 +    # 6
     [monster(monster_id="SkeletonTurnkey",  strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 12 +
     [monster(monster_id="SkeletonWarrior",  strength=9,     loot_id="sword",    sort="UND", img_file="SkeletonWarrior.png")] * 5 +
     [monster(monster_id="SkeletonKing",     strength=10,    loot_id="axe",      sort="UND", img_file="SkeletonKing.png")] * 3 +
@@ -249,16 +250,18 @@ MONSTER_POOL: List[MonsterArchetype] = (
     [monster(monster_id="Fallen",           strength=12,    loot_id="treasure", sort="UND", img_file="Fallen.png")] * 2 +
     [monster(monster_id="Dragon",           strength=15,    loot_id="ruby",     sort="LIV", img_file="Dragon.png")] * 1 +
     [monster(monster_id="Chest",            strength=0,     loot_id="treasure", sort="ITM", img_file="Chest.png")] * 10
-    +
+    
 
 # )
 # MONSTER_POOL_EXT: List[MonsterArchetype] = (
 
-    [monster(monster_id="GiantSnake",       strength=7,     loot_id="p_bomb",   sort="LIV", img_file="GiantSnake.png")] * 4 +
+    + [monster(monster_id="GiantSnake",       strength=7,     loot_id="p_bomb",   sort="LIV", img_file="GiantSnake.png")] * 4 +
     [monster(monster_id="Tuneller",         strength=9,     loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 2 +
     [monster(monster_id="ShadeGreen",       strength=7,     loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 3 +
     [monster(monster_id="ShadeOrange",      strength=8,     loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 1 +
-    [monster(monster_id="SkeletalStealer",  strength=6,     loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 4
+    [monster(monster_id="SkeletalStealer",  strength=6,     loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 4 +
+    [monster(monster_id="Chest",            strength=0,     loot_id="treasure", sort="ITM", img_file="Chest.png")] * 3 +
+    [monster(monster_id="SkeletonTurnkey",  strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 5
 )
 
 # ============================================================
@@ -474,9 +477,275 @@ def get_monster_by_id(monster_id: str) -> MonsterArchetype:
 # Diagnostics / sanity checks
 # ============================================================
 
+from collections import Counter
+
+
+# ------------------------------------------------------------
+# Expected monster/content checklists
+# ------------------------------------------------------------
+
+# Base / canonical checklist.
+# This is the smaller list.
+EXPECTED_MONSTER_COUNTS: dict[str, int] = {
+    "GiantRat": 8,
+    "GiantSpider": 4,
+    "GiantBat": 6,
+    "SkeletonTurnkey": 12,
+    "SkeletonWarrior": 5,
+    "SkeletonKing": 3,
+    "SkeletalMage": 2,
+    "Mummy": 8,
+    "Fallen": 2,
+    "Dragon": 1,
+    "Chest": 10,
+}
+
+
+# Extended checklist.
+# This includes the optional / additional monsters currently present
+# in the larger MONSTER_POOL variant.
+EXPECTED_MONSTER_COUNTS_EXT: dict[str, int] = {
+    "Chest": 13,
+    "Dragon": 1,
+    "Fallen": 2,
+    "GiantBat": 6,
+    "GiantRat": 8,
+    "GiantSnake": 4,
+    "GiantSpider": 4,
+    "Mummy": 8,
+    "ShadeGreen": 3,
+    "ShadeOrange": 1,
+    "SkeletalMage": 2,
+    "SkeletalStealer": 4,
+    "SkeletonKing": 3,
+    "SkeletonTurnkey": 17,
+    "SkeletonWarrior": 5,
+    "Tuneller": 2,
+}
+
+
+# Toggle this to choose which expected checklist is active.
+# False -> compare against EXPECTED_MONSTER_COUNTS
+# True  -> compare against EXPECTED_MONSTER_COUNTS_EXT
+USE_EXTENDED_MONSTER_CHECKLIST = True
+
+
+# ------------------------------------------------------------
+# Counter helpers
+# ------------------------------------------------------------
+
+def _count_tiles_by_type() -> Counter[str]:
+    return Counter(t["tile_type"] for t in TILE_POOL)
+
+
+def _count_tiles_by_archetype() -> Counter[str]:
+    return Counter(t["archetype_id"] for t in TILE_POOL)
+
+
+def _count_monsters_by_id() -> Counter[str]:
+    return Counter(m["monster_id"] for m in MONSTER_POOL)
+
+
+def _count_monsters_by_sort() -> Counter[str]:
+    return Counter(m["sort"] for m in MONSTER_POOL)
+
+
+def _get_active_expected_monster_counts() -> dict[str, int]:
+    return (
+        EXPECTED_MONSTER_COUNTS_EXT
+        if USE_EXTENDED_MONSTER_CHECKLIST
+        else EXPECTED_MONSTER_COUNTS
+    )
+
+
+def _get_active_expected_monster_checklist_name() -> str:
+    return (
+        "EXPECTED_MONSTER_COUNTS_EXT"
+        if USE_EXTENDED_MONSTER_CHECKLIST
+        else "EXPECTED_MONSTER_COUNTS"
+    )
+
+
+# ------------------------------------------------------------
+# Printing helpers
+# ------------------------------------------------------------
+
+def _print_counter(title: str, counter: Counter[str]) -> None:
+    print(f"\n{title}")
+    print("-" * len(title))
+
+    for key in sorted(counter):
+        print(f"{key:24s} {counter[key]:>3}")
+
+
+def _compare_counter_to_expected(
+    *,
+    actual: Counter[str],
+    expected: dict[str, int],
+    title: str,
+) -> bool:
+    print(f"\n{title}")
+    print("-" * len(title))
+
+    all_keys = sorted(set(actual) | set(expected))
+    ok = True
+
+    print(
+        f"{'item':<28}| "
+        f"{'actual':>9} | "
+        f"{'expected':>9} | "
+        f"{'delta':>9} | \n"
+        f"-----------------------------------------------------------------")
+    for key in all_keys:
+        actual_value = actual.get(key, 0)
+        expected_value = expected.get(key, 0)
+        delta = actual_value - expected_value
+
+        marker = "OK" if delta == 0 else "!!"
+
+        if delta != 0:
+            ok = False
+
+        print(
+            f"{marker} {key:24s} | "
+            f"{actual_value:>9} | "
+            f"{expected_value:>9} | "
+            f"{delta:>+9} | "
+        )
+
+    return ok
+
+
+def _print_extra_checklist_from_delta(
+    *,
+    actual: Counter[str],
+    expected: dict[str, int],
+) -> None:
+    """
+    Prints only the positive deltas.
+
+    These are entries that exist in the actual MONSTER_POOL
+    in greater quantity than in the selected expected checklist.
+
+    You can copy this output into an optional checklist extension.
+    """
+    print("\nOptional checklist additions generated from positive deltas")
+    print("----------------------------------------------------------")
+
+    positive_deltas: dict[str, int] = {}
+
+    for key in sorted(set(actual) | set(expected)):
+        delta = actual.get(key, 0) - expected.get(key, 0)
+
+        if delta > 0:
+            positive_deltas[key] = delta
+
+    if not positive_deltas:
+        print("# No positive deltas.")
+        return
+
+    print("MONSTER_CHECKLIST_EXTRA: dict[str, int] = {")
+
+    for key, delta in positive_deltas.items():
+        print(f'    "{key}": {delta},')
+
+    print("}")
+
+    print(f"\nTotal positive delta: {sum(positive_deltas.values())}")
+
+
+# ------------------------------------------------------------
+# Main diagnostics runner
+# ------------------------------------------------------------
+
+def run_diagnostics() -> None:
+    tile_type_counts = _count_tiles_by_type()
+    tile_archetype_counts = _count_tiles_by_archetype()
+    monster_id_counts = _count_monsters_by_id()
+    monster_sort_counts = _count_monsters_by_sort()
+
+    active_expected_monster_counts = _get_active_expected_monster_counts()
+    active_expected_monster_checklist_name = _get_active_expected_monster_checklist_name()
+
+    normal_rooms = tile_type_counts["room"]
+    special_rooms = tile_type_counts["room_x"]
+    corridors = tile_type_counts["corridor"]
+
+    actual_treasure_entries = monster_sort_counts["ITM"]
+    actual_real_monster_entries = len(MONSTER_POOL) - actual_treasure_entries
+    actual_monsters_plus_treasures = len(MONSTER_POOL)
+
+    expected_monsters_plus_treasures = sum(active_expected_monster_counts.values())
+
+    print("\n=== TILE / CONTENT DIAGNOSTICS ===")
+
+    print(f"Total tiles:                     {len(TILE_POOL):>5}")
+    print(f"Normal rooms:                    {normal_rooms:>5}")
+    print(f"Special rooms:                   {special_rooms:>5}")
+    print(f"Corridors:                       {corridors:>5}")
+
+    print(f"\nActual MONSTER_POOL total:       {len(MONSTER_POOL):>5}")
+    print(f"Actual real monsters:            {actual_real_monster_entries:>5}")
+    print(f"Actual treasure entries:         {actual_treasure_entries:>5}")
+    print(f"Actual monsters + treasures:     {actual_monsters_plus_treasures:>5}")
+
+    print(f"\nActive expected checklist:       {active_expected_monster_checklist_name}")
+    print(f"Expected monsters + treasures:   {expected_monsters_plus_treasures:>5}")
+
+    print("\n=== NORMAL ROOM / CONTENT CHECK ===")
+
+    normal_room_expected_check = normal_rooms == expected_monsters_plus_treasures
+    normal_room_actual_check = normal_rooms == actual_monsters_plus_treasures
+
+    print(
+        f"normal_rooms == expected monsters + treasures: "
+        f"{normal_rooms} == {expected_monsters_plus_treasures} "
+        f"-> {normal_room_expected_check}"
+    )
+
+    print(
+        f"normal_rooms == actual monsters + treasures:   "
+        f"{normal_rooms} == {actual_monsters_plus_treasures} "
+        f"-> {normal_room_actual_check}"
+    )
+
+    if not normal_room_expected_check:
+        print(
+            f"Expected mismatch: normal room count differs from selected expected "
+            f"monster/treasure count by "
+            f"{expected_monsters_plus_treasures - normal_rooms:+d}."
+        )
+
+    if not normal_room_actual_check:
+        print(
+            f"Actual mismatch: normal room count differs from actual MONSTER_POOL "
+            f"count by {actual_monsters_plus_treasures - normal_rooms:+d}."
+        )
+
+    _print_counter("Tile archetype counts", tile_archetype_counts)
+    _print_counter("Monster counts by id", monster_id_counts)
+    _print_counter("Monster counts by sort", monster_sort_counts)
+
+    monster_list_ok = _compare_counter_to_expected(
+        actual=monster_id_counts,
+        expected=active_expected_monster_counts,
+        title=f"Monster list compared to {active_expected_monster_checklist_name}",
+    )
+
+    _print_extra_checklist_from_delta(
+        actual=monster_id_counts,
+        expected=active_expected_monster_counts,
+    )
+
+    print("\n=== SUMMARY ===")
+    print(f"Active expected checklist:       {active_expected_monster_checklist_name}")
+    print(f"Normal room / expected check:    {'OK' if normal_room_expected_check else 'FAILED'}")
+    print(f"Normal room / actual check:      {'OK' if normal_room_actual_check else 'FAILED'}")
+    print(f"Expected monster-list check:     {'OK' if monster_list_ok else 'FAILED'}")
+
+    if not normal_room_expected_check or not monster_list_ok:
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
-    print("Total tiles:", len(TILE_POOL))
-    print("Rooms:", len([t for t in TILE_POOL if t["tile_type"] == "room"]))
-    print("Special rooms:", len([t for t in TILE_POOL if t["tile_type"] == "room_x"]))
-    print("Corridors:", len([t for t in TILE_POOL if t["tile_type"] == "corridor"]))
-    print("Monsters:", len(MONSTER_POOL))
+    run_diagnostics()

@@ -9,12 +9,17 @@ import copy
 import random
 
 # --- External pools (new canonical module) ---
-from domain.game_entities import TILE_POOL as _TILE_POOL, MONSTER_POOL as _MONSTER_POOL, ITEM_FEATURES, get_monster_by_id, serialize_item_ref
+from domain.game_entities import (TILE_POOL as _TILE_POOL,
+                                  MONSTER_POOL as _MONSTER_POOL,
+                                  ITEM_FEATURES,
+                                  get_monster_by_id,
+                                  serialize_item_ref)
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
 
 from engine.fight_engine import (
     resolve_fight_state,
+    resolve_arena_pvp_fight_state,
     start_monster_fight_state,
     start_arena_pvp_fight_state,
     commit_fight_role,
@@ -142,6 +147,7 @@ TurnMode = Literal[
     "awaiting_monster_encounter",
     "awaiting_arena_target_choice",
     "fight",
+    "awaiting_arena_loot_choice",
     "awaiting_curse_choice",
     "awaiting_poison_choice",
     "item_pickup",
@@ -224,6 +230,21 @@ class TurnState:
     #     "reason": "first_arena_entry",
     # }
     pending_arena_pvp: Optional[dict[str, Any]] = None
+    # Pending Arena loot/steal choice.
+    # Used while mode == "awaiting_arena_loot_choice".
+    #
+    # Shape:
+    # {
+    #     "winner_player_id": int,
+    #     "loser_player_id": int,
+    #     "active_player_id": int,
+    #     "winner_is_active_player": bool,
+    #     "outcome": "initiator_win" | "challenged_win",
+    #     "arena_tile": {"x": int, "y": int},
+    #     "may_continue_by_swo_02": bool,
+    #     "stealable": dict,
+    # }
+    pending_arena_loot_choice: Optional[dict[str, Any]] = None
     # Item-use lock:
     # Once a fight is entered, active costless items are blocked for the rest of the turn,
     # unless the turn explicitly continues after combat by a continuation rule
@@ -234,7 +255,7 @@ class TurnState:
 
     # Ground-item snapshot for reversible idle inventory manipulation.
     ground_snapshot_item_id: Optional[str] = None
-    item_pickup_origin: Optional[Literal["idle_ground_changed", "post_combat", "chest"]] = None
+    item_pickup_origin: Optional[Literal["idle_ground_changed", "post_combat", "chest", "treasure_pickup"]] = None
 
     # lightweight turn-local memory
     used_skill_ids: set[str] = field(default_factory=set)
@@ -270,6 +291,7 @@ class TurnState:
                 "pending_monster_choice": self.pending_monster_choice,
                 "pending_monster_encounter": self.pending_monster_encounter,
                 "pending_arena_pvp": self.pending_arena_pvp,
+                "pending_arena_loot_choice": self.pending_arena_loot_choice,
                 "item_use_locked_by_combat": self.item_use_locked_by_combat,
                 "last_valid_safe_tile": self.last_valid_safe_tile,
                 "ground_snapshot_item_id": self.ground_snapshot_item_id,
@@ -548,7 +570,17 @@ class ChooseArenaOpponentFreeAction(FreeAction):
 
     def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_choose_arena_opponent_free_action(self)
-    
+
+
+@dataclass
+class ChooseArenaLootFreeAction(FreeAction):
+    steal_kind: Literal["slot_item", "treasure_value", "skip"]
+    source_slot_group: Optional[Literal["weapon", "scroll", "key"]] = None
+    source_slot_index: Optional[int] = None
+
+    def execute(self, graph: DungeonGraph) -> dict:
+        return graph._execute_choose_arena_loot_free_action(self)
+
 # --------------------------
 # Engine
 # --------------------------
@@ -870,6 +902,20 @@ class DungeonGraph:
             raise ValueError(f"{role} player not found.")
 
         return player
+    
+    def _get_fight_side_by_role(
+            self,
+            *,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ):
+        if role == "initiator":
+            return fight_state.initiator_side
+
+        if role == "challenged":
+            return fight_state.challenged_side
+
+        raise ValueError(f"Unsupported fight role: {role!r}")
 
     def _get_pending_monster_choice_tile(self) -> TileNode:
         turn = self.ensure_turn_active()
@@ -1201,6 +1247,7 @@ class DungeonGraph:
         )
 
         turn.pending_arena_pvp = None
+        turn.pending_arena_loot_choice = None
         turn.pending_monster_encounter = None
         turn.item_use_locked_by_combat = True
 
@@ -2315,8 +2362,10 @@ class DungeonGraph:
         if target_player.player_id == active.player_id:
             raise ValueError("Cannot swap with yourself.")
 
-        if not target_player.is_conscious:
-            raise ValueError("Cannot swap with an unconscious player.")
+        # Warlock may swap with unconscious / KO players.
+        # The target is only relocated; only the active Warlock receives entry effects.
+        # if not target_player.is_conscious:
+        #     raise ValueError("Cannot swap with an unconscious player.")
 
         active_old = (active.x, active.y)
         target_old = (target_player.x, target_player.y)
@@ -3413,6 +3462,9 @@ class DungeonGraph:
         
         if turn.mode == "awaiting_arena_target_choice":
             raise ValueError("Cannot end turn before choosing Arena opponent.")
+        
+        if turn.mode == "awaiting_arena_loot_choice":
+            raise ValueError("Cannot end turn before resolving Arena loot choice.")
 
         if turn.pending_item_pickup:
             raise ValueError("Cannot end turn before resolving item pickup.")
@@ -3432,7 +3484,8 @@ class DungeonGraph:
         if turn.pending_arena_pvp:
             raise ValueError("Cannot end turn before resolving Arena target choice.")
         
-        
+        if turn.pending_arena_loot_choice:
+            raise ValueError("Cannot end turn before resolving Arena loot choice.")        
 
         return self._finalize_current_turn_and_advance(end_cause="manual_end_turn")
 
@@ -3556,7 +3609,8 @@ class DungeonGraph:
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
-
+    
+    
     def _execute_resolve_fight_free_action(self, action: ResolveFightFreeAction) -> dict:
         """
         Backend implementation for resolving the current monster fight.
@@ -3599,7 +3653,7 @@ class DungeonGraph:
         # do not contain monsters.
         # --------------------------------------------------------------
         if fight_state.context.fight_kind == "arena_pvp":
-            raise ValueError("Arena PvP resolution is not implemented until Step 5.")
+            return self._execute_resolve_arena_pvp_fight_free_action(action)
 
         tile = self.get_active_tile()
         if tile is None:
@@ -3614,6 +3668,7 @@ class DungeonGraph:
         # ------------------------------------------------------------------
         # Local helpers
         # ------------------------------------------------------------------
+                
         def consume_selected_scrolls(*, resolved_fight_state: FightState) -> list[dict[str, Any]]:
             """
             Consume selected combat scroll-slot items after fight resolution.
@@ -3688,8 +3743,10 @@ class DungeonGraph:
             turn.pending_retreat = False
             turn.pending_curse_choice = False
             turn.pending_poison_choice = None
+            turn.pending_arena_loot_choice = None
             turn.fight_continue_after_item_pickup = False
             turn.fight_continue_skill_id = None
+            
 
         def apply_swordsman_continuation_state(*, enabled: bool) -> None:
             if enabled:
@@ -3915,6 +3972,683 @@ class DungeonGraph:
 
         raise ValueError(f"Unexpected fight outcome: {outcome}")
 
+    # NEW BLOCK --------------------------------------------------------------- START   -
+    # TODO: check if added here: _consume_selected_fight_scrolls_for_role
+    def _consume_selected_fight_scrolls_for_role(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ) -> list[dict[str, Any]]:
+        """
+        Consume selected combat scroll-slot items for one fight role.
+
+        Wizard exception:
+        - skill_wiz_01 preserves fist/fireball
+        - p_bomb / AOE_2 is always consumed
+        """
+        selected_scroll_items = self._get_selected_fight_scroll_items_for_role(
+            player=player,
+            fight_state=fight_state,
+            role=role,
+        )
+
+        consumed: list[dict[str, Any]] = []
+
+        for selected_item in selected_scroll_items:
+            slot_index = int(selected_item["slot_index"])
+            item_id = str(selected_item["item_id"])
+            item_feat = selected_item["item_feat"]
+
+            if item_feat.get("item_type") != "scroll":
+                continue
+
+            effect = item_feat.get("effect")
+
+            wizard_preserves = (
+                    player.is_skill_active("skill_wiz_01")
+                    and item_id in {"fist", "fireball"}
+                    and effect != "AOE_2"
+            )
+
+            if wizard_preserves:
+                consumed.append({
+                    "role": role,
+                    "player_id": player.player_id,
+                    "slot_index": slot_index,
+                    "item_id": item_id,
+                    "consumed": False,
+                    "reason": "preserved_by_skill_wiz_01",
+                })
+                continue
+
+            if not bool(item_feat.get("consumed", False)):
+                consumed.append({
+                    "role": role,
+                    "player_id": player.player_id,
+                    "slot_index": slot_index,
+                    "item_id": item_id,
+                    "consumed": False,
+                    "reason": "item_not_configured_as_consumed",
+                })
+                continue
+
+            removed_item_id = player.remove_scroll(slot_index)
+
+            consumed.append({
+                "role": role,
+                "player_id": player.player_id,
+                "slot_index": slot_index,
+                "item_id": item_id,
+                "consumed": removed_item_id == item_id,
+                "removed_item_id": removed_item_id,
+                "reason": "consumed_after_fight",
+            })
+
+        return consumed
+    # NEW BLOCK --------------------------------------------------------------- ENDED   -
+    
+    def _first_free_slot_for_item_type(
+            self,
+            *,
+            player: Player,
+            item_type: str,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Return the first free compatible inventory slot for an item type.
+
+        Arena stealing uses this to decide whether a slot item is currently
+        stealable by the winner.
+        """
+        if item_type == "weapon":
+            idx = player.inventory.first_empty_weapon_slot()
+            if idx is None:
+                return None
+            return {"slot_group": "weapon", "slot_index": idx}
+
+        if item_type == "scroll":
+            idx = player.inventory.first_empty_scroll_slot()
+            if idx is None:
+                return None
+            return {"slot_group": "scroll", "slot_index": idx}
+
+        if item_type == "key":
+            idx = player.inventory.first_empty_key_slot()
+            if idx is None:
+                return None
+            return {"slot_group": "key", "slot_index": idx}
+
+        return None
+    
+    def _serialize_arena_stealable_slot_item(
+            self,
+            *,
+            winner: Player,
+            loser: Player,
+            slot_group: Literal["weapon", "scroll", "key"],
+            slot_index: int,
+            item_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Serialize one loser slot item if the winner can currently store it.
+        """
+        item_feat = ITEM_FEATURES.get(item_id)
+        if item_feat is None:
+            return None
+
+        item_type = str(item_feat.get("item_type"))
+
+        target_slot = self._first_free_slot_for_item_type(
+            player=winner,
+            item_type=item_type,
+        )
+
+        if target_slot is None:
+            return None
+
+        try:
+            item_ref = serialize_item_ref(item_id)
+        except ValueError:
+            item_ref = {
+                "item_id": item_id,
+                "item_type": item_type,
+                "image_path": None,
+            }
+
+        return {
+            "steal_kind": "slot_item",
+            "loser_player_id": loser.player_id,
+            "winner_player_id": winner.player_id,
+            "source_slot_group": slot_group,
+            "source_slot_index": slot_index,
+            "target_slot_group": target_slot["slot_group"],
+            "target_slot_index": target_slot["slot_index"],
+            "item_id": item_id,
+            "item_type": item_type,
+            "item": item_ref,
+        }
+    
+    def serialize_arena_stealable_loot(
+            self,
+            *,
+            winner: Player,
+            loser: Player,
+    ) -> dict[str, Any]:
+        """
+        Build the Arena steal-choice payload.
+
+        Current treasure model:
+        - treasure is a numeric counter, not individual treasure objects.
+        - one Arena treasure steal transfers up to ITEM_FEATURES['treasure']['value'].
+        """
+        slot_items: list[dict[str, Any]] = []
+
+        for i, item_id in enumerate(loser.inventory.weapon_slots):
+            if item_id is None:
+                continue
+
+            row = self._serialize_arena_stealable_slot_item(
+                winner=winner,
+                loser=loser,
+                slot_group="weapon",
+                slot_index=i,
+                item_id=item_id,
+            )
+
+            if row is not None:
+                slot_items.append(row)
+
+        for i, item_id in enumerate(loser.inventory.scroll_slots):
+            if item_id is None:
+                continue
+
+            row = self._serialize_arena_stealable_slot_item(
+                winner=winner,
+                loser=loser,
+                slot_group="scroll",
+                slot_index=i,
+                item_id=item_id,
+            )
+
+            if row is not None:
+                slot_items.append(row)
+
+        for i, item_id in enumerate(loser.inventory.key_slots):
+            if item_id is None:
+                continue
+
+            row = self._serialize_arena_stealable_slot_item(
+                winner=winner,
+                loser=loser,
+                slot_group="key",
+                slot_index=i,
+                item_id=item_id,
+            )
+
+            if row is not None:
+                slot_items.append(row)
+
+        treasure_unit_value = float(
+            ITEM_FEATURES.get("treasure", {}).get("value", 10.0)
+        )
+
+        treasure_value_available = max(0.0, float(loser.inventory.treasure))
+        treasure_value_stealable = min(treasure_unit_value, treasure_value_available)
+
+        treasure_option = None
+
+        if treasure_value_stealable > 0:
+            try:
+                treasure_item = serialize_item_ref("treasure")
+            except ValueError:
+                treasure_item = {
+                    "item_id": "treasure",
+                    "item_type": "treasure",
+                    "image_path": None,
+                }
+
+            treasure_option = {
+                "steal_kind": "treasure_value",
+                "winner_player_id": winner.player_id,
+                "loser_player_id": loser.player_id,
+                "item_id": "treasure",
+                "item": treasure_item,
+                "value": treasure_value_stealable,
+                "loser_treasure_before": loser.inventory.treasure,
+            }
+
+        return {
+            "winner_player_id": winner.player_id,
+            "loser_player_id": loser.player_id,
+            "slot_items": slot_items,
+            "treasure": treasure_option,
+            "has_anything_to_steal": bool(slot_items or treasure_option),
+            "note": (
+                "Treasure is currently numeric, so Arena treasure stealing "
+                "transfers one treasure unit value rather than an individual object."
+            ),
+        }
+    
+    def _enter_arena_loot_choice(
+            self,
+            *,
+            winner: Player,
+            loser: Player,
+            active: Player,
+            outcome: str,
+            fight_dict: dict[str, Any],
+            hp_consequence: dict[str, Any],
+            p_bomb_consequence: dict[str, Any],
+            consumed_scrolls: list[dict[str, Any]],
+            may_continue_by_swo_02: bool,
+            action_kind: str,
+            arena_tile: TileNode,
+    ) -> dict:
+        """
+        Enter pending Arena loot choice.
+
+        Winner may steal one item/treasure or skip.
+        The active turn waits in awaiting_arena_loot_choice even if the winner
+        is the off-turn challenged player.
+        """
+        turn = self.ensure_turn_active()
+
+        stealable = self.serialize_arena_stealable_loot(
+            winner=winner,
+            loser=loser,
+        )
+
+        pending = {
+            "winner_player_id": winner.player_id,
+            "loser_player_id": loser.player_id,
+            "active_player_id": active.player_id,
+            "winner_is_active_player": winner.player_id == active.player_id,
+            "outcome": outcome,
+            "arena_tile": {
+                "x": arena_tile.x,
+                "y": arena_tile.y,
+            },
+            "may_continue_by_swo_02": may_continue_by_swo_02,
+            "fight": fight_dict,
+            "hp_consequence": hp_consequence,
+            "p_bomb_consequence": p_bomb_consequence,
+            "consumed_scrolls": consumed_scrolls,
+            "stealable": stealable,
+        }
+
+        turn.pending_arena_loot_choice = pending
+        turn.pending_turn_end_cause = None
+        self.set_turn_mode("awaiting_arena_loot_choice")
+
+        return {
+            "ok": True,
+            "status": "arena_pvp_resolved_awaiting_loot_choice",
+            "action_kind": action_kind,
+            "fight": fight_dict,
+            "outcome": outcome,
+            "arena_result": {
+                "winner_player_id": winner.player_id,
+                "loser_player_id": loser.player_id,
+                "both_players_remain_on_arena": True,
+                "arena_loot": {
+                    "implemented": True,
+                    "requires_choice": True,
+                    "winner_player_id": winner.player_id,
+                    "loser_player_id": loser.player_id,
+                    "winner_is_active_player": winner.player_id == active.player_id,
+                    "stealable": stealable,
+                },
+            },
+            "hp_consequence": hp_consequence,
+            "p_bomb_consequence": p_bomb_consequence,
+            "consumed_scrolls": consumed_scrolls,
+            "continuation": {
+                "allowed": may_continue_by_swo_02,
+                "skill_id": "skill_swo_02" if may_continue_by_swo_02 else None,
+                "reason": "Final physical die shows 6." if may_continue_by_swo_02 else None,
+            },
+            "tile": arena_tile.to_dict(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+            "turn": self.serialize_turn_state(),
+        }
+    
+    def _execute_resolve_arena_pvp_fight_free_action(
+            self,
+            action: ResolveFightFreeAction,
+    ) -> dict:
+        """
+        Resolve Arena PvP fight consequences.
+
+        Step 5 scope:
+        - resolves fight outcome
+        - applies Arena HP consequences
+        - applies p_bomb consequences for both sides
+        - consumes selected combat scrolls for both sides
+        - keeps both players on Arena tile
+        - routes turn to end or continuation
+
+        Step 6 will add actual stealing / loot choice.
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "fight":
+            raise ValueError(f"Cannot resolve Arena PvP while turn mode is '{turn.mode}'.")
+
+        fight_state = self.current_fight_state
+        if fight_state is None:
+            raise ValueError("No active fight state.")
+
+        if fight_state.context.fight_kind != "arena_pvp":
+            raise ValueError("Current fight is not Arena PvP.")
+
+        initiator = self._get_player_for_fight_role(
+            fight_state=fight_state,
+            role="initiator",
+        )
+        challenged = self._get_player_for_fight_role(
+            fight_state=fight_state,
+            role="challenged",
+        )
+
+        if initiator.player_id != active.player_id:
+            raise ValueError("Arena PvP initiator must be the active turn owner.")
+
+        arena_tile = self.get_tile(
+            fight_state.context.tile_x,
+            fight_state.context.tile_y,
+        )
+
+        if arena_tile is None:
+            raise ValueError("Arena tile not found.")
+
+        fight_state = resolve_arena_pvp_fight_state(
+            fight_state=fight_state,
+            initiator_player=initiator,
+            challenged_player=challenged,
+        )
+        self.current_fight_state = fight_state
+
+        outcome = fight_state.outcome
+        if outcome is None:
+            raise ValueError("Resolved Arena PvP fight has no outcome.")
+
+        hp_consequence = self._apply_arena_pvp_hp_consequences(
+            fight_state=fight_state,
+            outcome=outcome,
+            initiator=initiator,
+            challenged=challenged,
+        )
+
+        ko_reaction = hp_consequence.get("ko_reaction")
+
+        initiator_p_bomb = self._apply_p_bomb_blast_consequences_for_role(
+            player=initiator,
+            fight_state=fight_state,
+            role="initiator",
+        )
+
+        if initiator_p_bomb.get("ko_reaction") and not ko_reaction:
+            ko_reaction = initiator_p_bomb["ko_reaction"]
+
+        challenged_p_bomb = self._apply_p_bomb_blast_consequences_for_role(
+            player=challenged,
+            fight_state=fight_state,
+            role="challenged",
+        )
+
+        if challenged_p_bomb.get("ko_reaction") and not ko_reaction:
+            ko_reaction = challenged_p_bomb["ko_reaction"]
+
+        consumed_scrolls = (
+            self._consume_selected_fight_scrolls_for_role(
+                player=initiator,
+                fight_state=fight_state,
+                role="initiator",
+            )
+            + self._consume_selected_fight_scrolls_for_role(
+                player=challenged,
+                fight_state=fight_state,
+                role="challenged",
+            )
+        )
+
+        may_continue_by_swo_02 = self._active_player_may_continue_after_arena_pvp_by_swo_02(
+            active=active,
+            fight_state=fight_state,
+        )
+
+        fight_dict = fight_state.to_dict()
+
+        self.current_fight_state = None
+
+        winner_player_id = None
+        loser_player_id = None
+
+        if outcome == "initiator_win":
+            winner_player_id = initiator.player_id
+            loser_player_id = challenged.player_id
+
+        elif outcome == "challenged_win":
+            winner_player_id = challenged.player_id
+            loser_player_id = initiator.player_id
+
+        elif outcome == "draw":
+            winner_player_id = None
+            loser_player_id = None
+
+        else:
+            raise ValueError(f"Unexpected Arena PvP outcome: {outcome}")
+
+        arena_result = {
+            "outcome": outcome,
+            "winner_player_id": winner_player_id,
+            "loser_player_id": loser_player_id,
+            "both_players_remain_on_arena": True,
+            "arena_loot": {
+                "implemented": False,
+                "deferred_to_step": 6,
+                "would_allow_steal": winner_player_id is not None,
+                "winner_player_id": winner_player_id,
+                "loser_player_id": loser_player_id,
+            },
+        }
+
+        base_response = {
+            "ok": True,
+            "status": "arena_pvp_resolved",
+            "action_kind": action.kind,
+            "fight": fight_dict,
+            "outcome": outcome,
+            "arena_result": arena_result,
+            "hp_consequence": hp_consequence,
+            "p_bomb_consequence": {
+                "initiator": initiator_p_bomb,
+                "challenged": challenged_p_bomb,
+            },
+            "consumed_scrolls": consumed_scrolls,
+            "continuation": {
+                "allowed": may_continue_by_swo_02,
+                "skill_id": "skill_swo_02" if may_continue_by_swo_02 else None,
+                "reason": "Final physical die shows 6." if may_continue_by_swo_02 else None,
+            },
+            "tile": arena_tile.to_dict(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+            "turn": self.serialize_turn_state(),
+        }
+
+        # ---------------------------------------------------------------------------------------------------
+
+        # --------------------------------------------------------------
+        # Arena loot eligibility.
+        #
+        # Rule:
+        # - draw: no steal
+        # - conscious winner may steal
+        # - unconscious winner may not steal
+        # - loser consciousness does not matter
+        # - active-player KO must NOT suppress a conscious off-turn winner's loot
+        # --------------------------------------------------------------
+        winner: Optional[Player] = None
+        loser: Optional[Player] = None
+        winner_can_steal = False
+
+        if winner_player_id is not None and loser_player_id is not None:
+            winner = self._find_player_by_player_id(winner_player_id)
+            loser = self._find_player_by_player_id(loser_player_id)
+
+            if winner is None:
+                raise ValueError("Arena winner player not found.")
+
+            if loser is None:
+                raise ValueError("Arena loser player not found.")
+
+            winner_can_steal = winner.hp > 0
+
+        # --------------------------------------------------------------
+        # KO reaction priority.
+        #
+        # If a Warrior KO reaction exists, keep that priority.
+        # But if Arena loot is also pending, prepare/store the loot choice first,
+        # then restore KO-reaction mode. After KO reaction resolves, the engine
+        # will continue into awaiting_arena_loot_choice.
+        # --------------------------------------------------------------
+        if ko_reaction:
+            if winner_can_steal and winner is not None and loser is not None:
+                self._enter_arena_loot_choice(
+                    winner=winner,
+                    loser=loser,
+                    active=active,
+                    outcome=outcome,
+                    fight_dict=fight_dict,
+                    hp_consequence=hp_consequence,
+                    p_bomb_consequence={
+                        "initiator": initiator_p_bomb,
+                        "challenged": challenged_p_bomb,
+                    },
+                    consumed_scrolls=consumed_scrolls,
+                    may_continue_by_swo_02=may_continue_by_swo_02,
+                    action_kind=action.kind,
+                    arena_tile=arena_tile,
+                )
+
+                # _enter_arena_loot_choice sets mode to awaiting_arena_loot_choice.
+                # KO reaction must still be resolved first.
+                self.set_turn_mode("awaiting_ko_reaction_choice")
+
+                base_response["arena_result"]["arena_loot"] = {
+                    "implemented": True,
+                    "requires_choice_after_ko_reaction": True,
+                    "winner_player_id": winner.player_id,
+                    "loser_player_id": loser.player_id,
+                    "winner_is_active_player": winner.player_id == active.player_id,
+                }
+
+            else:
+                base_response["arena_result"]["arena_loot"] = {
+                    "implemented": True,
+                    "requires_choice": False,
+                    "reason": (
+                        "draw"
+                        if winner_player_id is None
+                        else "winner_unconscious"
+                    ),
+                    "winner_player_id": winner_player_id,
+                    "loser_player_id": loser_player_id,
+                }
+
+            base_response["status"] = "arena_pvp_resolved_awaiting_ko_reaction"
+            base_response["ko_reaction"] = ko_reaction
+            base_response["turn"] = self.serialize_turn_state()
+            base_response["active_player"] = self.serialize_active_player()
+            base_response["players"] = self.serialize_players()
+            return base_response
+
+        # --------------------------------------------------------------
+        # Conscious winner gets Arena loot choice BEFORE active-KO finalization.
+        # This is the key fix.
+        # --------------------------------------------------------------
+        if winner_can_steal and winner is not None and loser is not None:
+            return self._enter_arena_loot_choice(
+                winner=winner,
+                loser=loser,
+                active=active,
+                outcome=outcome,
+                fight_dict=fight_dict,
+                hp_consequence=hp_consequence,
+                p_bomb_consequence={
+                    "initiator": initiator_p_bomb,
+                    "challenged": challenged_p_bomb,
+                },
+                consumed_scrolls=consumed_scrolls,
+                may_continue_by_swo_02=may_continue_by_swo_02,
+                action_kind=action.kind,
+                arena_tile=arena_tile,
+            )
+
+        # --------------------------------------------------------------
+        # No Arena loot:
+        # - draw
+        # - or winner exists but is unconscious
+        #
+        # Now active-player KO may end the turn immediately.
+        # --------------------------------------------------------------
+        if active.hp <= 0:
+            turn.pending_turn_end_cause = "arena_pvp_unconscious"
+            self.set_turn_mode("awaiting_turn_end_commit")
+
+            finalize_result = self._finalize_current_turn_and_advance(
+                end_cause="arena_pvp_unconscious"
+            )
+
+            base_response["status"] = "arena_pvp_resolved_active_player_unconscious_no_loot"
+            base_response["arena_result"]["arena_loot"] = {
+                "implemented": True,
+                "requires_choice": False,
+                "reason": (
+                    "draw"
+                    if winner_player_id is None
+                    else "winner_unconscious"
+                ),
+                "winner_player_id": winner_player_id,
+                "loser_player_id": loser_player_id,
+            }
+            base_response["finalize_result"] = finalize_result
+            base_response["turn"] = self.serialize_turn_state()
+            base_response["active_player"] = self.serialize_active_player()
+            base_response["players"] = self.serialize_players()
+            return base_response
+        
+        # ---------------------------------------------------------------------------------------------------
+        
+        if may_continue_by_swo_02:
+            turn.item_use_locked_by_combat = False
+            turn.pending_turn_end_cause = None
+            self.set_turn_mode("idle")
+            self.snapshot_active_ground_item()
+
+            base_response["status"] = "arena_pvp_resolved_turn_continues"
+            base_response["turn"] = self.serialize_turn_state()
+            base_response["active_player"] = self.serialize_active_player()
+            base_response["players"] = self.serialize_players()
+            return base_response
+
+        turn.pending_turn_end_cause = "arena_pvp"
+        self.set_turn_mode("awaiting_turn_end_commit")
+
+        finalize_result = self._finalize_current_turn_and_advance(
+            end_cause="arena_pvp"
+        )
+
+        base_response["status"] = "arena_pvp_resolved_turn_ended"
+        base_response["finalize_result"] = finalize_result
+        base_response["turn"] = self.serialize_turn_state()
+        base_response["active_player"] = self.serialize_active_player()
+        base_response["players"] = self.serialize_players()
+        return base_response
+    
     def _execute_resolve_ko_reaction_free_action(self, action: ResolveKoReactionFreeAction) -> dict:
         turn = self.ensure_turn_active()
 
@@ -3940,10 +4674,32 @@ class DungeonGraph:
             target_y=action.target_y,
             source="skill_wrr_02",
         )
-
+        # -----------------------------------------------------------------------------------------------------
         affected_is_turn_owner = bool(reaction.get("affected_player_is_turn_owner"))
 
         turn.pending_ko_reaction = None
+
+        # --------------------------------------------------------------
+        # Arena post-KO loot continuation.
+        #
+        # If Arena resolution prepared a pending loot choice before the KO
+        # reaction, do NOT finalize the active turn yet.
+        # Let the conscious winner steal/skip first.
+        # After loot is resolved, _finalize_after_arena_loot_choice()
+        # decides whether the active turn ends because active is KO.
+        # --------------------------------------------------------------
+        if turn.pending_arena_loot_choice:
+            self.set_turn_mode("awaiting_arena_loot_choice")
+
+            return {
+                "ok": True,
+                "status": "ko_reaction_resolved_awaiting_arena_loot_choice",
+                "ko_reaction_result": result,
+                "arena_loot": turn.pending_arena_loot_choice,
+                "turn": self.serialize_turn_state(),
+                "players": self.serialize_players(),
+                "active_player": self.serialize_active_player(),
+            }
 
         if affected_is_turn_owner:
             turn.pending_turn_end_cause = "skill_wrr_02"
@@ -3957,7 +4713,7 @@ class DungeonGraph:
             return finalize_result
 
         self.set_turn_mode("idle")
-
+        # -----------------------------------------------------------------------------------------------------
         return {
             "ok": True,
             "status": "off_turn_ko_reaction_resolved",
@@ -4010,6 +4766,8 @@ class DungeonGraph:
             )
 
         raise ValueError(f"Unsupported active item effect: {effect}")
+    
+    
     
     def _consume_used_item_if_needed(
             self,
@@ -4290,21 +5048,39 @@ class DungeonGraph:
             fight_state: FightState,
     ) -> list[dict[str, Any]]:
         """
-        Return selected combat scroll-slot items from the resolved fight.
+        Monster-fight compatibility wrapper.
 
-        Each entry contains:
-        - slot_id
-        - slot_index
-        - item_id
-        - item_feat
-
-        This is intentionally slot-based because fight-local choices store
-        selected scroll slot ids, not item ids.
+        Existing monster fights use the challenged side.
         """
+        return self._get_selected_fight_scroll_items_for_role(
+            player=player,
+            fight_state=fight_state,
+            role="challenged",
+        )
+    
+    def _get_selected_fight_scroll_items_for_role(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ) -> list[dict[str, Any]]:
+        """
+        Return selected combat scroll-slot items from one fight role.
+
+        Used by:
+        - Arena PvP, where both sides may use scrolls
+        - monster fight compatibility through role='challenged'
+        """
+        side = self._get_fight_side_by_role(
+            fight_state=fight_state,
+            role=role,
+        )
+
         selected: list[dict[str, Any]] = []
 
         selected_scroll_slot_ids = set(
-            fight_state.challenged_side.choices.selected_scroll_slot_ids
+            side.choices.selected_scroll_slot_ids
         )
 
         for slot_id in selected_scroll_slot_ids:
@@ -4328,6 +5104,7 @@ class DungeonGraph:
                 continue
 
             selected.append({
+                "role": role,
                 "slot_id": slot_id,
                 "slot_index": slot_index,
                 "item_id": item_id,
@@ -4342,12 +5119,26 @@ class DungeonGraph:
             player: Player,
             fight_state: FightState,
     ) -> bool:
+        return self._fight_used_p_bomb_for_role(
+            player=player,
+            fight_state=fight_state,
+            role="challenged",
+        )
+    
+    def _fight_used_p_bomb_for_role(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ) -> bool:
         """
-        True if p_bomb was selected as a combat modifier in this fight.
+        True if p_bomb was selected by the given role.
         """
-        for item in self._get_selected_fight_scroll_items(
+        for item in self._get_selected_fight_scroll_items_for_role(
                 player=player,
                 fight_state=fight_state,
+                role=role,
         ):
             if item["item_id"] == "p_bomb":
                 return True
@@ -4356,7 +5147,7 @@ class DungeonGraph:
                 return True
 
         return False
-
+    
     def get_adjacent_blast_coords(
             self,
             *,
@@ -4402,23 +5193,36 @@ class DungeonGraph:
             player: Player,
             fight_state: FightState,
     ) -> dict:
+        return self._apply_p_bomb_blast_consequences_for_role(
+            player=player,
+            fight_state=fight_state,
+            role="challenged",
+        )
+    
+    def _apply_p_bomb_blast_consequences_for_role(
+            self,
+            *,
+            player: Player,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ) -> dict:
         """
-        Apply p_bomb consequences after fight resolution.
+        Apply p_bomb consequences for one selected fight role.
 
-        Current rule:
-        - bomb user loses 2 HP regardless of fight outcome
-        - all entities on adjacent existing tiles lose 1 HP
-        - adjacent players lose 1 HP
-        - adjacent monsters are killed immediately
-        - no runtime monster HP is used yet
-
-        Important:
-        - The actual fought monster is on the center tile, not an adjacent tile,
-          so it is not affected by this helper.
+        Arena PvP note:
+        - either player side may use p_bomb
+        - this helper applies only that side's p_bomb
+        - if both sides used p_bomb, caller should call this twice
         """
-        if not self._fight_used_p_bomb(player=player, fight_state=fight_state):
+        if not self._fight_used_p_bomb_for_role(
+                player=player,
+                fight_state=fight_state,
+                role=role,
+        ):
             return {
                 "applied": False,
+                "role": role,
+                "player_id": player.player_id,
                 "reason": "p_bomb_not_selected",
             }
 
@@ -4427,6 +5231,8 @@ class DungeonGraph:
 
         result: dict[str, Any] = {
             "applied": True,
+            "role": role,
+            "player_id": player.player_id,
             "source": "p_bomb",
             "center": {"x": center_x, "y": center_y},
             "user_damage": None,
@@ -4435,9 +5241,6 @@ class DungeonGraph:
             "affected_monsters": [],
         }
 
-        # --------------------------------------------------
-        # Bomb user self-damage: -2 HP, regardless of outcome.
-        # --------------------------------------------------
         user_damage = self.apply_hp_delta_to_player(
             player=player,
             delta=-2,
@@ -4445,8 +5248,6 @@ class DungeonGraph:
         )
         result["user_damage"] = user_damage
 
-        # If self-damage creates a KO reaction, preserve it.
-        # The caller should check this before continuing normal flow.
         if user_damage.get("ko_reaction"):
             result["ko_reaction"] = user_damage["ko_reaction"]
 
@@ -4461,9 +5262,6 @@ class DungeonGraph:
             if tile is None:
                 continue
 
-            # --------------------------------------------------
-            # Adjacent players: -1 HP.
-            # --------------------------------------------------
             for affected_player in self._get_players_on_tile(x=ax, y=ay):
                 hp_result = self.apply_hp_delta_to_player(
                     player=affected_player,
@@ -4481,22 +5279,6 @@ class DungeonGraph:
                 if hp_result.get("ko_reaction") and not result.get("ko_reaction"):
                     result["ko_reaction"] = hp_result["ko_reaction"]
 
-            # TODO: implement monster HP based injury / kill
-            # --------------------------------------------------
-            # Adjacent monsters:
-            # Current temporary rule before runtime monster HP:
-            # - any monster on an adjacent existing tile is killed immediately
-            # - no HP persistence is needed
-            # - no LIV/UND filtering is applied
-            # --------------------------------------------------
-
-            # --------------------------------------------------
-            # Adjacent monsters:
-            # Current temporary rule before runtime monster HP:
-            # - any monster on an adjacent existing tile is killed immediately
-            # - killed monster drops its configured loot onto the same tile
-            # - no LIV/UND filtering is applied
-            # --------------------------------------------------
             if self._tile_has_active_monster(tile):
                 monster_id = tile.monster_id
                 monster = get_monster_by_id(monster_id)
@@ -4879,6 +5661,195 @@ class DungeonGraph:
             "hp_apply_result": hp_apply_result,
             "ko_reaction": hp_apply_result.get("ko_reaction"),
         }
+
+    def _apply_arena_pvp_hp_consequences(
+            self,
+            *,
+            fight_state: FightState,
+            outcome: str,
+            initiator: Player,
+            challenged: Player,
+    ) -> dict:
+        """
+        Apply Arena PvP HP consequences.
+
+        Base Arena rule:
+        - Draw: no normal HP loss.
+        - If initiator wins, challenged loses 1 HP.
+        - If challenged wins, initiator loses 1 HP.
+        - Warlock sacrifice applies to the side that selected it.
+        - Alchemist skill_alc_01 may cancel that player's normal loss damage
+          if the strength difference is 1 or 2.
+        """
+        initiator_hp_before = initiator.hp
+        challenged_hp_before = challenged.hp
+
+        initiator_delta = 0
+        challenged_delta = 0
+
+        effects: list[dict[str, Any]] = []
+
+        initiator_selected_skills = set(
+            fight_state.initiator_side.choices.selected_skill_ids
+        )
+        challenged_selected_skills = set(
+            fight_state.challenged_side.choices.selected_skill_ids
+        )
+
+        # --------------------------------------------------
+        # Normal Arena damage:
+        # loser loses 1 HP.
+        # Draw causes no normal HP loss.
+        # --------------------------------------------------
+        if outcome == "challenged_win":
+            normal_damage_delta = -1
+
+            effect = {
+                "kind": "arena_loss_damage",
+                "role": "initiator",
+                "player_id": initiator.player_id,
+                "delta": normal_damage_delta,
+                "reason": "Initiator lost the Arena PvP fight.",
+                "cancelled": False,
+            }
+
+            if initiator.is_skill_active("skill_alc_01"):
+                strength_diff = (
+                        fight_state.prediction.challenged_total
+                        - fight_state.prediction.initiator_total
+                )
+
+                if 1 <= strength_diff <= 2:
+                    normal_damage_delta = 0
+                    effect["delta"] = 0
+                    effect["cancelled"] = True
+                    effect["cancelled_by"] = "skill_alc_01"
+                    effect["strength_diff"] = strength_diff
+
+                    effects.append({
+                        "kind": "skill_modifier",
+                        "role": "initiator",
+                        "player_id": initiator.player_id,
+                        "skill_id": "skill_alc_01",
+                        "delta": 0,
+                        "reason": "Loss by 1 or 2 does not cause normal Arena HP loss.",
+                    })
+
+            initiator_delta += normal_damage_delta
+            effects.append(effect)
+
+        elif outcome == "initiator_win":
+            normal_damage_delta = -1
+
+            effect = {
+                "kind": "arena_loss_damage",
+                "role": "challenged",
+                "player_id": challenged.player_id,
+                "delta": normal_damage_delta,
+                "reason": "Challenged player lost the Arena PvP fight.",
+                "cancelled": False,
+            }
+
+            if challenged.is_skill_active("skill_alc_01"):
+                strength_diff = (
+                        fight_state.prediction.initiator_total
+                        - fight_state.prediction.challenged_total
+                )
+
+                if 1 <= strength_diff <= 2:
+                    normal_damage_delta = 0
+                    effect["delta"] = 0
+                    effect["cancelled"] = True
+                    effect["cancelled_by"] = "skill_alc_01"
+                    effect["strength_diff"] = strength_diff
+
+                    effects.append({
+                        "kind": "skill_modifier",
+                        "role": "challenged",
+                        "player_id": challenged.player_id,
+                        "skill_id": "skill_alc_01",
+                        "delta": 0,
+                        "reason": "Loss by 1 or 2 does not cause normal Arena HP loss.",
+                    })
+
+            challenged_delta += normal_damage_delta
+            effects.append(effect)
+
+        elif outcome == "draw":
+            effects.append({
+                "kind": "arena_draw",
+                "delta": 0,
+                "reason": "Arena PvP draw causes no normal HP loss.",
+            })
+
+        else:
+            raise ValueError(f"Unsupported Arena PvP outcome for HP consequences: {outcome!r}")
+
+        # --------------------------------------------------
+        # Warlock voluntary sacrifice, per side.
+        # Applies regardless of win/loss/draw.
+        # --------------------------------------------------
+        if "skill_wlk_01" in initiator_selected_skills:
+            initiator_delta -= 1
+            effects.append({
+                "kind": "voluntary_cost",
+                "role": "initiator",
+                "player_id": initiator.player_id,
+                "skill_id": "skill_wlk_01",
+                "delta": -1,
+                "reason": "Warlock sacrificed 1 HP for +1 combat strength.",
+            })
+
+        if "skill_wlk_01" in challenged_selected_skills:
+            challenged_delta -= 1
+            effects.append({
+                "kind": "voluntary_cost",
+                "role": "challenged",
+                "player_id": challenged.player_id,
+                "skill_id": "skill_wlk_01",
+                "delta": -1,
+                "reason": "Warlock sacrificed 1 HP for +1 combat strength.",
+            })
+
+        initiator_apply_result = self.apply_hp_delta_to_player(
+            player=initiator,
+            delta=initiator_delta,
+            source="arena_pvp_hp_consequence",
+        )
+
+        challenged_apply_result = self.apply_hp_delta_to_player(
+            player=challenged,
+            delta=challenged_delta,
+            source="arena_pvp_hp_consequence",
+        )
+
+        ko_reaction = (
+                initiator_apply_result.get("ko_reaction")
+                or challenged_apply_result.get("ko_reaction")
+        )
+
+        return {
+            "mode": "arena_pvp",
+            "outcome": outcome,
+            "initiator": {
+                "player_id": initiator.player_id,
+                "hp_before": initiator_hp_before,
+                "hp_after": initiator.hp,
+                "raw_delta": initiator_delta,
+                "actual_delta": initiator.hp - initiator_hp_before,
+                "hp_apply_result": initiator_apply_result,
+            },
+            "challenged": {
+                "player_id": challenged.player_id,
+                "hp_before": challenged_hp_before,
+                "hp_after": challenged.hp,
+                "raw_delta": challenged_delta,
+                "actual_delta": challenged.hp - challenged_hp_before,
+                "hp_apply_result": challenged_apply_result,
+            },
+            "effects": effects,
+            "ko_reaction": ko_reaction,
+        }
     
     def _fight_has_final_physical_six(self, fight_state: FightState) -> bool:
         """
@@ -4899,7 +5870,31 @@ class DungeonGraph:
             return False
 
         return dice.die_1 == 6 or dice.die_2 == 6
+    
+    def _fight_role_has_final_physical_six(
+            self,
+            *,
+            fight_state: FightState,
+            role: Literal["initiator", "challenged"],
+    ) -> bool:
+        """
+        Return True if any final physical die for this role shows 6.
+        """
+        side = self._get_fight_side_by_role(
+            fight_state=fight_state,
+            role=role,
+        )
 
+        dice = side.dice_state
+
+        if dice is None:
+            return False
+
+        if not dice.has_been_tossed:
+            return False
+
+        return dice.die_1 == 6 or dice.die_2 == 6
+    
     def _resolve_active_player_unconscious_after_monster_fight(
             self,
             *,
@@ -4941,6 +5936,8 @@ class DungeonGraph:
                 turn.pending_curse_choice = False
                 turn.pending_poison_choice = None
                 turn.pending_monster_encounter = None
+                turn.pending_arena_pvp = None
+                turn.pending_arena_loot_choice = None
                 turn.fight_continue_after_item_pickup = False
                 turn.fight_continue_skill_id = None
                 turn.pending_turn_end_cause = source
@@ -4962,6 +5959,8 @@ class DungeonGraph:
             turn.pending_curse_choice = False
             turn.pending_poison_choice = None
             turn.pending_monster_encounter = None
+            turn.pending_arena_pvp = None
+            turn.pending_arena_loot_choice = None
             turn.fight_continue_after_item_pickup = False
             turn.fight_continue_skill_id = None
             turn.pending_turn_end_cause = source
@@ -4992,6 +5991,30 @@ class DungeonGraph:
             "active_player": self.serialize_active_player(),
             "turn": self.serialize_turn_state(),
         }
+    
+    def _active_player_may_continue_after_arena_pvp_by_swo_02(
+            self,
+            *,
+            active: Player,
+            fight_state: FightState,
+    ) -> bool:
+        """
+        skill_swo_02 in Arena PvP.
+
+        Active player is the initiator.
+        If any final physical die on the initiator side shows 6,
+        active player may continue if Actions remain.
+        """
+        turn = self.ensure_turn_active()
+
+        return (
+            active.is_skill_active("skill_swo_02")
+            and turn.actions_left > 0
+            and self._fight_role_has_final_physical_six(
+                fight_state=fight_state,
+                role="initiator",
+            )
+        )
     
     def _active_player_may_continue_after_fight_by_swo_02(
             self,
@@ -5693,6 +6716,327 @@ class DungeonGraph:
             "turn": self.serialize_turn_state(),
             "active_player": self.serialize_active_player(),
         }
+    
+    def choose_arena_loot(
+            self,
+            *,
+            steal_kind: Literal["slot_item", "treasure_value", "skip"],
+            source_slot_group: Optional[Literal["weapon", "scroll", "key"]] = None,
+            source_slot_index: Optional[int] = None,
+    ) -> dict:
+        return self.execute_runtime_action(
+            ChooseArenaLootFreeAction(
+                steal_kind=steal_kind,
+                source_slot_group=source_slot_group,
+                source_slot_index=source_slot_index,
+            )
+        )
+    
+    def _execute_choose_arena_loot_free_action(
+            self,
+            action: ChooseArenaLootFreeAction,
+    ) -> dict:
+        """
+        Resolve pending Arena loot choice.
+
+        Winner may:
+        - steal one compatible slot item
+        - steal one numeric treasure unit
+        - skip stealing
+        """
+        turn = self.ensure_turn_active()
+
+        if turn.mode != "awaiting_arena_loot_choice":
+            raise ValueError(f"Cannot choose Arena loot while turn mode is '{turn.mode}'.")
+
+        pending = turn.pending_arena_loot_choice
+        if not pending:
+            raise ValueError("No pending Arena loot choice.")
+
+        winner = self._find_player_by_player_id(
+            int(pending["winner_player_id"])
+        )
+        loser = self._find_player_by_player_id(
+            int(pending["loser_player_id"])
+        )
+
+        if winner is None:
+            raise ValueError("Arena loot winner player not found.")
+
+        if loser is None:
+            raise ValueError("Arena loot loser player not found.")
+
+        if action.steal_kind == "skip":
+            loot_result = {
+                "applied": False,
+                "steal_kind": "skip",
+                "winner_player_id": winner.player_id,
+                "loser_player_id": loser.player_id,
+                "reason": "Winner skipped Arena loot.",
+            }
+
+            return self._finalize_after_arena_loot_choice(
+                pending=pending,
+                loot_result=loot_result,
+            )
+
+        if action.steal_kind == "treasure_value":
+            loot_result = self._apply_arena_treasure_steal(
+                winner=winner,
+                loser=loser,
+            )
+
+            return self._finalize_after_arena_loot_choice(
+                pending=pending,
+                loot_result=loot_result,
+            )
+
+        if action.steal_kind == "slot_item":
+            if action.source_slot_group is None:
+                raise ValueError("source_slot_group is required for slot_item Arena loot.")
+
+            if action.source_slot_index is None:
+                raise ValueError("source_slot_index is required for slot_item Arena loot.")
+
+            loot_result = self._apply_arena_slot_item_steal(
+                winner=winner,
+                loser=loser,
+                source_slot_group=action.source_slot_group,
+                source_slot_index=action.source_slot_index,
+            )
+
+            return self._finalize_after_arena_loot_choice(
+                pending=pending,
+                loot_result=loot_result,
+            )
+
+        raise ValueError(f"Unsupported Arena steal_kind: {action.steal_kind!r}")
+    
+    def _apply_arena_slot_item_steal(
+            self,
+            *,
+            winner: Player,
+            loser: Player,
+            source_slot_group: Literal["weapon", "scroll", "key"],
+            source_slot_index: int,
+    ) -> dict[str, Any]:
+        """
+        Transfer one compatible slot item from loser to winner.
+
+        The item is placed into the winner's first free compatible slot.
+        """
+        item_id = loser.get_slot_item(source_slot_group, source_slot_index)
+
+        if item_id is None:
+            raise ValueError("Selected Arena loot slot is empty.")
+
+        item_feat = ITEM_FEATURES.get(item_id)
+        if item_feat is None:
+            raise ValueError(f"Unknown item_id in Arena loot: {item_id!r}")
+
+        item_type = str(item_feat.get("item_type"))
+
+        target_slot = self._first_free_slot_for_item_type(
+            player=winner,
+            item_type=item_type,
+        )
+
+        if target_slot is None:
+            raise ValueError("Winner has no free compatible slot for this item.")
+
+        removed_item_id = loser.drop_item_from_slot(
+            source_slot_group,
+            source_slot_index,
+        )
+
+        if removed_item_id != item_id:
+            raise RuntimeError("Arena loot source slot changed during steal resolution.")
+
+        placed = winner.place_item_into_slot(
+            target_slot["slot_group"],
+            target_slot["slot_index"],
+            item_id,
+        )
+
+        if not placed:
+            # Rollback: put item back if possible.
+            loser.place_item_into_slot(
+                source_slot_group,
+                source_slot_index,
+                item_id,
+            )
+            raise RuntimeError("Failed to place stolen item into winner inventory.")
+
+        try:
+            item_ref = serialize_item_ref(item_id)
+        except ValueError:
+            item_ref = {
+                "item_id": item_id,
+                "item_type": item_type,
+                "image_path": None,
+            }
+
+        return {
+            "applied": True,
+            "steal_kind": "slot_item",
+            "winner_player_id": winner.player_id,
+            "loser_player_id": loser.player_id,
+            "item_id": item_id,
+            "item": item_ref,
+            "source": {
+                "slot_group": source_slot_group,
+                "slot_index": source_slot_index,
+            },
+            "target": {
+                "slot_group": target_slot["slot_group"],
+                "slot_index": target_slot["slot_index"],
+            },
+        }
+    
+    def _apply_arena_treasure_steal(
+            self,
+            *,
+            winner: Player,
+            loser: Player,
+    ) -> dict[str, Any]:
+        """
+        Transfer one numeric treasure unit from loser to winner.
+
+        Current model:
+        - Inventory.treasure is a numeric counter.
+        - We steal up to ITEM_FEATURES['treasure']['value'].
+        """
+        unit_value = float(
+            ITEM_FEATURES.get("treasure", {}).get("value", 10.0)
+        )
+
+        loser_before = float(loser.inventory.treasure)
+        winner_before = float(winner.inventory.treasure)
+
+        steal_value = min(unit_value, max(0.0, loser_before))
+
+        if steal_value <= 0:
+            raise ValueError("Loser has no treasure to steal.")
+
+        loser.inventory.treasure = loser_before - steal_value
+        winner.inventory.treasure = winner_before + steal_value
+
+        try:
+            item_ref = serialize_item_ref("treasure")
+        except ValueError:
+            item_ref = {
+                "item_id": "treasure",
+                "item_type": "treasure",
+                "image_path": None,
+            }
+
+        return {
+            "applied": True,
+            "steal_kind": "treasure_value",
+            "winner_player_id": winner.player_id,
+            "loser_player_id": loser.player_id,
+            "item_id": "treasure",
+            "item": item_ref,
+            "value": steal_value,
+            "winner_treasure_before": winner_before,
+            "winner_treasure_after": winner.inventory.treasure,
+            "loser_treasure_before": loser_before,
+            "loser_treasure_after": loser.inventory.treasure,
+        }
+    
+    def _finalize_after_arena_loot_choice(
+            self,
+            *,
+            pending: dict[str, Any],
+            loot_result: dict[str, Any],
+    ) -> dict:
+        """
+        Finalize turn routing after Arena loot choice.
+
+        If active Swordsman continuation is allowed, active turn continues.
+        Otherwise, active turn ends.
+        """
+        turn = self.ensure_turn_active()
+
+        may_continue_by_swo_02 = bool(
+            pending.get("may_continue_by_swo_02", False)
+        )
+
+        turn.pending_arena_loot_choice = None
+        turn.item_use_locked_by_combat = False
+        
+        active = self.get_active_player()
+        if active is None:
+            raise ValueError("No active player.")
+
+        # --------------------------------------------------------------
+        # Active player KO after Arena loot:
+        # loot was allowed to resolve first, but the active turn now ends.
+        # This overrides skill_swo_02 continuation.
+        # --------------------------------------------------------------
+        if active.hp <= 0:
+            turn.pending_turn_end_cause = "arena_pvp_unconscious_after_loot"
+            self.set_turn_mode("awaiting_turn_end_commit")
+
+            finalize_result = self._finalize_current_turn_and_advance(
+                end_cause="arena_pvp_unconscious_after_loot"
+            )
+
+            return {
+                "ok": True,
+                "status": "arena_loot_resolved_active_player_unconscious_turn_ended",
+                "loot_result": loot_result,
+                "continuation": {
+                    "allowed": False,
+                    "skill_id": None,
+                    "reason": "Active player is unconscious after Arena PvP.",
+                },
+                "finalize_result": finalize_result,
+                "turn": self.serialize_turn_state(),
+                "active_player": self.serialize_active_player(),
+                "players": self.serialize_players(),
+            }
+
+        if may_continue_by_swo_02:
+            turn.pending_turn_end_cause = None
+            self.set_turn_mode("idle")
+            self.snapshot_active_ground_item()
+
+            return {
+                "ok": True,
+                "status": "arena_loot_resolved_turn_continues",
+                "loot_result": loot_result,
+                "continuation": {
+                    "allowed": True,
+                    "skill_id": "skill_swo_02",
+                    "reason": "Final physical die shows 6.",
+                },
+                "turn": self.serialize_turn_state(),
+                "active_player": self.serialize_active_player(),
+                "players": self.serialize_players(),
+            }
+
+        turn.pending_turn_end_cause = "arena_pvp_loot"
+        self.set_turn_mode("awaiting_turn_end_commit")
+
+        finalize_result = self._finalize_current_turn_and_advance(
+            end_cause="arena_pvp_loot",
+        )
+
+        return {
+            "ok": True,
+            "status": "arena_loot_resolved_turn_ended",
+            "loot_result": loot_result,
+            "continuation": {
+                "allowed": False,
+                "skill_id": None,
+                "reason": None,
+            },
+            "finalize_result": finalize_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
 
     def repair_players_on_missing_tiles(self) -> dict:
         """
@@ -6389,6 +7733,7 @@ class DungeonGraph:
             raise ValueError("No active player.")
 
         turn, _ = self.ensure_active_player_owns_turn()
+
         if turn.mode not in ("idle", "item_pickup"):
             raise ValueError(f"Cannot pick up treasure while turn mode is '{turn.mode}'.")
 
@@ -6411,17 +7756,39 @@ class DungeonGraph:
 
         active.add_treasure(value)
         tile.object_id = None
-        self.update_idle_item_pickup_state_after_ground_change()
+
+        # Treasure pickup is a real pickup event, but NOT an immediate turn finalizer.
+        #
+        # It must enter / keep ItemPickup mode so the player may still:
+        # - reorganize inventory,
+        # - later perform normal item-pickup finish,
+        # - or, after combat, use the existing skill_swo_02 continuation path.
+        #
+        # Therefore:
+        # - do NOT call ItemPickUpTurnEndingFreeAction here
+        # - do NOT clear fight_continue_after_item_pickup
+        # - do NOT clear fight_continue_skill_id
+        # - do NOT finalize the turn here
+        turn.pending_item_pickup = True
+
+        if turn.item_pickup_origin is None:
+            turn.item_pickup_origin = "treasure_pickup"
+
+        turn.pending_turn_end_cause = None
+
+        self.set_turn_mode("item_pickup")
 
         return {
             "ok": True,
-            "status": "treasure_picked_up",
+            "status": "treasure_picked_up_itempickup_pending",
             "item_id": item_id,
             "item": serialize_item_ref(item_id),
             "value": value,
             "inventory": active.inventory.to_dict(),
             "tile": tile.to_dict(),
             "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
         }
     
 
@@ -6977,13 +8344,20 @@ class DungeonGraph:
         turn = self.ensure_turn_active()
         turn.ground_snapshot_item_id = self.get_active_ground_item_id()
 
-    def enter_forced_item_pickup(self, *, origin: Literal["post_combat", "chest"]) -> None:
+    def enter_forced_item_pickup(
+            self,
+            *,
+            origin: Literal["post_combat", "chest", "treasure_pickup"],
+    ) -> None:
         """
-        Enter a forced ItemPickup TurnEndingFreeAction.
+        Enter ItemPickup mode.
 
-        Used after combat/chest-like forced loot events.
-        Unlike idle-origin pickup, this does not auto-return to idle
-        just because the ground item matches the snapshot again.
+        Used after forced loot events and treasure pickup.
+
+        Important:
+        - This does not itself end the turn.
+        - Normal finishing is handled by ItemPickUpTurnEndingFreeAction.
+        - skill_swo_02 continuation state is preserved if already pending.
         """
         turn = self.ensure_turn_active()
         turn.pending_item_pickup = True

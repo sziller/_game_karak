@@ -86,6 +86,46 @@
         <!-- MAP -->
         <section class="ui-panel map-panel">
             <div class="image map-frame" id="map">
+                <button
+                        class="map-pan-btn map-pan-up"
+                        onclick="panMapViewport('up')"
+                        title="Move map up"
+                        type="button"
+                >▲
+                </button>
+
+                <button
+                        class="map-pan-btn map-pan-right"
+                        onclick="panMapViewport('right')"
+                        title="Move map right"
+                        type="button"
+                >▶
+                </button>
+
+                <button
+                        class="map-pan-btn map-pan-down"
+                        onclick="panMapViewport('down')"
+                        title="Move map down"
+                        type="button"
+                >▼
+                </button>
+
+                <button
+                        class="map-pan-btn map-pan-left"
+                        onclick="panMapViewport('left')"
+                        title="Move map left"
+                        type="button"
+                >◀
+                </button>
+
+                <button
+                        class="map-pan-btn map-pan-center"
+                        onclick="centerMapOnActivePlayerAndRender()"
+                        title="Center on active player"
+                        type="button"
+                >◎
+                </button>
+
                 <div id="mapCanvas"></div>
             </div>
         </section>
@@ -122,9 +162,9 @@
             </div>
 
             <div class="teleport-buttons">
-                <button id="teleport-cancel-btn" onclick="cancelTeleportTargeting()" disabled>Cancel</button>
+                <button disabled id="teleport-cancel-btn" onclick="cancelTeleportTargeting()">Cancel</button>
                 <button id="teleport-btn" onclick="confirmTeleport()">🚀 Teleport</button>
-                
+
             </div>
         </section>
 

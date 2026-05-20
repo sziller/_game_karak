@@ -100,7 +100,12 @@ class ArenaOpponentChoiceRequest(BaseModel):
 
 class FightCommitRoleRequest(BaseModel):
     role: Literal["initiator", "challenged"]
-    
+
+
+class ArenaLootChoiceRequest(BaseModel):
+    steal_kind: Literal["slot_item", "treasure_value", "skip"]
+    source_slot_group: Optional[Literal["weapon", "scroll", "key"]] = None
+    source_slot_index: Optional[int] = Field(default=None, ge=0)
 
 def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
@@ -413,6 +418,24 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def arena_choose_opponent(req: ArenaOpponentChoiceRequest):
         try:
             return graph.choose_arena_opponent(req.target_player_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @router.post(
+        "/arena/choose_loot",
+        summary="Choose Arena PvP loot",
+        description=(
+            "Resolves the Arena PvP winner's optional steal choice. "
+            "Winner may steal one compatible inventory item, steal one treasure unit, or skip."
+        ),
+    )
+    def arena_choose_loot(req: ArenaLootChoiceRequest):
+        try:
+            return graph.choose_arena_loot(
+                steal_kind=req.steal_kind,
+                source_slot_group=req.source_slot_group,
+                source_slot_index=req.source_slot_index,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     

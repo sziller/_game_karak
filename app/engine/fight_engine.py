@@ -77,6 +77,65 @@ def _apply_outcome_modifiers(*, raw_outcome: FightOutcome, player: Player) -> tu
 
     return predicted_outcome, modifiers
 
+def _apply_arena_outcome_modifiers(
+    *,
+    raw_outcome: FightOutcome,
+    initiator_player: Player,
+    challenged_player: Player,
+) -> tuple[FightOutcome, list[dict]]:
+    """
+    Apply non-additive Arena PvP outcome reinterpretation effects.
+
+    Current implementation:
+    - skill_thi_01:
+        draw -> win for that player's side
+
+    If both sides have skill_thi_01 active and the raw result is draw,
+    the result remains draw.
+    """
+    predicted_outcome: FightOutcome = raw_outcome
+    modifiers: list[dict] = []
+
+    if raw_outcome != "draw":
+        return predicted_outcome, modifiers
+
+    initiator_thief = initiator_player.is_skill_active("skill_thi_01")
+    challenged_thief = challenged_player.is_skill_active("skill_thi_01")
+
+    if initiator_thief and not challenged_thief:
+        predicted_outcome = "initiator_win"
+        modifiers.append({
+            "skill_id": "skill_thi_01",
+            "player_id": initiator_player.player_id,
+            "role": "initiator",
+            "applied": True,
+            "effect": "draw_to_initiator_win",
+            "label": "Tie counts as win",
+        })
+
+    elif challenged_thief and not initiator_thief:
+        predicted_outcome = "challenged_win"
+        modifiers.append({
+            "skill_id": "skill_thi_01",
+            "player_id": challenged_player.player_id,
+            "role": "challenged",
+            "applied": True,
+            "effect": "draw_to_challenged_win",
+            "label": "Tie counts as win",
+        })
+
+    elif initiator_thief and challenged_thief:
+        modifiers.append({
+            "skill_id": "skill_thi_01",
+            "applied": False,
+            "effect": "both_sides_draw_to_win_cancelled",
+            "label": "Both sides treat tie as win; result remains draw.",
+            "initiator_player_id": initiator_player.player_id,
+            "challenged_player_id": challenged_player.player_id,
+        })
+
+    return predicted_outcome, modifiers
+
 def _is_fight_resolvable(fight_state: FightState) -> tuple[bool, list[str]]:
     missing: list[str] = []
 
@@ -826,6 +885,62 @@ def resolve_fight_state(fight_state: FightState) -> FightState:
 
     return fight_state
 
+def resolve_arena_pvp_fight_state(
+    *,
+    fight_state: FightState,
+    initiator_player: Player,
+    challenged_player: Player,
+) -> FightState:
+    """
+    Resolve and stamp an Arena PvP fight state.
+
+    Requirements:
+    - fight_kind == "arena_pvp"
+    - both roles committed
+    - both player sides have tossed dice
+
+    This function is intentionally separate from resolve_fight_state(),
+    because the older monster resolver still carries monster-fight assumptions.
+    """
+    if fight_state.context.fight_kind != "arena_pvp":
+        raise ValueError("resolve_arena_pvp_fight_state requires fight_kind='arena_pvp'.")
+
+    is_resolvable, missing_inputs = _is_fight_resolvable(fight_state)
+
+    if not is_resolvable:
+        raise ValueError(
+            "Arena PvP fight is not resolvable yet. "
+            f"Missing inputs: {missing_inputs}"
+        )
+
+    initiator_total = fight_state.initiator_side.total
+    challenged_total = fight_state.challenged_side.total
+
+    raw_outcome = _calc_raw_outcome(
+        initiator_total=initiator_total,
+        challenged_total=challenged_total,
+    )
+
+    predicted_outcome, modifiers = _apply_arena_outcome_modifiers(
+        raw_outcome=raw_outcome,
+        initiator_player=initiator_player,
+        challenged_player=challenged_player,
+    )
+
+    fight_state.prediction.initiator_total = initiator_total
+    fight_state.prediction.challenged_total = challenged_total
+    fight_state.prediction.raw_outcome = raw_outcome
+    fight_state.prediction.predicted_outcome = predicted_outcome
+    fight_state.prediction.is_resolvable = True
+    fight_state.prediction.missing_inputs = []
+    fight_state.prediction.outcome_modifiers = modifiers
+    fight_state.prediction.player_result = None
+
+    fight_state.outcome = predicted_outcome
+    fight_state.player_result = None
+    fight_state.phase = "resolved"
+
+    return fight_state
 
 if __name__ == "__main__":
     from domain.player import Player

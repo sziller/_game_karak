@@ -7,6 +7,17 @@ let latestFight = null;
 let selectedCurseTargetPlayerId = null;
 let selectedPoisonTargetPlayerId = null;
 let selectedPoisonTargetSkillId = null;
+
+let selectedArenaOpponentPlayerId = null;
+let selectedArenaLootChoice = null;
+// Shape:
+// {
+//   steal_kind: "slot_item" | "treasure_value",
+//   source_slot_group?: "weapon" | "scroll" | "key",
+//   source_slot_index?: number,
+//   label?: string
+// }
+
 let selectedScoutPocketTileIndex = null;
 let skillUiState = {};
 let pendingTeleportSkillId = null;
@@ -30,6 +41,17 @@ let latestItemRefsById = {};
 let RENDER_MODE = "image";
 const TILE_SIZE = 96;
 const TILE_SCALE = 0.75;
+
+/* =========================================================
+   MAP VIEWPORT STATE
+   mapViewportOffsetX/Y are frontend-only pan offsets in pixels.
+   Positive X moves the rendered map to the right.
+   Positive Y moves the rendered map downward.
+   ========================================================= */
+let mapViewportOffsetX = 0;
+let mapViewportOffsetY = 0;
+
+const MAP_PAN_STEP_PX = 96;
 
 const TILE_VARIANTS = {
     tile_rX: 1,
@@ -238,6 +260,49 @@ function getPlayerTokenColor(playerId, index) {
     return PLAYER_TOKEN_COLORS[n % PLAYER_TOKEN_COLORS.length];
 }
 
+function getActivePlayerMapPosition() {
+    const activePlayer = latestPlayers?.active_player || null;
+
+    if (!activePlayer?.position) {
+        return null;
+    }
+
+    const x = Number(activePlayer.position.x);
+    const y = Number(activePlayer.position.y);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+    }
+
+    return {x, y};
+}
+
+function resetMapViewportOffset() {
+    mapViewportOffsetX = 0;
+    mapViewportOffsetY = 0;
+}
+
+function centerMapOnActivePlayerAndRender() {
+    resetMapViewportOffset();
+    renderMapVisual();
+}
+
+function panMapViewport(direction) {
+    if (direction === "up") {
+        mapViewportOffsetY += MAP_PAN_STEP_PX;
+    } else if (direction === "down") {
+        mapViewportOffsetY -= MAP_PAN_STEP_PX;
+    } else if (direction === "left") {
+        mapViewportOffsetX += MAP_PAN_STEP_PX;
+    } else if (direction === "right") {
+        mapViewportOffsetX -= MAP_PAN_STEP_PX;
+    } else {
+        return;
+    }
+
+    renderMapVisual();
+}
+
 function renderMapVisual() {
     const mapDiv = document.getElementById("mapCanvas");
     mapDiv.innerHTML = "";
@@ -263,13 +328,24 @@ function renderMapVisual() {
     const minY = Math.min(...ys);
     const maxY = Math.max(...ys);
 
+
     const size = TILE_SIZE * TILE_SCALE;
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
+
+    const activePos = getActivePlayerMapPosition();
+
+    const centerX = activePos
+        ? activePos.x
+        : (minX + maxX) / 2;
+
+    const centerY = activePos
+        ? activePos.y
+        : (minY + maxY) / 2;
 
     const rect = mapDiv.getBoundingClientRect();
-    const screenCX = rect.width / 2;
-    const screenCY = rect.height / 2;
+
+    const screenCX = (rect.width / 2) + mapViewportOffsetX;
+    const screenCY = (rect.height / 2) + mapViewportOffsetY;
+
 
     for (const key in currentTiles) {
         const [x, y] = key.split(",").map(Number);
@@ -328,37 +404,37 @@ function renderMapVisual() {
     });
 
     indexedPlayers.forEach(({p, idx}) => {
-    const pos = p.position || {x: 0, y: 0};
-    const px = (pos.x - centerX) * size + screenCX;
-    const py = (centerY - pos.y) * size + screenCY;
-    const isActive = idx === activeIdx;
+        const pos = p.position || {x: 0, y: 0};
+        const px = (pos.x - centerX) * size + screenCX;
+        const py = (centerY - pos.y) * size + screenCY;
+        const isActive = idx === activeIdx;
 
-    const figurineSize = isActive ? 56 : 48;  /* 48 - 42 */
+        const figurineSize = isActive ? 56 : 48;  /* 48 - 42 */
 
-    const marker = document.createElement("div");
-    marker.className = "map-player-figurine" + (isActive ? " active" : "");
+        const marker = document.createElement("div");
+        marker.className = "map-player-figurine" + (isActive ? " active" : "");
 
-    marker.style.left = `${px - figurineSize / 2}px`;
-    marker.style.top = `${py - figurineSize / 2}px`;
-    marker.style.width = `${figurineSize}px`;
-    marker.style.height = `${figurineSize}px`;
-    marker.style.zIndex = isActive ? "60" : "40";
+        marker.style.left = `${px - figurineSize / 2}px`;
+        marker.style.top = `${py - figurineSize / 2}px`;
+        marker.style.width = `${figurineSize}px`;
+        marker.style.height = `${figurineSize}px`;
+        marker.style.zIndex = isActive ? "60" : "40";
 
-    if (p.figurine_path) {
-        const img = document.createElement("img");
-        img.src = p.figurine_path;
-        img.alt = p.display_name || "player";
-        img.title = p.display_name || "player";
-        marker.appendChild(img);
-    } else {
-        // Fallback if figurine_path is missing.
-        marker.classList.add("map-player-figurine-fallback");
-        marker.style.background = getPlayerTokenColor(p.player_id, idx);
-        marker.textContent = String(p.player_id ?? "?");
-    }
+        if (p.figurine_path) {
+            const img = document.createElement("img");
+            img.src = p.figurine_path;
+            img.alt = p.display_name || "player";
+            img.title = p.display_name || "player";
+            marker.appendChild(img);
+        } else {
+            // Fallback if figurine_path is missing.
+            marker.classList.add("map-player-figurine-fallback");
+            marker.style.background = getPlayerTokenColor(p.player_id, idx);
+            marker.textContent = String(p.player_id ?? "?");
+        }
 
-    mapDiv.appendChild(marker);
-});
+        mapDiv.appendChild(marker);
+    });
 }
 
 function prettySkillLabel(skillId) {
@@ -667,12 +743,29 @@ function normalizeMiniInventory(player) {
     };
 }
 
-function renderMiniInventoryColumnRow(label, slotsOrValue, isTreasure = false) {
+function renderMiniInventoryColumnRow(player, label, slotGroup, slotsOrValue, isTreasure = false) {
     if (isTreasure) {
+        const playerId = player?.player_id;
+        const treasureValue = slotsOrValue ?? 0;
+
+        const canStealTreasure =
+            isAwaitingArenaLootChoice() &&
+            isArenaLootLoser(playerId) &&
+            !!getArenaStealableTreasureOption();
+
+        const isSelected =
+            selectedArenaLootChoice &&
+            selectedArenaLootChoice.steal_kind === "treasure_value" &&
+            isArenaLootLoser(playerId);
+
         return `
-            <div class="mini-inv-row mini-inv-row-treasure">
+            <div
+                class="mini-inv-row mini-inv-row-treasure ${canStealTreasure ? "arena-loot-clickable" : ""} ${isSelected ? "arena-loot-selected" : ""}"
+                ${canStealTreasure ? `onclick="event.stopPropagation(); selectArenaLootTreasure(${playerId});"` : ""}
+                title="${canStealTreasure ? "Click to steal treasure" : ""}"
+            >
                 <span class="mini-inv-label">${label}</span>
-                <span class="mini-inv-treasure-value">${slotsOrValue ?? 0}</span>
+                <span class="mini-inv-treasure-value">${treasureValue}</span>
             </div>
         `;
     }
@@ -683,14 +776,17 @@ function renderMiniInventoryColumnRow(label, slotsOrValue, isTreasure = false) {
         <div class="mini-inv-row">
             <span class="mini-inv-label">${label}</span>
             <span class="mini-inv-slots">
-                ${slots.map(slot => renderMiniInventorySlot(slot)).join("")}
+                ${slots.map((slot, index) =>
+        renderMiniInventorySlot(player, slotGroup, slot, index)
+    ).join("")}
             </span>
         </div>
     `;
 }
 
-function renderMiniInventorySlot(slot) {
+function renderMiniInventorySlot(player, slotGroup, slot, slotIndex) {
     const itemId = miniItemIdFromSlot(slot);
+    const playerId = player?.player_id;
 
     if (!itemId) {
         return `
@@ -702,16 +798,43 @@ function renderMiniInventorySlot(slot) {
 
     const item = resolveItemForMiniInventory(itemId);
 
+    const canStealThis =
+        isAwaitingArenaLootChoice() &&
+        isArenaLootLoser(playerId) &&
+        !!findArenaStealableSlotOption(slotGroup, slotIndex);
+
+    const isSelected =
+        selectedArenaLootChoice &&
+        selectedArenaLootChoice.steal_kind === "slot_item" &&
+        selectedArenaLootChoice.source_slot_group === slotGroup &&
+        Number(selectedArenaLootChoice.source_slot_index) === Number(slotIndex);
+
+    const clickAttr = canStealThis
+        ? `onclick="event.stopPropagation(); selectArenaLootSlot(${playerId}, '${slotGroup}', ${slotIndex}, '${itemId}')"`
+        : "";
+
+    const title = canStealThis
+        ? `Steal ${itemId}`
+        : itemId;
+
     if (!item) {
         return `
-            <span class="mini-inv-slot mini-inv-slot-missing" title="${itemId}">
+            <span
+                class="mini-inv-slot mini-inv-slot-missing ${canStealThis ? "arena-loot-clickable" : ""} ${isSelected ? "arena-loot-selected" : ""}"
+                title="${title}"
+                ${clickAttr}
+            >
                 ?
             </span>
         `;
     }
 
     return `
-        <span class="mini-inv-slot" title="${itemId}">
+        <span
+            class="mini-inv-slot ${canStealThis ? "arena-loot-clickable" : ""} ${isSelected ? "arena-loot-selected" : ""}"
+            title="${title}"
+            ${clickAttr}
+        >
             <img
                 class="mini-inv-icon"
                 src="${itemImagePath(item)}"
@@ -759,10 +882,10 @@ function renderCompactPlayerInventory(player) {
 
     return `
         <div class="player-mini-inventory">
-            ${renderMiniInventoryColumnRow("W", miniInv.weapons)}
-            ${renderMiniInventoryColumnRow("K", miniInv.keys)}
-            ${renderMiniInventoryColumnRow("S", miniInv.scrolls)}
-            ${renderMiniInventoryColumnRow("T", miniInv.treasure, true)}
+            ${renderMiniInventoryColumnRow(player, "W", "weapon", miniInv.weapons)}
+            ${renderMiniInventoryColumnRow(player, "K", "key", miniInv.keys)}
+            ${renderMiniInventoryColumnRow(player, "S", "scroll", miniInv.scrolls)}
+            ${renderMiniInventoryColumnRow(player, "T", "treasure", miniInv.treasure, true)}
         </div>
     `;
 }
@@ -803,6 +926,66 @@ function renderSkillRows(player) {
         </div>
     `).join("");
 }
+
+/* =========================================================
+   ARENA HELPERS UI
+   ========================================================= */
+
+function getCurrentTurn() {
+    return latestMap?.turn || latestPlayers?.turn || null;
+}
+
+function isAwaitingArenaTargetChoice() {
+    const turn = getCurrentTurn();
+    return !!turn && turn.mode === "awaiting_arena_target_choice";
+}
+
+function isAwaitingArenaLootChoice() {
+    const turn = getCurrentTurn();
+    return !!turn && turn.mode === "awaiting_arena_loot_choice";
+}
+
+function getPendingArenaPvp() {
+    const turn = getCurrentTurn();
+    return turn?.pending_arena_pvp || null;
+}
+
+function getPendingArenaLootChoice() {
+    const turn = getCurrentTurn();
+    return turn?.pending_arena_loot_choice || null;
+}
+
+function getArenaLootLoserPlayerId() {
+    const pending = getPendingArenaLootChoice();
+    return pending?.loser_player_id ?? null;
+}
+
+function getArenaLootWinnerPlayerId() {
+    const pending = getPendingArenaLootChoice();
+    return pending?.winner_player_id ?? null;
+}
+
+function isArenaLootLoser(playerId) {
+    const loserId = getArenaLootLoserPlayerId();
+    return loserId != null && Number(playerId) === Number(loserId);
+}
+
+function findArenaStealableSlotOption(slotGroup, slotIndex) {
+    const pending = getPendingArenaLootChoice();
+    const slotItems = pending?.stealable?.slot_items || [];
+
+    return slotItems.find(option =>
+        option.steal_kind === "slot_item" &&
+        option.source_slot_group === slotGroup &&
+        Number(option.source_slot_index) === Number(slotIndex)
+    ) || null;
+}
+
+function getArenaStealableTreasureOption() {
+    const pending = getPendingArenaLootChoice();
+    return pending?.stealable?.treasure || null;
+}
+
 
 /* =========================================================
    PLAYERS UI
@@ -864,6 +1047,15 @@ function renderPlayers(data) {
     const awaitingCurse = isAwaitingCurseChoice();
     const awaitingPoison = isAwaitingPoisonChoice();
 
+    const awaitingArenaTarget = isAwaitingArenaTargetChoice();
+    const awaitingArenaLoot = isAwaitingArenaLootChoice();
+    const pendingArenaPvp = getPendingArenaPvp();
+    const pendingArenaLoot = getPendingArenaLootChoice();
+
+    const arenaEligibleTargetIds = new Set(
+        (pendingArenaPvp?.eligible_targets || []).map(t => Number(t.player_id))
+    );
+
     if (!players.length) {
         box.textContent = "(no runtime players)";
         return;
@@ -904,6 +1096,20 @@ function renderPlayers(data) {
             row.classList.add("curse-selected");
         }
 
+        if (
+            awaitingArenaTarget &&
+            Number(p.player_id) === Number(selectedArenaOpponentPlayerId)
+        ) {
+            row.classList.add("curse-selected");
+        }
+
+        if (
+            awaitingArenaLoot &&
+            Number(p.player_id) === Number(pendingArenaLoot?.loser_player_id)
+        ) {
+            row.classList.add("curse-selected");
+        }
+
         const isTeleportPlayerTargeting =
             !!pendingTeleportSkillId &&
             pendingTeleportTargetMode === "player";
@@ -917,11 +1123,21 @@ function renderPlayers(data) {
         const canSelectForTeleport = isTeleportPlayerTargeting;
         const canSelectForItemUse = isItemPlayerTargeting;
 
+        const canSelectForArenaOpponent =
+            awaitingArenaTarget &&
+            arenaEligibleTargetIds.has(Number(p.player_id));
+
+        const canSelectForArenaLoot =
+            awaitingArenaLoot &&
+            Number(p.player_id) === Number(pendingArenaLoot?.loser_player_id);
+
         row.style.cursor = (
             canSelectForCurse ||
             canSelectForPoison ||
             canSelectForTeleport ||
-            canSelectForItemUse
+            canSelectForItemUse ||
+            canSelectForArenaOpponent ||
+            canSelectForArenaLoot
         )
             ? "pointer"
             : "default";
@@ -930,6 +1146,19 @@ function renderPlayers(data) {
         // Player row click behavior
         // --------------------------------------------------------
         row.onclick = () => {
+
+            // ----------------------------------------------------
+// Arena opponent selection
+// ----------------------------------------------------
+            if (canSelectForArenaOpponent) {
+                selectedArenaOpponentPlayerId = p.player_id;
+
+                renderPlayers(latestPlayers);
+                renderArenaOpponentConfirmArea();
+                renderWaitingInstructionMessage();
+
+                return;
+            }
             // ----------------------------------------------------
             // Item-use player targeting
             // ----------------------------------------------------
@@ -1132,6 +1361,7 @@ function renderPlayers(data) {
         box.appendChild(row);
     });
 }
+
 
 // Development helper only.
 // Normal hotseat turn flow should use endTurn(), not manual active-player selection.
@@ -1420,12 +1650,16 @@ function monsterImagePath(monsterId) {
 async function loadPlayers() {
     const r = await fetch(gameApi("/players"));
     const data = await r.json();
+
     if (!r.ok) {
         throw new Error(data.detail || "Failed to load runtime players.");
     }
 
     latestPlayers = data;
-    renderPlayers(data);
+
+    // Do not render here.
+    // renderPlayers() depends on latestMap.turn for Arena / curse / poison / teleport modes.
+    // refreshAll() renders players after both latestPlayers and latestMap are up to date.
 }
 
 async function loadMap() {
@@ -1467,6 +1701,183 @@ function renderCurseConfirmArea() {
             <button onclick="clearCurseSelection()">Reset</button>
         </div>
     `;
+}
+
+function renderArenaOpponentConfirmArea() {
+    const box = document.getElementById("curse-confirm-box");
+    if (!box) return;
+
+    if (!isAwaitingArenaTargetChoice()) {
+        // Do not clear the box if another mode owns it.
+        return;
+    }
+
+    box.style.display = "block";
+
+    const players = latestPlayers?.players || [];
+    const selected = players.find(
+        p => Number(p.player_id) === Number(selectedArenaOpponentPlayerId)
+    );
+
+    if (!selected) {
+        box.innerHTML = `
+            <div class="muted">Arena activated. Select one opponent from the player list.</div>
+        `;
+        return;
+    }
+
+    box.innerHTML = `
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <div>
+                Arena opponent:
+                <b>${selected.display_name || ("Player #" + selected.player_id)}</b>
+            </div>
+            <button onclick="confirmArenaOpponentSelection()">⚔️ Confirm Challenge</button>
+            <button onclick="clearArenaOpponentSelection()">Reset</button>
+        </div>
+    `;
+}
+
+function clearArenaOpponentSelection() {
+    selectedArenaOpponentPlayerId = null;
+    renderPlayers(latestPlayers);
+    renderArenaOpponentConfirmArea();
+    renderWaitingInstructionMessage();
+}
+
+async function confirmArenaOpponentSelection() {
+    if (selectedArenaOpponentPlayerId == null) {
+        showError("No Arena opponent selected.");
+        return;
+    }
+
+    await chooseArenaOpponent(selectedArenaOpponentPlayerId);
+
+    selectedArenaOpponentPlayerId = null;
+}
+
+function renderArenaLootConfirmArea() {
+    const box = document.getElementById("curse-confirm-box");
+    if (!box) return;
+
+    if (!isAwaitingArenaLootChoice()) {
+        return;
+    }
+
+    box.style.display = "block";
+
+    const pending = getPendingArenaLootChoice();
+
+    if (!pending) {
+        box.innerHTML = `<div class="muted">No pending Arena loot choice.</div>`;
+        return;
+    }
+
+    const winner = getPlayerById(pending.winner_player_id);
+    const loser = getPlayerById(pending.loser_player_id);
+
+    const winnerName = winner?.display_name || `Player #${pending.winner_player_id}`;
+    const loserName = loser?.display_name || `Player #${pending.loser_player_id}`;
+
+    if (!selectedArenaLootChoice) {
+        box.innerHTML = `
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <div>
+                    Arena loot:
+                    <b>${winnerName}</b> may steal from <b>${loserName}</b>.
+                    Click an item or treasure in the loser’s mini-inventory.
+                </div>
+                <button onclick="chooseArenaLootSkip()">Skip</button>
+            </div>
+        `;
+        return;
+    }
+
+    box.innerHTML = `
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <div>
+                Selected loot:
+                <b>${selectedArenaLootChoice.label || selectedArenaLootChoice.steal_kind}</b>
+            </div>
+            <button onclick="confirmArenaLootSelection()">Steal</button>
+            <button onclick="chooseArenaLootSkip()">Skip</button>
+            <button onclick="clearArenaLootSelection()">Reset</button>
+        </div>
+    `;
+}
+
+function clearArenaLootSelection() {
+    selectedArenaLootChoice = null;
+    renderPlayers(latestPlayers);
+    renderArenaLootConfirmArea();
+    renderWaitingInstructionMessage();
+}
+
+async function confirmArenaLootSelection() {
+    if (!selectedArenaLootChoice) {
+        showError("No Arena loot selected.");
+        return;
+    }
+
+    await chooseArenaLoot(selectedArenaLootChoice);
+
+    selectedArenaLootChoice = null;
+}
+
+function selectArenaLootSlot(playerId, slotGroup, slotIndex, itemId) {
+    if (!isAwaitingArenaLootChoice()) {
+        return;
+    }
+
+    if (!isArenaLootLoser(playerId)) {
+        showError("Arena loot can only be stolen from the loser.");
+        return;
+    }
+
+    const option = findArenaStealableSlotOption(slotGroup, slotIndex);
+
+    if (!option) {
+        showError("This item cannot be stolen now. The winner may have no compatible free slot.");
+        return;
+    }
+
+    selectedArenaLootChoice = {
+        steal_kind: "slot_item",
+        source_slot_group: slotGroup,
+        source_slot_index: Number(slotIndex),
+        label: itemId || option.item_id || `${slotGroup}[${slotIndex}]`
+    };
+
+    renderPlayers(latestPlayers);
+    renderArenaLootConfirmArea();
+    renderWaitingInstructionMessage();
+}
+
+function selectArenaLootTreasure(playerId) {
+    if (!isAwaitingArenaLootChoice()) {
+        return;
+    }
+
+    if (!isArenaLootLoser(playerId)) {
+        showError("Arena treasure can only be stolen from the loser.");
+        return;
+    }
+
+    const option = getArenaStealableTreasureOption();
+
+    if (!option) {
+        showError("This player has no stealable treasure.");
+        return;
+    }
+
+    selectedArenaLootChoice = {
+        steal_kind: "treasure_value",
+        label: `Treasure (${option.value ?? "?"})`
+    };
+
+    renderPlayers(latestPlayers);
+    renderArenaLootConfirmArea();
+    renderWaitingInstructionMessage();
 }
 
 function getPendingMonsterChoice() {
@@ -1523,6 +1934,56 @@ function renderEncounterPanel() {
         return;
     }
 
+    // --------------------------------------------------------
+    // Arena opponent choice
+    // Selection happens in the player list, not in this panel.
+    // --------------------------------------------------------
+    if (isAwaitingArenaTargetChoice()) {
+        box.classList.remove(
+            "panel-placeholder",
+            "encounter-monster-choice-box",
+            "encounter-arena-loot-box"
+        );
+        box.classList.add("encounter-box", "encounter-arena-choice-box");
+
+        box.innerHTML = `
+        <div class="encounter-active-player">
+            <div style="font-size:18px; font-weight:bold;">
+                ⚔ Arena
+            </div>
+        </div>
+
+        <div class="encounter-target">
+            <div class="encounter-target-empty">player target</div>
+        </div>
+    `;
+
+        return;
+    }
+
+    if (isAwaitingArenaLootChoice()) {
+        box.classList.remove(
+            "panel-placeholder",
+            "encounter-monster-choice-box",
+            "encounter-arena-choice-box"
+        );
+        box.classList.add("encounter-box", "encounter-arena-loot-box");
+
+        box.innerHTML = `
+        <div class="encounter-active-player">
+            <div style="font-size:18px; font-weight:bold;">
+                🏆 Loot
+            </div>
+        </div>
+
+        <div class="encounter-target">
+            <div class="encounter-target-empty">mini-inventory</div>
+        </div>
+    `;
+
+        return;
+    }
+
     const activePlayer = latestPlayers?.active_player || null;
     const currentTile = getActivePlayerCurrentTile();
     const pendingChoice = getPendingMonsterChoice();
@@ -1547,7 +2008,11 @@ function renderEncounterPanel() {
 
         const canRedraw = !!pendingChoice.has_alc_02;
 
-        box.classList.remove("panel-placeholder");
+        box.classList.remove(
+            "panel-placeholder",
+            "encounter-arena-choice-box",
+            "encounter-arena-loot-box"
+        );
         box.classList.add("encounter-box", "encounter-monster-choice-box");
 
         box.innerHTML = `
@@ -1613,7 +2078,12 @@ function renderEncounterPanel() {
         monsterPath
     });
 
-    box.classList.remove("panel-placeholder", "encounter-monster-choice-box");
+    box.classList.remove(
+        "panel-placeholder",
+        "encounter-monster-choice-box",
+        "encounter-arena-choice-box",
+        "encounter-arena-loot-box"
+    );
     box.classList.add("encounter-box");
 
     box.innerHTML = `
@@ -1739,6 +2209,7 @@ function clearTeleportTargetSelection() {
     selectedTeleportTargetPlayerId = null;
     renderPlayers(latestPlayers);
     renderTeleportConfirmArea();
+    renderWaitingInstructionMessage();
 }
 
 function showKarakCreatedMessage(confirmData) {
@@ -1787,6 +2258,8 @@ async function refreshAll() {
         await loadMap();
         await loadInventory();
 
+        renderPlayers(latestPlayers);
+
         if (!isSkillAvailableForActivePlayer("skill_sco_02")) {
             selectedScoutPocketTileIndex = null;
         }
@@ -1804,6 +2277,14 @@ async function refreshAll() {
             selectedPoisonTargetSkillId = null;
         }
 
+        if (!isAwaitingArenaTargetChoice()) {
+            selectedArenaOpponentPlayerId = null;
+        }
+
+        if (!isAwaitingArenaLootChoice()) {
+            selectedArenaLootChoice = null;
+        }
+
         if (!pendingTeleportSkillId) {
             selectedTeleportTargetPlayerId = null;
             pendingTeleportTargetMode = null;
@@ -1817,6 +2298,8 @@ async function refreshAll() {
         renderCurseConfirmArea();
         renderPoisonConfirmArea();
         renderTeleportConfirmArea();
+        renderArenaOpponentConfirmArea();
+        renderArenaLootConfirmArea();
 
         const turn = latestMap?.turn || latestPlayers?.turn || null;
 
@@ -2345,10 +2828,12 @@ function renderInventory(data) {
     box.innerHTML = html;
 }
 
-function renderFightRows(rows) {
+function renderFightRows(rows, role, editableRole) {
     if (!rows || !rows.length) {
         return `<div class="muted">(no rows)</div>`;
     }
+    const roleArg = role || "challenged";
+    const isEditableRole = !editableRole || editableRole === roleArg;
 
     let html = `
         <table style="width:100%; border-collapse:collapse; margin-top:8px;">
@@ -2383,8 +2868,8 @@ function renderFightRows(rows) {
 
                     return `
                         <button
-                            onclick="fightToggleScroll('${slotId}')"
-                            ${btn.enabled ? "" : "disabled"}
+                            onclick="fightToggleScroll('${slotId}', '${roleArg}')"
+                            ${btn.enabled && isEditableRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || slotId || ""}"
                         >
@@ -2406,8 +2891,8 @@ function renderFightRows(rows) {
 
                     return `
                         <button
-                            onclick="fightToggleSkill('${skillId}')"
-                            ${btn.enabled && skillId ? "" : "disabled"}
+                            onclick="fightToggleSkill('${skillId}', '${roleArg}')"
+                            ${btn.enabled && skillId && isEditableRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${warning}"
                         >
@@ -2428,8 +2913,8 @@ function renderFightRows(rows) {
 
                     return `
                         <button
-                            onclick="fightRerollDie(${dieIndex}, '${skillId}')"
-                            ${btn.enabled && dieIndex && skillId ? "" : "disabled"}
+                            onclick="fightRerollDie(${dieIndex}, '${skillId}', '${roleArg}')"
+                            ${btn.enabled && dieIndex && skillId && isEditableRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || ("reroll die " + dieIndex)}"
                         >
@@ -2448,8 +2933,8 @@ function renderFightRows(rows) {
 
                     return `
                         <button
-                            onclick="fightRerollBoth('${skillId}')"
-                            ${btn.enabled && skillId ? "" : "disabled"}
+                            onclick="fightRerollBoth('${skillId}', '${roleArg}')"
+                            ${btn.enabled && skillId && isEditableRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || "reroll both dice"}"
                         >
@@ -2479,7 +2964,7 @@ function renderFightRows(rows) {
             // ------------------------------------------------------------
             if (row.button_action === "fight_toss") {
                 actionHtml = `
-                    <button onclick="fightToss()" ${row.button_enabled ? "" : "disabled"}>
+                    <button onclick="fightToss('${roleArg}')" ${row.button_enabled && isEditableRole ? "" : "disabled"}>
                         ${row.button_label}
                     </button>
                 `;
@@ -2512,16 +2997,18 @@ function renderFightRows(rows) {
 }
 
 
-function renderFightSide(side, title) {
+function renderFightSide(side, title, editableRole) {
     if (!side) {
         return `<div class="muted">(missing side)</div>`;
     }
 
     const participant = side.participant || {};
+    const role = participant.role || null;
+    const isEditable = editableRole && role === editableRole;
     const diceState = side.dice_state || null;
 
     let html = `
-        <div style="border:1px solid #333; padding:10px; background:#141414;">
+        <div style="border:1px solid ${isEditable ? "#55cc55" : "#333"}; padding:10px; background:${isEditable ? "#142014" : "#141414"};">
             <div style="margin-bottom:8px;">
                 <b>${title}</b>
             </div>
@@ -2549,7 +3036,7 @@ function renderFightSide(side, title) {
             <div style="margin-bottom:6px;">
                 <b>Total:</b> ${side.total ?? 0}
             </div>
-            ${renderFightRows(side.rows || [])}
+            ${renderFightRows(side.rows || [], role, editableRole)}
         </div>
     `;
 
@@ -2649,6 +3136,18 @@ function renderFight(data) {
     const prediction = data.prediction || null;
     const outcome = data.outcome || null;
 
+    const editableRole = data.editable_role || null;
+    const committedRoles = Array.isArray(data.committed_roles)
+        ? data.committed_roles
+        : [];
+
+    const isArenaPvp = context.fight_kind === "arena_pvp";
+    const isResolvable = !!prediction?.is_resolvable;
+    const canCommitEditableRole =
+        isArenaPvp &&
+        editableRole &&
+        !committedRoles.includes(editableRole);
+
     let html = `
         <div style="margin-bottom:10px;">
             <b>Fight kind:</b> ${context.fight_kind || "-"} |
@@ -2656,20 +3155,124 @@ function renderFight(data) {
             <b>Phase:</b> ${data.phase || "-"} |
             <b>Resolved outcome:</b> ${outcome || "(not resolved)"}
         </div>
+        
+                <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+            ${
+        canCommitEditableRole
+            ? `<button type="button" onclick="fightCommitRole('${editableRole}')">
+                            Commit ${editableRole}
+                       </button>`
+            : ""
+    }
 
+            <button
+                type="button"
+                onclick="fightResolve()"
+                ${isResolvable ? "" : "disabled"}
+            >
+                Resolve fight
+            </button>
+
+            <button type="button" onclick="fightRefresh()">
+                Refresh fight
+            </button>
+
+            ${
+        editableRole
+            ? `<span class="muted">Editable side: ${editableRole}</span>`
+            : `<span class="muted">No editable side</span>`
+    }
+        </div>
+        
         ${renderFightPrediction(prediction)}
 
         <div class="two-col">
             <div class="col">
-                ${renderFightSide(data.initiator_side, "Initiator")}
+                ${renderFightSide(data.initiator_side, "Initiator", editableRole)}
             </div>
             <div class="col">
-                ${renderFightSide(data.challenged_side, "Challenged")}
+                ${renderFightSide(data.challenged_side, "Challenged", editableRole)}
             </div>
         </div>
     `;
 
     box.innerHTML = html;
+}
+
+async function chooseArenaOpponent(targetPlayerId) {
+    clearError();
+
+    const r = await fetch(gameApi("/arena/choose_opponent"), {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            target_player_id: Number(targetPlayerId)
+        })
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Arena opponent choice failed.");
+        return;
+    }
+
+    await refreshAll();
+
+    showMessage(
+        `Arena opponent chosen: Player #${targetPlayerId}`,
+        "info",
+        "Arena"
+    );
+}
+
+async function chooseArenaLootSkip() {
+    await chooseArenaLoot({
+        steal_kind: "skip"
+    });
+}
+
+async function chooseArenaLootTreasure() {
+    await chooseArenaLoot({
+        steal_kind: "treasure_value"
+    });
+}
+
+async function chooseArenaLootSlot(sourceSlotGroup, sourceSlotIndex) {
+    await chooseArenaLoot({
+        steal_kind: "slot_item",
+        source_slot_group: sourceSlotGroup,
+        source_slot_index: Number(sourceSlotIndex)
+    });
+}
+
+async function chooseArenaLoot(payload) {
+    clearError();
+
+    const r = await fetch(gameApi("/arena/choose_loot"), {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Arena loot choice failed.");
+        return;
+    }
+
+    if (handleGameOverRedirect(data)) {
+        return;
+    }
+
+    await refreshAll();
+
+    showMessage(
+        "Arena loot resolved.",
+        "info",
+        "Arena"
+    );
 }
 
 async function toggleSkillUiSelection(playerId, skillId) {
@@ -3246,6 +3849,7 @@ async function endTurn() {
             return;
         }
 
+        resetMapViewportOffset();
         await refreshAll();
         showMessage("Turn ended. Next player is active.", "info", "Info");
 
@@ -3358,6 +3962,8 @@ function updateActionAvailability() {
     const isPendingTile = mode === "pending_tile";
     const isAwaitingMonsterChoice = mode === "awaiting_monster_choice";
     const isAwaitingMonsterEncounter = mode === "awaiting_monster_encounter";
+    const isAwaitingArenaTarget = mode === "awaiting_arena_target_choice";
+    const isAwaitingArenaLoot = mode === "awaiting_arena_loot_choice";
     const isFight = mode === "fight";
     const isItemPickup = mode === "item_pickup";
     const isAwaitingCurse = mode === "awaiting_curse_choice";
@@ -3385,7 +3991,9 @@ function updateActionAvailability() {
         (isIdle || isAwaitingMonsterEncounter) &&
         !isAwaitingKoReaction &&
         !isAwaitingPoison &&
-        !isAwaitingMonsterChoice;
+        !isAwaitingMonsterChoice &&
+        !isAwaitingArenaTarget &&
+        !isAwaitingArenaLoot;
 
     if (fightBtn) {
         fightBtn.disabled = !canStartFight;
@@ -3402,6 +4010,8 @@ function updateActionAvailability() {
             isPendingTile ||
             isAwaitingMonsterChoice ||
             isAwaitingMonsterEncounter ||
+            isAwaitingArenaTarget ||
+            isAwaitingArenaLoot ||
             isFight ||
             isAwaitingCurse ||
             isAwaitingPoison ||
@@ -3424,14 +4034,18 @@ function updateActionAvailability() {
         !isTeleportTargeting &&
         !isAwaitingKoReaction &&
         !isAwaitingMonsterChoice &&
-        !isAwaitingMonsterEncounter;
+        !isAwaitingMonsterEncounter &&
+        !isAwaitingArenaTarget &&
+        !isAwaitingArenaLoot;
 
     const canUseCoordinateSkillTeleport =
         isCoordinateTeleportTargeting &&
         isIdle &&
         !isAwaitingKoReaction &&
         !isAwaitingMonsterChoice &&
-        !isAwaitingMonsterEncounter;
+        !isAwaitingMonsterEncounter &&
+        !isAwaitingArenaTarget &&
+        !isAwaitingArenaLoot;
 
     const canResolveKoReaction =
         isAwaitingKoReaction;
@@ -3480,6 +4094,7 @@ function updateActionAvailability() {
     // Navigation:
     // - idle: normal movement
     // - awaiting_monster_encounter: movement only if skip is allowed
+    // - Arena target/loot modes block movement completely
     // --------------------------------------------------------
     moveButtons.forEach(btn => {
         if (btn) {
@@ -3488,6 +4103,8 @@ function updateActionAvailability() {
                 isItemTargeting ||
                 isAwaitingKoReaction ||
                 isAwaitingMonsterChoice ||
+                isAwaitingArenaTarget ||
+                isAwaitingArenaLoot ||
                 !(isIdle || canMoveDuringMonsterEncounter);
         }
     });
@@ -3500,6 +4117,8 @@ function updateActionAvailability() {
                 isAwaitingKoReaction ||
                 isAwaitingMonsterChoice ||
                 isAwaitingMonsterEncounter ||
+                isAwaitingArenaTarget ||
+                isAwaitingArenaLoot ||
                 !isPendingTile;
         }
     });
@@ -3511,6 +4130,8 @@ function updateActionAvailability() {
             isAwaitingKoReaction ||
             isAwaitingMonsterChoice ||
             isAwaitingMonsterEncounter ||
+            isAwaitingArenaTarget ||
+            isAwaitingArenaLoot ||
             !isPendingTile;
     }
 }
@@ -3557,6 +4178,7 @@ function clearPoisonSelection() {
     selectedPoisonTargetSkillId = null;
     renderPlayers(latestPlayers);
     renderPoisonConfirmArea();
+    renderWaitingInstructionMessage();
 }
 
 async function confirmPoisonSelection() {
@@ -3600,6 +4222,7 @@ function clearCurseSelection() {
     selectedCurseTargetPlayerId = null;
     renderPlayers(latestPlayers);
     renderCurseConfirmArea();
+    renderWaitingInstructionMessage();
 }
 
 async function confirmCurseSelection() {
@@ -3673,11 +4296,13 @@ async function fightRefresh() {
     renderFight(data);
 }
 
-async function fightToss() {
+async function fightToss(role = "challenged") {
     clearError();
 
     const r = await fetch(gameApi("/fight/toss"), {
-        method: "POST"
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({role})
     });
 
     const data = await r.json();
@@ -3686,11 +4311,11 @@ async function fightToss() {
         return;
     }
 
-    renderFight(data);
+    renderFight(data.fight || data);
     await refreshAll();
 }
 
-async function fightRerollDie(dieIndex, skillId) {
+async function fightRerollDie(dieIndex, skillId, role = "challenged") {
     clearError();
 
     const r = await fetch(gameApi("/fight/reroll_die"), {
@@ -3698,7 +4323,8 @@ async function fightRerollDie(dieIndex, skillId) {
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
             die_index: dieIndex,
-            skill_id: skillId
+            skill_id: skillId,
+            role
         })
     });
 
@@ -3708,18 +4334,19 @@ async function fightRerollDie(dieIndex, skillId) {
         return;
     }
 
-    renderFight(data);
+    renderFight(data.fight || data);
     await refreshAll();
 }
 
-async function fightRerollBoth(skillId) {
+async function fightRerollBoth(skillId, role = "challenged") {
     clearError();
 
     const r = await fetch(gameApi("/fight/reroll_both"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-            skill_id: skillId
+            skill_id: skillId,
+            role
         })
     });
 
@@ -3729,7 +4356,7 @@ async function fightRerollBoth(skillId) {
         return;
     }
 
-    renderFight(data);
+    renderFight(data.fight || data);
     await refreshAll();
 }
 
@@ -3741,23 +4368,44 @@ async function fightResolve() {
     });
 
     const data = await r.json();
+
     if (!r.ok) {
         showError(data.detail || "Fight resolve failed.");
         return;
     }
 
+    if (handleGameOverRedirect(data)) {
+        return;
+    }
+
     renderFight(null);
     await refreshAll();
+
+    if (data.status === "arena_pvp_resolved_awaiting_loot_choice") {
+        showMessage(
+            "Arena fight resolved. Choose loot or skip.",
+            "waiting",
+            "Arena loot"
+        );
+        return;
+    }
+
+    showMessage(
+        data.status || "Fight resolved.",
+        "info",
+        "Fight"
+    );
 }
 
-async function fightToggleSkill(skillId) {
+async function fightToggleSkill(skillId, role = "challenged") {
     clearError();
 
     const r = await fetch(gameApi("/fight/toggle_skill"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-            skill_id: skillId
+            skill_id: skillId,
+            role
         })
     });
 
@@ -3767,17 +4415,20 @@ async function fightToggleSkill(skillId) {
         return;
     }
 
-    renderFight(data);
+    renderFight(data.fight || data);
     await refreshAll();
 }
 
-async function fightToggleScroll(slotId) {
+async function fightToggleScroll(slotId, role = "challenged") {
     clearError();
 
     const r = await fetch(gameApi("/fight/toggle_scroll"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({slot_id: slotId})
+        body: JSON.stringify({
+            slot_id: slotId,
+            role
+        })
     });
 
     const data = await r.json();
@@ -3786,8 +4437,34 @@ async function fightToggleScroll(slotId) {
         return;
     }
 
-    renderFight(data);
+    renderFight(data.fight || data);
     await refreshAll();
+}
+
+async function fightCommitRole(role) {
+    clearError();
+
+    const r = await fetch(gameApi("/fight/commit_role"), {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({role})
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Fight role commit failed.");
+        return;
+    }
+
+    renderFight(data.fight || data);
+    await refreshAll();
+
+    showMessage(
+        `${role} side committed.`,
+        "info",
+        "Fight"
+    );
 }
 
 async function postGameAction(path, payload = null) {
@@ -3874,6 +4551,14 @@ function renderWaitingInstructionMessage() {
     return true;
 }
 
+function refreshWaitingPromptOrReady() {
+    const waitingMessageShown = renderWaitingInstructionMessage();
+
+    if (!waitingMessageShown) {
+        showMessage("(ready)", "info", "Info");
+    }
+}
+
 function getWaitingInstructionMessage() {
     const turn =
         latestMap?.turn ||
@@ -3917,9 +4602,14 @@ function getWaitingInstructionMessage() {
 
     if (pendingTeleportSkillId) {
         if (pendingTeleportTargetMode === "player") {
+            const selected = getPlayerById(selectedTeleportTargetPlayerId);
+            const selectedText = selected
+                ? ` Selected: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
+                : " Select a target player, then confirm.";
+
             return {
                 title: "Waiting for teleport target",
-                message: `${teleportSkillLabel(pendingTeleportSkillId)}. Select a target player, then confirm.`
+                message: `${teleportSkillLabel(pendingTeleportSkillId)}.${selectedText}`
             };
         }
 
@@ -3943,6 +4633,25 @@ function getWaitingInstructionMessage() {
         return {
             title: "Waiting for Warrior teleport",
             message: "Warrior knockout reaction: choose a fountain coordinate, then press Teleport."
+        };
+    }
+
+    if (mode === "awaiting_arena_target_choice") {
+    const selected = getPlayerById(selectedArenaOpponentPlayerId);
+    const selectedText = selected
+        ? ` Selected opponent: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
+        : " Select an opponent from the player list, then confirm the Arena challenge.";
+
+    return {
+        title: "Arena activated",
+        message: selectedText
+    };
+}
+
+    if (mode === "awaiting_arena_loot_choice") {
+        return {
+            title: "Arena loot",
+            message: "Click one item or treasure in the loser’s mini-inventory, then confirm or skip."
         };
     }
 
@@ -4011,18 +4720,39 @@ function getWaitingInstructionMessage() {
     }
 
     if (mode === "awaiting_curse_choice") {
-        return {
-            title: "Waiting for curse target",
-            message: "Choose which player receives the curse, then confirm the curse selection."
-        };
-    }
+    const selected = getPlayerById(selectedCurseTargetPlayerId);
+    const selectedText = selected
+        ? ` Selected curse target: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
+        : " Choose which player receives the curse, then confirm the curse selection.";
+
+    return {
+        title: "Waiting for curse target",
+        message: selectedText
+    };
+}
 
     if (mode === "awaiting_poison_choice") {
+    const selectedPlayer = getPlayerById(selectedPoisonTargetPlayerId);
+
+    if (!selectedPlayer) {
         return {
             title: "Waiting for poison target",
             message: "Choose a player, then click one of that player’s skill chips to poison it."
         };
     }
+
+    if (!selectedPoisonTargetSkillId) {
+        return {
+            title: "Waiting for poison skill",
+            message: `Selected poison target: ${selectedPlayer.display_name || ("Player #" + selectedPlayer.player_id)}. Now click one of this player's skill chips.`
+        };
+    }
+
+    return {
+        title: "Waiting for poison confirmation",
+        message: `Selected poison target: ${selectedPlayer.display_name || ("Player #" + selectedPlayer.player_id)} / ${prettySkillLabel(selectedPoisonTargetSkillId)}. Confirm or reset.`
+    };
+}
 
     if (mode === "awaiting_heal_choice") {
         return {
