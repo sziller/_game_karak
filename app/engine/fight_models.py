@@ -7,9 +7,9 @@ from typing import Literal, Optional, Any
 # Type literals
 # ============================================================
 
-FightKind = Literal["monster", "arena_pvp"]
+FightKind = Literal["entity", "arena_pvp"]
 FightRole = Literal["initiator", "challenged"]
-ParticipantKind = Literal["player", "monster"]
+ParticipantKind = Literal["player", "entity"]
 
 FightRowKind = Literal["info", "action_toss", "action_toggle", "summary"]
 FightActionKind = Literal["fight_toss", "fight_toggle_skill", "fight_toggle_scroll",
@@ -27,7 +27,7 @@ class FightParticipantRef:
 
     Exactly one of:
     - player_id
-    - monster_id
+    - entity_id
 
     should normally be populated.
     """
@@ -36,7 +36,7 @@ class FightParticipantRef:
     display_name: str
 
     player_id: Optional[int] = None
-    monster_id: Optional[str] = None
+    entity_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,7 +44,7 @@ class FightParticipantRef:
             "role": self.role,
             "display_name": self.display_name,
             "player_id": self.player_id,
-            "monster_id": self.monster_id,
+            "entity_id": self.entity_id,
         }
 
 
@@ -260,7 +260,7 @@ class FightContext:
     challenged: FightParticipantRef
 
     is_before_second_action: bool = False
-    monster_tile_discovered_this_turn: bool = False
+    entity_tile_discovered_this_turn: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"fight_kind": self.fight_kind,
@@ -269,7 +269,7 @@ class FightContext:
                 "initiator": self.initiator.to_dict(),
                 "challenged": self.challenged.to_dict(),
                 "is_before_second_action": self.is_before_second_action,
-                "monster_tile_discovered_this_turn": self.monster_tile_discovered_this_turn}
+                "entity_tile_discovered_this_turn": self.entity_tile_discovered_this_turn}
 
 
 # ============================================================
@@ -337,7 +337,7 @@ class FightState:
     - None before resolution
 
     player_result:
-    Player-facing result for monster fights:
+    Player-facing result for entity fights:
     - win
     - loss
     - tie
@@ -345,7 +345,7 @@ class FightState:
       interpretation is available yet
 
     IMPORTANT:
-    - In monster fights, the monster is the initiator and the player is challenged.
+    - In entity fights, the entity is the initiator and the player is challenged.
     - Therefore:
         initiator_win  -> player_result = loss
         challenged_win -> player_result = win
@@ -381,9 +381,9 @@ class FightState:
             return "challenged"
 
         if self.phase in ("created", "ready"):
-            # Monster-fight compatibility:
-            # monster side is fixed; challenged player is editable.
-            if self.context.fight_kind == "monster":
+            # Entity-fight compatibility:
+            # entity side is fixed; challenged player is editable.
+            if self.context.fight_kind == "entity":
                 return "challenged"
 
         return None
@@ -391,10 +391,10 @@ class FightState:
 
 if __name__ == "__main__":
     p_ini = FightParticipantRef(
-        participant_kind="monster",
+        participant_kind="entity",
         role="initiator",
         display_name="Giant Rat",
-        monster_id="GiantRat",
+        entity_id="GiantRat",
     )
     p_ch = FightParticipantRef(
         participant_kind="player",
@@ -405,7 +405,7 @@ if __name__ == "__main__":
 
     state = FightState(
         context=FightContext(
-            fight_kind="monster",
+            fight_kind="entity",
             tile_x=0,
             tile_y=1,
             initiator=p_ini,

@@ -6,7 +6,7 @@ Different states of a given Tile:
 
 * `discovered`: <bool>
 ** _False_: unplaced but already drawn tiles
-** _True_: means the Tile is already on the Field (location and rotation determined), it also has or has had a monster/
+** _True_: means the Tile is already on the Field (location and rotation determined), it also has or has had a entity/
            item in it, if `type` == _room_
    `visited`: <bool>
    *** _False_: as a result of *Peek()* the Tile is fully set and eventually also populated, but has never been entered. 
@@ -17,7 +17,7 @@ Different states of a given Tile:
 === ValidTile / InvalidTile
 
 _InvalidTile_::
-* Tiles with a living Monster in them are _InvalidTiles_
+* Tiles with a living Entity in them are _InvalidTiles_
 * You cannot end (thus start) your *Turn* on an _Invalid Tile_
 
 _ValidTile_::
@@ -25,9 +25,9 @@ _ValidTile_::
 * you my end your turn on _ValidTiles_, thus you may also retreat to such Tiles
 
 
-=== Movement restriction from monster Tiles
+=== Movement restriction from entity Tiles
 
-A Player may *not* move *from* a Monster-occupied Tile.
+A Player may *not* move *from* a Entity-occupied Tile.
 
 Exceptions::
 

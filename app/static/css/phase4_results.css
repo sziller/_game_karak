@@ -258,7 +258,7 @@
     white-space: nowrap;
 }
 
-.results-monster-list {
+.results-entity-list {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -268,7 +268,7 @@
     font-size: 11px;
 }
 
-.results-monster-line {
+.results-entity-line {
     display: flex;
     justify-content: space-between;
     gap: 6px;
@@ -276,7 +276,7 @@
     min-width: 0;
 }
 
-.results-monster-name {
+.results-entity-name {
     min-width: 0;
 
     overflow: hidden;
@@ -284,7 +284,7 @@
     white-space: nowrap;
 }
 
-.results-monster-count {
+.results-entity-count {
     flex: 0 0 auto;
 
     font-weight: bold;

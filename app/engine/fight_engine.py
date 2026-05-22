@@ -7,10 +7,10 @@ from engine.fight_sheet_builder import (
     apply_reroll_both_dice_to_player_side,
     apply_reroll_one_die_to_player_side,
     apply_toss_to_player_side,
-    build_monster_side_state,
+    build_entity_side_state,
     build_player_side_state,
     toggle_manual_fight_skill_for_player_side)
-from domain.game_entities import get_monster_by_id
+from domain.game_entities import get_entity_by_id
 from domain.player import Player
 
 # ============================================================
@@ -19,7 +19,7 @@ from domain.player import Player
 
 FightOutcome = Literal["initiator_win", "challenged_win", "draw"]
 
-def _derive_player_result_for_monster_fight(
+def _derive_player_result_for_entity_fight(
     *,
     fight_state: FightState,
     outcome: FightOutcome,
@@ -27,12 +27,12 @@ def _derive_player_result_for_monster_fight(
     """
     Convert internal side-based outcome into player-facing result.
 
-    For monster fights:
-    - monster is initiator
+    For entity fights:
+    - entity is initiator
     - player is challenged
     """
-    if fight_state.context.fight_kind != "monster":
-        raise ValueError("Player result derivation currently supports monster fights only.")
+    if fight_state.context.fight_kind != "entity":
+        raise ValueError("Player result derivation currently supports entity fights only.")
 
     if outcome == "challenged_win":
         return "win"
@@ -139,7 +139,7 @@ def _apply_arena_outcome_modifiers(
 def _is_fight_resolvable(fight_state: FightState) -> tuple[bool, list[str]]:
     missing: list[str] = []
 
-    if fight_state.context.fight_kind == "monster":
+    if fight_state.context.fight_kind == "entity":
         side = fight_state.challenged_side
 
         if side.participant.participant_kind == "player":
@@ -195,8 +195,8 @@ def _rebuild_fight_prediction(*, fight_state: FightState, player: Optional[Playe
     fight_state.prediction.missing_inputs = missing_inputs
     fight_state.prediction.outcome_modifiers = modifiers
 
-    if is_resolvable and fight_state.context.fight_kind == "monster":
-        fight_state.prediction.player_result = _derive_player_result_for_monster_fight(
+    if is_resolvable and fight_state.context.fight_kind == "entity":
+        fight_state.prediction.player_result = _derive_player_result_for_entity_fight(
             fight_state=fight_state,
             outcome=predicted_outcome,
         )
@@ -208,50 +208,50 @@ def _rebuild_fight_prediction(*, fight_state: FightState, player: Optional[Playe
 # Fight state builders
 # ============================================================
 
-def start_monster_fight_state(*,
+def start_entity_fight_state(*,
                               player: Player,
-                              monster_id: str,
+                              entity_id: str,
                               tile_x: int,
                               tile_y: int,
                               is_before_second_action: bool = False,
-                              monster_tile_discovered_this_turn: bool = False) -> FightState:
+                              entity_tile_discovered_this_turn: bool = False) -> FightState:
     """
-    Build a monster-vs-player fight state.
+    Build an entity-vs-player fight state.
 
     Canonical role assignment:
-    - initiator  = monster
+    - initiator  = entity
     - challenged = player
 
     First version:
-    - monster side is fixed-strength
+    - entity side is fixed-strength
     - player side is table-based with placeholders
     """
-    _ = get_monster_by_id(monster_id)  # validates monster id
+    _ = get_entity_by_id(entity_id)  # validates entity id
 
-    initiator = FightParticipantRef(participant_kind="monster",
+    initiator = FightParticipantRef(participant_kind="entity",
                                     role="initiator",
-                                    display_name=monster_id,
-                                    monster_id=monster_id)
+                                    display_name=entity_id,
+                                    entity_id=entity_id)
     challenged = FightParticipantRef(participant_kind="player",
                                      role="challenged",
                                      display_name=player.display_name or f"Player #{player.player_id}",
                                      player_id=player.player_id)
-    context = FightContext(fight_kind="monster",
+    context = FightContext(fight_kind="entity",
                            tile_x=tile_x,
                            tile_y=tile_y,
                            initiator=initiator,
                            challenged=challenged,
                            is_before_second_action=is_before_second_action,
-                           monster_tile_discovered_this_turn=monster_tile_discovered_this_turn)
-    initiator_side = build_monster_side_state(participant=initiator,
-                                              monster_id=monster_id)
+                           entity_tile_discovered_this_turn=entity_tile_discovered_this_turn)
+    initiator_side = build_entity_side_state(participant=initiator,
+                                              entity_id=entity_id)
     challenged_side = build_player_side_state(
         participant=challenged,
         player=player,
-        monster_id=monster_id,
-        fight_kind="monster",
+        entity_id=entity_id,
+        fight_kind="entity",
         is_before_second_action=context.is_before_second_action,
-        monster_tile_discovered_this_turn=context.monster_tile_discovered_this_turn,
+        entity_tile_discovered_this_turn=context.entity_tile_discovered_this_turn,
     )
     fight_state = FightState(context=context,
                              initiator_side=initiator_side,
@@ -303,25 +303,25 @@ def start_arena_pvp_fight_state(
         initiator=initiator,
         challenged=challenged,
         is_before_second_action=initiator_is_before_second_action,
-        monster_tile_discovered_this_turn=False,
+        entity_tile_discovered_this_turn=False,
     )
 
     initiator_side = build_player_side_state(
         participant=initiator,
         player=initiator_player,
-        monster_id=None,
+        entity_id=None,
         fight_kind="arena_pvp",
         is_before_second_action=initiator_is_before_second_action,
-        monster_tile_discovered_this_turn=False,
+        entity_tile_discovered_this_turn=False,
     )
 
     challenged_side = build_player_side_state(
         participant=challenged,
         player=challenged_player,
-        monster_id=None,
+        entity_id=None,
         fight_kind="arena_pvp",
         is_before_second_action=challenged_is_before_second_action,
-        monster_tile_discovered_this_turn=False,
+        entity_tile_discovered_this_turn=False,
     )
 
     fight_state = FightState(
@@ -377,25 +377,25 @@ def _set_side_by_role(
     raise ValueError(f"Unsupported fight role: {role!r}")
 
 
-def _get_monster_id_for_player_side_rebuild(
+def _get_entity_id_for_player_side_rebuild(
     *,
     fight_state: FightState,
 ) -> Optional[str]:
     """
-    Return monster_id only for monster fights.
+    Return entity_id only for entity fights.
 
-    In monster fights:
-    - initiator is the monster
+    In entity fights:
+    - initiator is the entity
     - challenged is the player
 
     In Arena PvP:
     - both sides are players
-    - monster_id must be None
+    - entity_id must be None
     """
-    if fight_state.context.fight_kind != "monster":
+    if fight_state.context.fight_kind != "entity":
         return None
 
-    return fight_state.context.initiator.monster_id
+    return fight_state.context.initiator.entity_id
 
 
 def _rebuild_player_side_by_role(
@@ -412,10 +412,10 @@ def _rebuild_player_side_by_role(
     rebuilt = build_player_side_state(
         participant=side.participant,
         player=player,
-        monster_id=_get_monster_id_for_player_side_rebuild(fight_state=fight_state),
+        entity_id=_get_entity_id_for_player_side_rebuild(fight_state=fight_state),
         fight_kind=fight_state.context.fight_kind,
         is_before_second_action=fight_state.context.is_before_second_action,
-        monster_tile_discovered_this_turn=fight_state.context.monster_tile_discovered_this_turn,
+        entity_tile_discovered_this_turn=fight_state.context.entity_tile_discovered_this_turn,
         existing_dice_state=side.dice_state,
         existing_choices=side.choices,
     )
@@ -426,7 +426,7 @@ def _rebuild_player_side_by_role(
         side=rebuilt,
     )
 
-    if fight_state.context.fight_kind == "monster":
+    if fight_state.context.fight_kind == "entity":
         fight_state.phase = "ready"
     elif fight_state.context.fight_kind == "arena_pvp":
         # Keep Arena phase until commit/phase transition.
@@ -434,9 +434,11 @@ def _rebuild_player_side_by_role(
     else:
         raise ValueError(f"Unsupported fight kind: {fight_state.context.fight_kind!r}")
 
+    prediction_player = player if fight_state.context.fight_kind == "entity" else None
+
     fight_state = _rebuild_fight_prediction(
         fight_state=fight_state,
-        player=player,
+        player=prediction_player,
     )
 
     return fight_state
@@ -488,7 +490,7 @@ def _ensure_role_can_edit_fight(
     """
     Validate whether a role may currently modify its fight side.
 
-    Monster fight:
+    Entity fight:
     - only challenged player side is editable.
 
     Arena PvP:
@@ -499,9 +501,9 @@ def _ensure_role_can_edit_fight(
     if role in fight_state.committed_roles:
         raise ValueError(f"{role} side is already committed.")
 
-    if fight_state.context.fight_kind == "monster":
+    if fight_state.context.fight_kind == "entity":
         if role != "challenged":
-            raise ValueError("Monster fight only allows challenged player side actions.")
+            raise ValueError("Entity fight only allows challenged player side actions.")
         return
 
     if fight_state.context.fight_kind == "arena_pvp":
@@ -606,7 +608,7 @@ def toss_for_player_side(
     """
     Toss 2 dice for a selected player side.
 
-    Default role is 'challenged' to preserve existing monster-fight behavior.
+    Default role is 'challenged' to preserve existing entity-fight behavior.
     """
     _ensure_role_can_edit_fight(fight_state=fight_state, role=role)
     side = _get_side_by_role(
@@ -640,7 +642,7 @@ def toss_for_challenged_player_side(
     """
     Compatibility wrapper.
 
-    Monster fights use the challenged player side.
+    Entity fights use the challenged player side.
     """
     return toss_for_player_side(
         fight_state=fight_state,
@@ -792,7 +794,7 @@ def commit_fight_role(
     """
     Commit/freeze one fight side.
 
-    Monster fight:
+    Entity fight:
     - currently no explicit commit is needed.
     - challenged side may be committed as compatibility, but this is optional.
 
@@ -813,9 +815,9 @@ def commit_fight_role(
     if role in fight_state.committed_roles:
         raise ValueError(f"{role} side is already committed.")
 
-    if fight_state.context.fight_kind == "monster":
+    if fight_state.context.fight_kind == "entity":
         if role != "challenged":
-            raise ValueError("Monster fight only allows challenged side commit.")
+            raise ValueError("Entity fight only allows challenged side commit.")
 
         fight_state.committed_roles.add(role)
         fight_state.phase = "ready"
@@ -856,7 +858,7 @@ def resolve_fight_outcome(fight_state: FightState) -> FightOutcome:
     Resolve the final outcome from the already-built prediction layer.
 
     A fight may only be resolved when all mandatory combat inputs are present.
-    In the current monster-fight implementation this means:
+    In the current entity-fight implementation this means:
     - challenged player dice have been tossed
     """
     if not fight_state.prediction.is_resolvable:
@@ -900,7 +902,7 @@ def resolve_arena_pvp_fight_state(
     - both player sides have tossed dice
 
     This function is intentionally separate from resolve_fight_state(),
-    because the older monster resolver still carries monster-fight assumptions.
+    because the older entity resolver still carries entity-fight assumptions.
     """
     if fight_state.context.fight_kind != "arena_pvp":
         raise ValueError("resolve_arena_pvp_fight_state requires fight_kind='arena_pvp'.")
@@ -949,9 +951,9 @@ if __name__ == "__main__":
     p.place_weapon("dagger", 0)
     p.place_weapon("sword", 1)
 
-    state = start_monster_fight_state(
+    state = start_entity_fight_state(
         player=p,
-        monster_id="GiantRat",
+        entity_id="GiantRat",
         tile_x=0,
         tile_y=1,
     )

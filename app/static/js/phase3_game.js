@@ -374,10 +374,10 @@ function renderMapVisual() {
         baseImg.style.transform = `rotate(${tile.rotation_q * 90}deg)`;
         tileBox.appendChild(baseImg);
 
-        if (tile.monster_id) {
+        if (tile.entity_id) {
             const img = document.createElement("img");
-            img.src = `/static/media/tile-content/${tile.monster_id}.png`;
-            img.alt = tile.monster_id;
+            img.src = `/static/media/tile-content/${tile.entity_id}.png`;
+            img.alt = tile.entity_id;
             img.className = "map-content-icon";
             tileBox.appendChild(img);
         } else if (tile.object_item) {
@@ -935,6 +935,38 @@ function getCurrentTurn() {
     return latestMap?.turn || latestPlayers?.turn || null;
 }
 
+function getActiveActor() {
+    return latestMap?.active_actor || latestPlayers?.active_actor || null;
+}
+
+function getTurnActors() {
+    return latestMap?.turn_actors || latestPlayers?.turn_actors || [];
+}
+
+function isDungeonActor(actor) {
+    return actor?.kind === "game_master" && actor?.actor_id === "__dungeon__";
+}
+
+function formatTurnActor(actor) {
+    if (!actor) {
+        return "?";
+    }
+
+    if (actor.kind === "player") {
+        return `P${actor.player_id}`;
+    }
+
+    if (isDungeonActor(actor)) {
+        return "Dungeon";
+    }
+
+    return actor.display_name || actor.kind || "?";
+}
+
+function isDungeonInserted() {
+    return getTurnActors().some(isDungeonActor);
+}
+
 function isAwaitingArenaTargetChoice() {
     const turn = getCurrentTurn();
     return !!turn && turn.mode === "awaiting_arena_target_choice";
@@ -1035,6 +1067,43 @@ function getPlayersInDisplayOrder(players, activeIdx) {
     return ordered;
 }
 
+function renderTurnActorStrip() {
+    const actors = getTurnActors();
+
+    if (!actors.length) {
+        return "";
+    }
+
+    return `
+        <div class="turn-actor-strip">
+            <div class="turn-actor-strip-title">Turn sequence</div>
+            <div class="turn-actor-strip-list">
+                ${actors.map(actor => {
+                    const isDungeon = isDungeonActor(actor);
+                    const isActive = !!actor.active;
+
+                    const label = isDungeon
+                        ? "Dungeon"
+                        : (actor.display_name || `P${actor.player_id}`);
+
+                    const detail = isDungeon
+                        ? (actor.game_master?.world_event_label || actor.game_master?.world_event_mode || "")
+                        : `P${actor.player_id}`;
+
+                    return `
+                        <div class="turn-actor-chip ${isActive ? "active" : ""} ${isDungeon ? "dungeon" : "player"}"
+                             title="${detail ? `${label} — ${detail}` : label}">
+                            <span class="turn-actor-chip-icon">${isDungeon ? "⛰" : "●"}</span>
+                            <span class="turn-actor-chip-label">${label}</span>
+                            ${detail ? `<span class="turn-actor-chip-detail">${detail}</span>` : ""}
+                        </div>
+                    `;
+                }).join("")}
+            </div>
+        </div>
+    `;
+}
+
 function renderPlayers(data) {
     const box = document.getElementById("players-box");
     if (!box) return;
@@ -1043,6 +1112,8 @@ function renderPlayers(data) {
 
     const players = data?.players || [];
     const activeIdx = data?.active_player_idx ?? 0;
+
+    box.insertAdjacentHTML("beforeend", renderTurnActorStrip());
 
     const awaitingCurse = isAwaitingCurseChoice();
     const awaitingPoison = isAwaitingPoisonChoice();
@@ -1066,9 +1137,17 @@ function renderPlayers(data) {
     orderedPlayers.forEach(({player: p, originalIdx: idx, displayIdx, isActive}) => {
         const isCursed = !!(p.status?.is_cursed || p.is_cursed || p.cursed);
         const isEvil = !!(p.status?.is_evil || p.is_evil);
+        const hasQuitGame = !!(
+            p.status?.has_quit_game ||
+            p.escape?.has_quit_game ||
+            p.has_quit_game
+        );
 
         const row = document.createElement("div");
-        row.className = "player-row" + (isActive ? " active" : "");
+        row.className =
+            "player-row" +
+            (isActive ? " active" : "") +
+            (hasQuitGame ? " player-left-game" : "");
 
         // --------------------------------------------------------
         // Selection / targeting highlight
@@ -1118,17 +1197,30 @@ function renderPlayers(data) {
             !!pendingItemUse &&
             pendingItemUse.phase === "select_player";
 
-        const canSelectForCurse = awaitingCurse;
-        const canSelectForPoison = awaitingPoison;
-        const canSelectForTeleport = isTeleportPlayerTargeting;
-        const canSelectForItemUse = isItemPlayerTargeting;
+        const canSelectForCurse =
+            awaitingCurse &&
+            !hasQuitGame;
+
+        const canSelectForPoison =
+            awaitingPoison &&
+            !hasQuitGame;
+
+        const canSelectForTeleport =
+            isTeleportPlayerTargeting &&
+            !hasQuitGame;
+
+        const canSelectForItemUse =
+            isItemPlayerTargeting &&
+            !hasQuitGame;
 
         const canSelectForArenaOpponent =
             awaitingArenaTarget &&
+            !hasQuitGame &&
             arenaEligibleTargetIds.has(Number(p.player_id));
 
         const canSelectForArenaLoot =
             awaitingArenaLoot &&
+            !hasQuitGame &&
             Number(p.player_id) === Number(pendingArenaLoot?.loser_player_id);
 
         row.style.cursor = (
@@ -1148,8 +1240,19 @@ function renderPlayers(data) {
         row.onclick = () => {
 
             // ----------------------------------------------------
-// Arena opponent selection
-// ----------------------------------------------------
+            // Escaped / quit player guard.
+            //
+            // Player remains visible on the board/list for statistics,
+            // but must not be selectable for interactions.
+            // ----------------------------------------------------
+            if (hasQuitGame) {
+                showError("This player has already left the dungeon.");
+                return;
+            }
+
+            // ----------------------------------------------------
+            // Arena opponent selection
+            // ----------------------------------------------------
             if (canSelectForArenaOpponent) {
                 selectedArenaOpponentPlayerId = p.player_id;
 
@@ -1159,6 +1262,7 @@ function renderPlayers(data) {
 
                 return;
             }
+
             // ----------------------------------------------------
             // Item-use player targeting
             // ----------------------------------------------------
@@ -1285,6 +1389,19 @@ function renderPlayers(data) {
 
                 return;
             }
+
+            // ----------------------------------------------------
+            // Arena loot target display.
+            //
+            // Currently this row is only visually selected. Actual steal
+            // options are handled by the Arena loot confirm area.
+            // ----------------------------------------------------
+            if (canSelectForArenaLoot) {
+                renderPlayers(latestPlayers);
+                renderArenaLootConfirmArea();
+                renderWaitingInstructionMessage();
+                return;
+            }
         };
 
         // --------------------------------------------------------
@@ -1321,6 +1438,7 @@ function renderPlayers(data) {
         hpUnderPortrait.className = "player-hp-under-portrait";
         hpUnderPortrait.innerHTML = `
             <span class="player-hp-value">${p.hp?.current ?? "?"}</span>
+            ${hasQuitGame ? `<span class="player-status-icon" title="Left dungeon">🚪</span>` : ""}
             ${isCursed ? `<span class="player-status-icon player-curse-icon" title="Cursed">☠</span>` : ""}
             ${isEvil ? `<span class="player-status-icon player-evil-icon" title="Karak">◆</span>` : ""}
         `;
@@ -1365,19 +1483,42 @@ function renderPlayers(data) {
 
 // Development helper only.
 // Normal hotseat turn flow should use endTurn(), not manual active-player selection.
-async function selectActivePlayer(playerId) {
-    const r = await fetch(gameApi("/players/select"), {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({player_id: playerId})
+async function debugInsertDungeonActor() {
+    clearError();
+
+    const r = await fetch(gameApi("/debug/insert_dungeon_actor"), {
+        method: "POST"
     });
 
     const data = await r.json();
+
     if (!r.ok) {
-        throw new Error(data.detail || "Failed to select active player.");
+        showError(data.detail || "Failed to insert Dungeon actor.");
+        return;
     }
 
     await refreshAll();
+
+    showMessage("Dungeon actor inserted after active player.", "info", "Debug");
+}
+
+async function debugInsertDungeonActor() {
+    clearError();
+
+    const r = await fetch(gameApi("/debug/insert_dungeon_actor"), {
+        method: "POST"
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Failed to insert Dungeon actor.");
+        return;
+    }
+
+    await refreshAll();
+
+    showMessage("Dungeon actor inserted after active player.", "info", "Debug");
 }
 
 function getSkillUiForActivePlayer(skillId) {
@@ -1487,12 +1628,31 @@ function renderDiagnostics(playersData, mapData) {
     lines.push(`Players initialized: ${(playersData.players || []).length}`);
     lines.push(`Active player index: ${playersData.active_player_idx ?? "-"}`);
 
+    const activeActor = mapData?.active_actor || playersData?.active_actor || null;
+    const turnActors = mapData?.turn_actors || playersData?.turn_actors || [];
+
+    if (activeActor) {
+        lines.push(
+            `Active actor: ${activeActor.kind}:${activeActor.player_id ?? activeActor.actor_id ?? "-"}`
+        );
+    } else {
+        lines.push("Active actor: -");
+    }
+
+    if (turnActors.length) {
+        lines.push(
+            "Turn actors: " + turnActors.map(formatTurnActor).join(" → ")
+        );
+    } else {
+        lines.push("Turn actors: -");
+    }
+
     if (mapData.player) {
         lines.push(`Compat player position: (${mapData.player.x}, ${mapData.player.y})`);
     }
 
     lines.push(`Tiles left: ${mapData.tiles_left}`);
-    lines.push(`Monsters left: ${mapData.monsters_left}`);
+    lines.push(`Entities left: ${mapData.entities_left}`);
     lines.push(`Room X discovered: ${mapData.room_x_discovered ?? 0}`);
     lines.push(`Karak triggered: ${mapData.karak_triggered ? "yes" : "no"}`);
 
@@ -1639,12 +1799,12 @@ function getActivePlayerCurrentTile() {
     return tiles[key] || null;
 }
 
-function monsterImagePath(monsterId) {
-    if (!monsterId) {
+function entityImagePath(entityId) {
+    if (!entityId) {
         return null;
     }
 
-    return `/static/media/tile-content/${monsterId}.png`;
+    return `/static/media/tile-content/${entityId}.png`;
 }
 
 async function loadPlayers() {
@@ -1880,19 +2040,19 @@ function selectArenaLootTreasure(playerId) {
     renderWaitingInstructionMessage();
 }
 
-function getPendingMonsterChoice() {
+function getPendingEntityChoice() {
     const turn =
         latestMap?.turn ||
         latestPlayers?.turn ||
         null;
 
-    return turn?.pending_monster_choice || null;
+    return turn?.pending_entity_choice || null;
 }
 
-async function confirmMonsterCandidate(candidateIndex) {
+async function confirmEntityCandidate(candidateIndex) {
     clearError();
 
-    const r = await fetch(gameApi("/monster/confirm_candidate"), {
+    const r = await fetch(gameApi("/entity/confirm_candidate"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({candidate_index: candidateIndex})
@@ -1901,24 +2061,24 @@ async function confirmMonsterCandidate(candidateIndex) {
     const data = await r.json();
 
     if (!r.ok) {
-        showError(data.detail || "Monster confirmation failed.");
+        showError(data.detail || "Entity confirmation failed.");
         return;
     }
 
     await refreshAll();
 }
 
-async function redrawMonsterCandidate() {
+async function redrawEntityCandidate() {
     clearError();
 
-    const r = await fetch(gameApi("/monster/redraw_candidate"), {
+    const r = await fetch(gameApi("/entity/redraw_candidate"), {
         method: "POST"
     });
 
     const data = await r.json();
 
     if (!r.ok) {
-        showError(data.detail || "Monster redraw failed.");
+        showError(data.detail || "Entity redraw failed.");
         return;
     }
 
@@ -1927,10 +2087,10 @@ async function redrawMonsterCandidate() {
 
 
 function renderEncounterPanel() {
-    const box = document.getElementById("monster-choice-box");
+    const box = document.getElementById("entity-choice-box");
 
     if (!box) {
-        console.error("monster-choice-box not found");
+        console.error("entity-choice-box not found");
         return;
     }
 
@@ -1941,7 +2101,7 @@ function renderEncounterPanel() {
     if (isAwaitingArenaTargetChoice()) {
         box.classList.remove(
             "panel-placeholder",
-            "encounter-monster-choice-box",
+            "encounter-entity-choice-box",
             "encounter-arena-loot-box"
         );
         box.classList.add("encounter-box", "encounter-arena-choice-box");
@@ -1964,7 +2124,7 @@ function renderEncounterPanel() {
     if (isAwaitingArenaLootChoice()) {
         box.classList.remove(
             "panel-placeholder",
-            "encounter-monster-choice-box",
+            "encounter-entity-choice-box",
             "encounter-arena-choice-box"
         );
         box.classList.add("encounter-box", "encounter-arena-loot-box");
@@ -1986,7 +2146,7 @@ function renderEncounterPanel() {
 
     const activePlayer = latestPlayers?.active_player || null;
     const currentTile = getActivePlayerCurrentTile();
-    const pendingChoice = getPendingMonsterChoice();
+    const pendingChoice = getPendingEntityChoice();
 
     const tableauPath =
         activePlayer?.tableau_path ||
@@ -1995,7 +2155,7 @@ function renderEncounterPanel() {
         null;
 
     // --------------------------------------------------------
-    // Pending Oracle / Alchemist monster choice
+    // Pending Oracle / Alchemist entity choice
     // --------------------------------------------------------
     if (pendingChoice) {
         const candidates = Array.isArray(pendingChoice.candidates)
@@ -2013,7 +2173,7 @@ function renderEncounterPanel() {
             "encounter-arena-choice-box",
             "encounter-arena-loot-box"
         );
-        box.classList.add("encounter-box", "encounter-monster-choice-box");
+        box.classList.add("encounter-box", "encounter-entity-choice-box");
 
         box.innerHTML = `
             <div class="encounter-active-player">
@@ -2024,25 +2184,25 @@ function renderEncounterPanel() {
         }
             </div>
 
-            <div class="encounter-monster-choice">
-                <div class="monster-choice-candidates">
+            <div class="encounter-entity-choice">
+                <div class="entity-choice-candidates">
                     ${
             candidates.length
                 ? candidates.map((m, i) => {
                     const isConfirmable = confirmable.has(i);
-                    const monsterId = m.monster_id || "?";
-                    const imgPath = m.image_path || monsterImagePath(monsterId);
+                    const entityId = m.entity_id || "?";
+                    const imgPath = m.image_path || entityImagePath(entityId);
 
                     return `
                                     <button
                                         type="button"
-                                        class="monster-choice-card ${isConfirmable ? "confirmable" : "not-confirmable"}"
+                                        class="entity-choice-card ${isConfirmable ? "confirmable" : "not-confirmable"}"
                                         ${isConfirmable ? "" : "disabled"}
-                                        onclick="confirmMonsterCandidate(${i})"
-                                        title="${monsterId}"
+                                        onclick="confirmEntityCandidate(${i})"
+                                        title="${entityId}"
                                     >
-                                        <img src="${imgPath}" alt="${monsterId}">
-                                        <span>${monsterId}</span>
+                                        <img src="${imgPath}" alt="${entityId}">
+                                        <span>${entityId}</span>
                                     </button>
                                 `;
                 }).join("")
@@ -2050,10 +2210,10 @@ function renderEncounterPanel() {
         }
                 </div>
 
-                <div class="monster-choice-actions">
+                <div class="entity-choice-actions">
                     <button
                         type="button"
-                        onclick="redrawMonsterCandidate()"
+                        onclick="redrawEntityCandidate()"
                         ${canRedraw ? "" : "disabled"}
                         title="Alchemist redraw: costs 1 Action and 1 HP"
                     >redraw</button>
@@ -2065,22 +2225,22 @@ function renderEncounterPanel() {
     }
 
     // --------------------------------------------------------
-    // Default encounter display: active player + current monster
+    // Default encounter display: active player + current entity
     // --------------------------------------------------------
-    const monsterId = currentTile?.monster_id || null;
-    const monsterPath = monsterImagePath(monsterId);
+    const entityId = currentTile?.entity_id || null;
+    const entityPath = entityImagePath(entityId);
 
     console.log("ENCOUNTER DEBUG", {
         activePlayer,
         tableauPath,
         currentTile,
-        monsterId,
-        monsterPath
+        entityId,
+        entityPath
     });
 
     box.classList.remove(
         "panel-placeholder",
-        "encounter-monster-choice-box",
+        "encounter-entity-choice-box",
         "encounter-arena-choice-box",
         "encounter-arena-loot-box"
     );
@@ -2097,9 +2257,9 @@ function renderEncounterPanel() {
 
         <div class="encounter-target">
             ${
-        monsterId
-            ? `<img class="encounter-monster-img" src="${monsterPath}" alt="${monsterId}">`
-            : `<div class="encounter-target-empty">no monster</div>`
+        entityId
+            ? `<img class="encounter-entity-img" src="${entityPath}" alt="${entityId}">`
+            : `<div class="encounter-target-empty">no entity</div>`
     }
         </div>
     `;
@@ -2254,9 +2414,48 @@ function showKarakCreatedMessage(confirmData) {
 
 async function refreshAll() {
     try {
-        await loadPlayers();
+        // --------------------------------------------------------
+        // Load map FIRST.
+        //
+        // The map payload is the safest global source for:
+        // - game_scope
+        // - game_over
+        // - redirect_to
+        // - turn
+        //
+        // If the game has already entered results, do not load
+        // inventory afterward, because inventory requires active turn.
+        // --------------------------------------------------------
         await loadMap();
+
+        if (handleGameOverRedirect(latestMap)) {
+            return;
+        }
+
+        await loadPlayers();
+
+        if (handleGameOverRedirect(latestPlayers)) {
+            return;
+        }
+
         await loadInventory();
+
+        // --------------------------------------------------------
+        // If inventory load indirectly discovered game-over, stop.
+        // This is defensive; normally map already catches it.
+        // --------------------------------------------------------
+        if (handleGameOverRedirect(latestMap) || handleGameOverRedirect(latestPlayers)) {
+            return;
+        }
+
+        // --------------------------------------------------------
+        // Clear local item-use targeting if turn changed.
+        // This prevents target-picking state from leaking into
+        // the next player's turn.
+        // --------------------------------------------------------
+        if (typeof clearPendingItemUseIfTurnChanged === "function") {
+            clearPendingItemUseIfTurnChanged();
+        }
 
         renderPlayers(latestPlayers);
 
@@ -2308,6 +2507,10 @@ async function refreshAll() {
                 const r = await fetch(gameApi("/fight/state"));
                 const data = await r.json();
 
+                if (handleGameOverRedirect(data)) {
+                    return;
+                }
+
                 if (r.ok) {
                     renderFight(data);
                 } else {
@@ -2347,12 +2550,33 @@ async function refreshAll() {
         if (!waitingMessageShown) {
             showMessage("Phase 3 state refreshed.", "info", "Info");
         }
+
+        updateActionAvailability();
+
     } catch (e) {
         console.error("refreshAll failed:", e);
-        showError(String(e));
-    }
 
-    updateActionAvailability();
+        const message = String(e?.message || e);
+
+        // --------------------------------------------------------
+        // If anything failed because the backend has no active turn,
+        // reload map and let map/results redirect decide.
+        // --------------------------------------------------------
+        if (message.includes("No active turn")) {
+            try {
+                await loadMap();
+
+                if (handleGameOverRedirect(latestMap)) {
+                    return;
+                }
+            } catch (mapError) {
+                console.error("refreshAll recovery loadMap failed:", mapError);
+            }
+        }
+
+        showError(message);
+        updateActionAvailability();
+    }
 }
 
 async function confirmHealingChoice() {
@@ -2669,6 +2893,12 @@ function renderGround(data) {
     const groundItemId = data?.ground_item_id || groundItem?.item_id || null;
     const groundItemDesc = groundItem?.desc || "";
 
+    const activationUi = data?.ground_activation_ui || {};
+    const activationEnabled = !!activationUi.activation_enabled;
+    const activationLabel = activationUi.activation_label || "activate";
+    const activationEffect = activationUi.activation_effect || null;
+    const activationReason = activationUi.activation_reason || "";
+
     box.innerHTML = `
         <div class="ground-title">Ground</div>
         <div class="ground-slot">
@@ -2681,6 +2911,19 @@ function renderGround(data) {
             <div class="ground-text">
                 <div class="ground-id">${groundItemId || "-"}</div>
                 <div class="ground-desc">${groundItemDesc || ""}</div>
+                ${
+        groundItem
+            ? `
+                <button
+                    type="button"
+                    class="ground-activate-btn ${activationEnabled ? "" : "inventory-btn-placeholder"}"
+                    onclick="activateGroundObject()"
+                    ${activationEnabled ? "" : "disabled"}
+                    title="${activationEnabled ? activationEffect : activationReason}"
+                >${activationEnabled ? activationLabel : ""}</button>
+            `
+            : ""
+    }
             </div>
         </div>
     `;
@@ -2703,13 +2946,40 @@ function renderSingleSlotCard(slotGroup, slot) {
     const itemId = slot?.item_id || item?.item_id || null;
     const slotIndex = slot?.slot_index ?? 0;
 
-    const actionLabel = slotActionLabel(slot);
-    const actionDisabled = slotActionDisabled(slot);
-
+    // --------------------------------------------------------
+    // Explicit USE button
+    // Examples:
+    // - TP_HEAL
+    // - LIFESTEAL
+    // - PURGE
+    // - KEY_ENTITY_DAMAGE
+    // --------------------------------------------------------
     const canUse = !!slot?.can_use_slot_item;
     const useEffect = slot?.use_effect || null;
-
     const useDisabled = !canUse || !itemId || !useEffect;
+
+    // --------------------------------------------------------
+    // Slot action button
+    //
+    // This is NOT only "drop".
+    // It may be:
+    // - pickup  : empty slot + compatible ground item
+    // - drop    : occupied slot + empty ground
+    // - swap    : occupied slot + compatible ground item
+    // - inactive
+    //
+    // Backend is the source of truth through available_action.
+    // --------------------------------------------------------
+    const availableAction = slot?.available_action || "inactive";
+    const actionReason = slot?.action_reason || slot?.drop_reason || slot?.pickup_reason || slot?.swap_reason || "";
+
+    const actionEnabled =
+        availableAction === "pickup" ||
+        availableAction === "drop" ||
+        availableAction === "swap";
+
+    const actionLabel = actionEnabled ? availableAction : "";
+    const actionDisabled = !actionEnabled;
 
     const iconHtml = item
         ? `
@@ -2740,7 +3010,7 @@ function renderSingleSlotCard(slotGroup, slot) {
                 class="inventory-action-btn ${actionDisabled ? "inventory-btn-placeholder" : ""}"
                 onclick="inventorySlotAction('${slotGroup}', ${slotIndex})"
                 ${actionDisabled ? "disabled" : ""}
-                title="${actionDisabled ? "" : actionLabel}"
+                title="${actionDisabled ? actionReason : actionLabel}"
             >${actionDisabled ? "" : actionLabel}</button>
 
         </div>
@@ -3356,7 +3626,7 @@ function teleportSkillLabel(skillId) {
     }
 
     if (skillId === "skill_bat_02") {
-        return "Battlemage teleport: enter coordinates of monster tile";
+        return "Battlemage teleport: enter coordinates of entity tile";
     }
 
     return "Portal teleport";
@@ -3578,6 +3848,19 @@ function beginItemUse(slotGroup, slotIndex, itemId, effect) {
         return;
     }
 
+    if (effect === "KEY_ENTITY_DAMAGE") {
+        useInventoryItem({
+            slot_group: slotGroup,
+            slot_index: slotIndex,
+            target_player_id: null,
+            target_x: null,
+            target_y: null,
+            successMessage: "Key used."
+        });
+
+        return;
+    }
+
     showError(`Unsupported item effect: ${effect}`);
 }
 
@@ -3715,6 +3998,14 @@ async function pulseSkillUiButton(playerId, skillId) {
 }
 
 async function loadInventory() {
+    if (
+        latestMap?.game_over === true ||
+        latestMap?.game_scope === "results" ||
+        latestMap?.scope === "results" ||
+        latestMap?.redirect_to
+    ) {
+        return;
+    }
     const r = await fetch(gameApi("/inventory"));
     const data = await r.json();
 
@@ -3750,6 +4041,61 @@ async function inventorySlotAction(slotGroup, slotIndex) {
     }
 
     await refreshAll();
+}
+
+async function activateGroundObject() {
+    clearError();
+
+    const r = await fetch(gameApi("/ground/activate"), {
+        method: "POST"
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+        showError(data.detail || "Ground activation failed.");
+        return;
+    }
+
+    if (handleGameOverRedirect(data)) {
+        return;
+    }
+
+    await refreshAll();
+
+    if (data.status === "player_quit_game") {
+        showMessage("Player left the dungeon.", "info", "Exit");
+        return;
+    }
+
+    showMessage(data.status || "Ground object activated.", "info", "Ground");
+}
+
+function clearPendingItemUseState() {
+    pendingItemUse = null;
+
+    const label = document.getElementById("teleport-mode-label");
+    const xInput = document.getElementById("teleport-x");
+    const yInput = document.getElementById("teleport-y");
+    const cancelBtn = document.getElementById("teleport-cancel-btn");
+
+    if (label) {
+        label.textContent = "";
+    }
+
+    if (xInput) {
+        xInput.disabled = true;
+        xInput.value = "";
+    }
+
+    if (yInput) {
+        yInput.disabled = true;
+        yInput.value = "";
+    }
+
+    if (cancelBtn) {
+        cancelBtn.disabled = true;
+    }
 }
 
 async function useInventoryItem({
@@ -3835,49 +4181,139 @@ async function continueAfterItemPickup() {
 }
 
 async function endTurn() {
+    // --------------------------------------------------------
+    // If the FE already knows the game is over, redirect instead
+    // of calling /turn/end.
+    // --------------------------------------------------------
+    if (
+        latestMap?.game_over === true ||
+        latestMap?.game_scope === "results" ||
+        latestMap?.scope === "results" ||
+        latestMap?.redirect_to
+    ) {
+        handleGameOverRedirect(latestMap);
+        return;
+    }
+
     try {
+        clearError();
+
         const r = await fetch(gameApi("/turn/end"), {
             method: "POST",
         });
+
         const data = await r.json();
 
         if (!r.ok) {
-            throw new Error(data.detail || "Failed to end turn.");
+            const detail = data.detail || "Failed to end turn.";
+
+            // ----------------------------------------------------
+            // Important recovery:
+            // After the last player exits, backend may already have:
+            // - turn_state = None
+            // - game_scope = results
+            //
+            // In that state /turn/end correctly returns:
+            // "No active turn."
+            //
+            // So reload /api/map and redirect if phase4 is active.
+            // ----------------------------------------------------
+            if (String(detail).includes("No active turn")) {
+                await loadMap();
+
+                if (handleGameOverRedirect(latestMap)) {
+                    return;
+                }
+            }
+
+            throw new Error(detail);
         }
 
         if (handleGameOverRedirect(data)) {
             return;
         }
 
+        clearPendingItemUseState();
+
         resetMapViewportOffset();
         await refreshAll();
+
+        if (
+            latestMap?.game_over === true ||
+            latestMap?.game_scope === "results" ||
+            latestMap?.scope === "results" ||
+            latestMap?.redirect_to
+        ) {
+            handleGameOverRedirect(latestMap);
+            return;
+        }
+
         showMessage("Turn ended. Next player is active.", "info", "Info");
 
     } catch (e) {
         console.error("endTurn failed:", e);
-        showMessage(String(e), "warning", "Warning");
+
+        const message = String(e?.message || e);
+
+        if (message.includes("No active turn")) {
+            try {
+                await loadMap();
+
+                if (handleGameOverRedirect(latestMap)) {
+                    return;
+                }
+            } catch (mapError) {
+                console.error("endTurn recovery loadMap failed:", mapError);
+            }
+        }
+
+        showMessage(message, "warning", "Warning");
     }
 }
 
 function handleGameOverRedirect(data) {
-    const isGameOver =
-        data?.status === "game_over" ||
-        data?.game_over === true ||
-        data?.scope === "results" ||
-        Boolean(data?.redirect_to);
+    if (!data) return false;
 
-    if (!isGameOver) {
-        return false;
+    // --------------------------------------------------------
+    // Direct game-over payload.
+    // --------------------------------------------------------
+    const directGameOver =
+        data.game_over === true ||
+        data.game_scope === "results" ||
+        data.scope === "results" ||
+        data.status === "game_over" ||
+        !!data.redirect_to;
+
+    if (directGameOver) {
+        const target = data.redirect_to || "/phase4";
+        window.location.href = target;
+        return true;
     }
 
-    showMessage(
-        "Game over. Opening results...",
-        "info",
-        "Game over"
-    );
+    // --------------------------------------------------------
+    // Nested payloads.
+    //
+    // Some actions return:
+    // - finalize_result
+    // - advance_result
+    // - game_result
+    //
+    // PLAYER_QUIT may wrap the game-over result inside one of these.
+    // --------------------------------------------------------
+    const nestedCandidates = [
+        data.finalize_result,
+        data.advance_result,
+        data.game_result,
+        data.result,
+    ];
 
-    window.location.href = data.redirect_to || "/phase4";
-    return true;
+    for (const nested of nestedCandidates) {
+        if (nested && handleGameOverRedirect(nested)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function handleSkillChipClick(event, playerId, skillId) {
@@ -3960,8 +4396,8 @@ function updateActionAvailability() {
 
     const isIdle = mode === "idle";
     const isPendingTile = mode === "pending_tile";
-    const isAwaitingMonsterChoice = mode === "awaiting_monster_choice";
-    const isAwaitingMonsterEncounter = mode === "awaiting_monster_encounter";
+    const isAwaitingEntityChoice = mode === "awaiting_entity_choice";
+    const isAwaitingEntityEncounter = mode === "awaiting_entity_encounter";
     const isAwaitingArenaTarget = mode === "awaiting_arena_target_choice";
     const isAwaitingArenaLoot = mode === "awaiting_arena_loot_choice";
     const isFight = mode === "fight";
@@ -3971,9 +4407,9 @@ function updateActionAvailability() {
     const isAwaitingHeal = mode === "awaiting_heal_choice";
     const isAwaitingKoReaction = isAwaitingKoReactionChoice();
 
-    const encounter = turn?.pending_monster_encounter || null;
-    const canMoveDuringMonsterEncounter =
-        isAwaitingMonsterEncounter &&
+    const encounter = turn?.pending_entity_encounter || null;
+    const canMoveDuringEntityEncounter =
+        isAwaitingEntityEncounter &&
         !!encounter?.can_skip;
 
     // --------------------------------------------------------
@@ -3985,13 +4421,23 @@ function updateActionAvailability() {
         !!turn?.fight_continue_after_item_pickup &&
         turn?.fight_continue_skill_id === "skill_swo_02";
 
+    const currentEntityAllowsCombat =
+        !!currentTile?.entity_id &&
+        (
+            currentTile.entity_can_combat === true ||
+            (
+                Array.isArray(currentTile.entity_injury_modes) &&
+                currentTile.entity_injury_modes.includes("combat")
+            )
+        );
+
     const canStartFight =
-        !!currentTile?.monster_id &&
+        currentEntityAllowsCombat &&
         !!turn &&
-        (isIdle || isAwaitingMonsterEncounter) &&
+        (isIdle || isAwaitingEntityEncounter) &&
         !isAwaitingKoReaction &&
         !isAwaitingPoison &&
-        !isAwaitingMonsterChoice &&
+        !isAwaitingEntityChoice &&
         !isAwaitingArenaTarget &&
         !isAwaitingArenaLoot;
 
@@ -4008,8 +4454,8 @@ function updateActionAvailability() {
     if (endTurnBtn) {
         endTurnBtn.disabled =
             isPendingTile ||
-            isAwaitingMonsterChoice ||
-            isAwaitingMonsterEncounter ||
+            isAwaitingEntityChoice ||
+            isAwaitingEntityEncounter ||
             isAwaitingArenaTarget ||
             isAwaitingArenaLoot ||
             isFight ||
@@ -4033,8 +4479,8 @@ function updateActionAvailability() {
         isIdle &&
         !isTeleportTargeting &&
         !isAwaitingKoReaction &&
-        !isAwaitingMonsterChoice &&
-        !isAwaitingMonsterEncounter &&
+        !isAwaitingEntityChoice &&
+        !isAwaitingEntityEncounter &&
         !isAwaitingArenaTarget &&
         !isAwaitingArenaLoot;
 
@@ -4042,8 +4488,8 @@ function updateActionAvailability() {
         isCoordinateTeleportTargeting &&
         isIdle &&
         !isAwaitingKoReaction &&
-        !isAwaitingMonsterChoice &&
-        !isAwaitingMonsterEncounter &&
+        !isAwaitingEntityChoice &&
+        !isAwaitingEntityEncounter &&
         !isAwaitingArenaTarget &&
         !isAwaitingArenaLoot;
 
@@ -4093,7 +4539,7 @@ function updateActionAvailability() {
     // --------------------------------------------------------
     // Navigation:
     // - idle: normal movement
-    // - awaiting_monster_encounter: movement only if skip is allowed
+    // - awaiting_entity_encounter: movement only if skip is allowed
     // - Arena target/loot modes block movement completely
     // --------------------------------------------------------
     moveButtons.forEach(btn => {
@@ -4102,10 +4548,10 @@ function updateActionAvailability() {
                 isTeleportTargeting ||
                 isItemTargeting ||
                 isAwaitingKoReaction ||
-                isAwaitingMonsterChoice ||
+                isAwaitingEntityChoice ||
                 isAwaitingArenaTarget ||
                 isAwaitingArenaLoot ||
-                !(isIdle || canMoveDuringMonsterEncounter);
+                !(isIdle || canMoveDuringEntityEncounter);
         }
     });
 
@@ -4115,8 +4561,8 @@ function updateActionAvailability() {
                 isTeleportTargeting ||
                 isItemTargeting ||
                 isAwaitingKoReaction ||
-                isAwaitingMonsterChoice ||
-                isAwaitingMonsterEncounter ||
+                isAwaitingEntityChoice ||
+                isAwaitingEntityEncounter ||
                 isAwaitingArenaTarget ||
                 isAwaitingArenaLoot ||
                 !isPendingTile;
@@ -4128,8 +4574,8 @@ function updateActionAvailability() {
             isTeleportTargeting ||
             isItemTargeting ||
             isAwaitingKoReaction ||
-            isAwaitingMonsterChoice ||
-            isAwaitingMonsterEncounter ||
+            isAwaitingEntityChoice ||
+            isAwaitingEntityEncounter ||
             isAwaitingArenaTarget ||
             isAwaitingArenaLoot ||
             !isPendingTile;
@@ -4637,16 +5083,16 @@ function getWaitingInstructionMessage() {
     }
 
     if (mode === "awaiting_arena_target_choice") {
-    const selected = getPlayerById(selectedArenaOpponentPlayerId);
-    const selectedText = selected
-        ? ` Selected opponent: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
-        : " Select an opponent from the player list, then confirm the Arena challenge.";
+        const selected = getPlayerById(selectedArenaOpponentPlayerId);
+        const selectedText = selected
+            ? ` Selected opponent: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
+            : " Select an opponent from the player list, then confirm the Arena challenge.";
 
-    return {
-        title: "Arena activated",
-        message: selectedText
-    };
-}
+        return {
+            title: "Arena activated",
+            message: selectedText
+        };
+    }
 
     if (mode === "awaiting_arena_loot_choice") {
         return {
@@ -4655,104 +5101,104 @@ function getWaitingInstructionMessage() {
         };
     }
 
-    if (mode === "awaiting_monster_choice") {
-        const choice = turn?.pending_monster_choice || null;
+    if (mode === "awaiting_entity_choice") {
+        const choice = turn?.pending_entity_choice || null;
         const hasAlchemist = !!choice?.has_alc_02;
         const hasOracle = !!choice?.has_ora_02;
 
         if (hasOracle && hasAlchemist) {
             return {
-                title: "Waiting for monster choice",
-                message: "Oracle may choose a monster candidate. Alchemist may redraw for -1 HP and 1 Action; after redraw only the newest monster can be confirmed."
+                title: "Waiting for entity choice",
+                message: "Oracle may choose a entity candidate. Alchemist may redraw for -1 HP and 1 Action; after redraw only the newest entity can be confirmed."
             };
         }
 
         if (hasOracle) {
             return {
-                title: "Waiting for Oracle monster choice",
-                message: "Choose one of the two monster candidates for this room."
+                title: "Waiting for Oracle entity choice",
+                message: "Choose one of the two entity candidates for this room."
             };
         }
 
         if (hasAlchemist) {
             return {
-                title: "Waiting for Alchemist monster choice",
-                message: "Confirm the current monster candidate, or redraw for -1 HP and 1 Action."
+                title: "Waiting for Alchemist entity choice",
+                message: "Confirm the current entity candidate, or redraw for -1 HP and 1 Action."
             };
         }
 
         return {
-            title: "Waiting for monster choice",
-            message: "Choose the monster candidate for this room."
+            title: "Waiting for entity choice",
+            message: "Choose the entity candidate for this room."
         };
     }
 
-    if (mode === "awaiting_monster_encounter") {
-        const encounter = turn?.pending_monster_encounter || null;
+    if (mode === "awaiting_entity_encounter") {
+        const encounter = turn?.pending_entity_encounter || null;
 
         if (encounter?.can_skip) {
             const skillId = encounter.skip_skill_id || "movement skill";
 
             if (skillId === "skill_pri_02") {
                 return {
-                    title: "Monster encounter",
+                    title: "Entity encounter",
                     message: "Warrior Princess may fight, or continue moving by paying -1 HP. If no Actions remain or HP is 1, she must fight."
                 };
             }
 
             if (skillId === "skill_thi_02") {
                 return {
-                    title: "Monster encounter",
+                    title: "Entity encounter",
                     message: "Thief may fight, or continue moving if Actions remain."
                 };
             }
 
             return {
-                title: "Monster encounter",
-                message: "You may fight this monster or continue moving using your movement skill."
+                title: "Entity encounter",
+                message: "You may fight this entity or continue moving using your movement skill."
             };
         }
 
         return {
-            title: "Monster encounter",
-            message: "You entered a monster tile. You must start the fight."
+            title: "Entity encounter",
+            message: "You entered a entity tile. You must start the fight."
         };
     }
 
     if (mode === "awaiting_curse_choice") {
-    const selected = getPlayerById(selectedCurseTargetPlayerId);
-    const selectedText = selected
-        ? ` Selected curse target: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
-        : " Choose which player receives the curse, then confirm the curse selection.";
+        const selected = getPlayerById(selectedCurseTargetPlayerId);
+        const selectedText = selected
+            ? ` Selected curse target: ${selected.display_name || ("Player #" + selected.player_id)}. Confirm or reset.`
+            : " Choose which player receives the curse, then confirm the curse selection.";
 
-    return {
-        title: "Waiting for curse target",
-        message: selectedText
-    };
-}
+        return {
+            title: "Waiting for curse target",
+            message: selectedText
+        };
+    }
 
     if (mode === "awaiting_poison_choice") {
-    const selectedPlayer = getPlayerById(selectedPoisonTargetPlayerId);
+        const selectedPlayer = getPlayerById(selectedPoisonTargetPlayerId);
 
-    if (!selectedPlayer) {
+        if (!selectedPlayer) {
+            return {
+                title: "Waiting for poison target",
+                message: "Choose a player, then click one of that player’s skill chips to poison it."
+            };
+        }
+
+        if (!selectedPoisonTargetSkillId) {
+            return {
+                title: "Waiting for poison skill",
+                message: `Selected poison target: ${selectedPlayer.display_name || ("Player #" + selectedPlayer.player_id)}. Now click one of this player's skill chips.`
+            };
+        }
+
         return {
-            title: "Waiting for poison target",
-            message: "Choose a player, then click one of that player’s skill chips to poison it."
+            title: "Waiting for poison confirmation",
+            message: `Selected poison target: ${selectedPlayer.display_name || ("Player #" + selectedPlayer.player_id)} / ${prettySkillLabel(selectedPoisonTargetSkillId)}. Confirm or reset.`
         };
     }
-
-    if (!selectedPoisonTargetSkillId) {
-        return {
-            title: "Waiting for poison skill",
-            message: `Selected poison target: ${selectedPlayer.display_name || ("Player #" + selectedPlayer.player_id)}. Now click one of this player's skill chips.`
-        };
-    }
-
-    return {
-        title: "Waiting for poison confirmation",
-        message: `Selected poison target: ${selectedPlayer.display_name || ("Player #" + selectedPlayer.player_id)} / ${prettySkillLabel(selectedPoisonTargetSkillId)}. Confirm or reset.`
-    };
-}
 
     if (mode === "awaiting_heal_choice") {
         return {

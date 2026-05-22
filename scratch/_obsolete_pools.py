@@ -18,7 +18,7 @@ tile_pool = (
     [{"tile_type": "corridor", "img_name": "tile_cLf", "doors": {"N": True, "E": True, "S": False, "W": False}, "feature": "fountain"}] * 2  # floor corner fountain
 )
 
-monster_pool = (
+entity_pool = (
     [{"id": "GiantRat", "strength": 5,          "loot_id": "dagger",    "img_file": "GiantRat.png"}] * 8 +
     [{"id": "GiantSpider", "strength": 6,       "loot_id": "heal",      "img_file": "GiantSpider.png"}] * 4 +
     [{"id": "GiantBat", "strength": 6,          "loot_id": "thorn",     "img_file": "GiantBat.png"}] * 6 +
@@ -47,4 +47,4 @@ item_features = {"dagger": {"str_mod": 1, "img_file": "dagger.png", "item_type":
 
 if __name__ == "__main__":
     print(len([_ for _ in tile_pool if _["tile_type"] == "room" ]))
-    print(len(monster_pool))
+    print(len(entity_pool))

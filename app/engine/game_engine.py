@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES
+from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES, GAME_MECHANICS
 from domain.character_catalog import SKILL_CATALOG
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Literal, Tuple, Any, TypeAlias
@@ -10,17 +10,20 @@ import random
 
 # --- External pools (new canonical module) ---
 from domain.game_entities import (TILE_POOL as _TILE_POOL,
-                                  MONSTER_POOL as _MONSTER_POOL,
+                                  ENTITY_POOL as _ENTITY_POOL,
                                   ITEM_FEATURES,
-                                  get_monster_by_id,
+                                  get_entity_by_id,
                                   serialize_item_ref)
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
+from domain.game_master import (DUNGEON_GAME_MASTER_ID,
+                                GameMaster,
+                                make_dungeon_game_master)
 
 from engine.fight_engine import (
     resolve_fight_state,
     resolve_arena_pvp_fight_state,
-    start_monster_fight_state,
+    start_entity_fight_state,
     start_arena_pvp_fight_state,
     commit_fight_role,
     reroll_die_for_player_side,
@@ -42,6 +45,8 @@ TeleportKind: TypeAlias = Literal["portal", "skill_bea_02", "skill_wlk_02", "ski
 ActionPrice: TypeAlias = int | Literal["all", "remaining"]
 RevealKind: TypeAlias = Literal["discover", "peek"]
 TileSource: TypeAlias = Literal["pile", "pocket"]
+TurnActorKind = Literal["player", "game_master"]
+
 
 def direction_to_delta(direction: DIRECTION) -> Tuple[int, int]:
     return {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0)}[direction]
@@ -74,6 +79,7 @@ def ensure_doors_typed(doors: Dict[str, bool]) -> Dict[DIRECTION, bool]:
 # --------------------------
 # Domain models
 # --------------------------
+
 class TileNode:
     def __init__(
         self,
@@ -85,7 +91,8 @@ class TileNode:
         tile_type: Literal["room", "corridor", "entrance", "room_x"],
         doors_base: Dict[DIRECTION, bool],   # <-- NEW
         rotation_q: int = 0,
-        monster_id: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_hp: Optional[int] = None,
         arena_pvp_used: bool = False,
         tool: Optional[str] = None,
         feature: Optional[str] = None,
@@ -101,7 +108,8 @@ class TileNode:
         self.doors_base = doors_base          # <-- NEW
         self.doors = rotate_doors_clockwise(doors_base, rotation_q)  # <-- DERIVED
 
-        self.monster_id = monster_id
+        self.entity_id = entity_id
+        self.entity_hp = entity_hp
         self.arena_pvp_used = bool(arena_pvp_used)
         self.object_id: Optional[str] = None
         
@@ -116,6 +124,26 @@ class TileNode:
         if self.object_id is not None:
             object_item = serialize_item_ref(self.object_id)
 
+        entity_injury_modes: list[str] = []
+        entity_can_combat = False
+        entity_can_key = False
+        entity_sort = None
+        entity_strength = None
+        entity_loot_id = None
+
+        if self.entity_id is not None:
+            entity = get_entity_by_id(self.entity_id)
+
+            entity_injury_modes = list(entity.get("injury_modes") or [])
+            entity_injury_mode_set = set(entity_injury_modes)
+
+            entity_can_combat = "combat" in entity_injury_mode_set
+            entity_can_key = "key" in entity_injury_mode_set
+
+            entity_sort = entity.get("sort")
+            entity_strength = entity.get("strength")
+            entity_loot_id = entity.get("loot_id")
+
         return {
             "x": self.x,
             "y": self.y,
@@ -124,9 +152,21 @@ class TileNode:
             "tile_type": self.tile_type,
             "rotation_q": self.rotation_q,
             "doors": self.doors,
-            "monster_id": self.monster_id,
 
-            # Runtime identity.
+            # Entity runtime identity/state.
+            "entity_id": self.entity_id,
+            "entity_hp": self.entity_hp,
+
+            # Entity archetype-derived UI/rules metadata.
+            # Frontend should use these to decide whether combat UI is enabled.
+            "entity_injury_modes": entity_injury_modes,
+            "entity_can_combat": entity_can_combat,
+            "entity_can_key": entity_can_key,
+            "entity_sort": entity_sort,
+            "entity_strength": entity_strength,
+            "entity_loot_id": entity_loot_id,
+
+            # Runtime object identity.
             # Use this for game logic, diagnostics, comparisons.
             "object_id": self.object_id,
 
@@ -136,15 +176,41 @@ class TileNode:
 
             "tool": self.tool,
             "feature": self.feature,
-            "arena_pvp_used": self.arena_pvp_used
+            "arena_pvp_used": self.arena_pvp_used,
+        }
+
+
+
+
+@dataclass
+class TurnActor:
+    """=== dataclass ===================================================================================================
+    Lightweight turn-order actor reference.
+
+    A TurnActor is not necessarily a Player.
+    - kind == "player" points to self.players via player_id.
+    - kind == "game_master" points to self.game_masters via actor_id.
+
+    This is introduced before fully migrating the turn engine away from active_player_idx.
+    ============================================================================================== by Sziller ==="""
+
+    kind: TurnActorKind
+    player_id: Optional[int] = None
+    actor_id: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "player_id": self.player_id,
+            "actor_id": self.actor_id,
         }
 
 
 TurnMode = Literal[
     "idle",
     "pending_tile",
-    "awaiting_monster_choice",
-    "awaiting_monster_encounter",
+    "awaiting_entity_choice",
+    "awaiting_entity_encounter",
     "awaiting_arena_target_choice",
     "fight",
     "awaiting_arena_loot_choice",
@@ -199,25 +265,25 @@ class TurnState:
     #     "will_enter_after_confirm": bool,
     # }
     pending_discovery: Optional[dict[str, Any]] = None
-    # Pending monster population pipeline.
+    # Pending entity population pipeline.
     # Used after a room tile has been confirmed/committed/rotated,
     # but before Discover-entry or Peek-completion is resolved.
-    pending_monster_choice: Optional[dict[str, Any]] = None
-    # Pending mandatory monster encounter after active player enters a monster tile.
-    # Used while mode == "awaiting_monster_encounter".
+    pending_entity_choice: Optional[dict[str, Any]] = None
+    # Pending mandatory entity encounter after active player enters a entity tile.
+    # Used while mode == "awaiting_entity_encounter".
     #
     # Shape:
     # {
     #     "tile_x": int,
     #     "tile_y": int,
-    #     "monster_id": str,
+    #     "entity_id": str,
     #     "entered_by": str,
     #     "can_skip": bool,
     #     "skip_skill_id": str | None,
     #     "skip_cost_hp": int,
     #     "must_fight_reason": str | None,
     # }
-    pending_monster_encounter: Optional[dict[str, Any]] = None
+    pending_entity_encounter: Optional[dict[str, Any]] = None
     # Pending Arena PvP trigger.
     # Used while mode == "awaiting_arena_target_choice".
     #
@@ -288,8 +354,8 @@ class TurnState:
                 "pending_poison_choice": self.pending_poison_choice,
                 "pending_ko_reaction": self.pending_ko_reaction,
                 "pending_discovery": self.pending_discovery,
-                "pending_monster_choice": self.pending_monster_choice,
-                "pending_monster_encounter": self.pending_monster_encounter,
+                "pending_entity_choice": self.pending_entity_choice,
+                "pending_entity_encounter": self.pending_entity_encounter,
                 "pending_arena_pvp": self.pending_arena_pvp,
                 "pending_arena_loot_choice": self.pending_arena_loot_choice,
                 "item_use_locked_by_combat": self.item_use_locked_by_combat,
@@ -537,23 +603,40 @@ class UseInventoryItemAction(FreeAction):
     
     
 @dataclass
+class ActivateGroundObjectFreeAction(FreeAction):
+    """
+    Activates a non-mobile active ground object on the active player's tile.
+
+    Example:
+    - object_id == "exit"
+    - ITEM_FEATURES["exit"]["mobile"] == False
+    - ITEM_FEATURES["exit"]["active"] == True
+    - ITEM_FEATURES["exit"]["effect"] == "PLAYER_QUIT"
+    """
+    kind: str = "activate_ground_object"
+
+    def execute(self, graph: "DungeonGraph") -> dict:
+        return graph._execute_activate_ground_object_free_action(self)
+    
+    
+@dataclass
 class ScoutPullTileAction(Action):
     def execute(self, graph: DungeonGraph) -> dict:
         return graph._execute_scout_pull_tile_action(self)
     
     
 @dataclass
-class ConfirmMonsterCandidateFreeAction(FreeAction):
+class ConfirmEntityCandidateFreeAction(FreeAction):
     candidate_index: int
 
     def execute(self, graph: "DungeonGraph") -> dict:
-        return graph._execute_confirm_monster_candidate_free_action(self)
+        return graph._execute_confirm_entity_candidate_free_action(self)
 
 
 @dataclass
-class RedrawMonsterCandidateAction(FreeAction):
+class RedrawEntityCandidateAction(FreeAction):
     """
-    skill_alc_02 monster redraw.
+    skill_alc_02 entity redraw.
 
     Important:
     - costs HP, not Actions
@@ -562,7 +645,7 @@ class RedrawMonsterCandidateAction(FreeAction):
     - may be repeated while the player has HP left
     """
     def execute(self, graph: "DungeonGraph") -> dict:
-        return graph._execute_redraw_monster_candidate_action(self)
+        return graph._execute_redraw_entity_candidate_action(self)
     
 @dataclass
 class ChooseArenaOpponentFreeAction(FreeAction):
@@ -594,6 +677,7 @@ class DungeonGraph:
         self.rules_player = copy.deepcopy(PLAYER_FEATURES)
         self.rules_turn = copy.deepcopy(TURN_RULES)
         self.rules_skill = copy.deepcopy(SKILL_RULES)
+        self.rules_mechanics = copy.deepcopy(GAME_MECHANICS)
         
         # Pools (mutable copies)
 
@@ -601,9 +685,9 @@ class DungeonGraph:
         self.turn_state: Optional[TurnState] = None
         
         self._orig_tile_pool = copy.deepcopy(_TILE_POOL)
-        self._orig_monster_pool = copy.deepcopy(_MONSTER_POOL)
+        self._orig_entity_pool = copy.deepcopy(_ENTITY_POOL)
         self.tile_pool = copy.deepcopy(self._orig_tile_pool)
-        self.monster_pool = copy.deepcopy(self._orig_monster_pool)
+        self.entity_pool = copy.deepcopy(self._orig_entity_pool)
 
         # Map + state
         self.tiles: Dict[tuple[int, int], TileNode] = {}
@@ -632,6 +716,17 @@ class DungeonGraph:
         self.players: list[Player] = []
         self.active_player_idx: int = 0
 
+        # Virtual world-event actors.
+        # These are not Player instances.
+        self.game_masters: dict[str, GameMaster] = {}
+
+        # Parallel actor sequence for frontend / future turn ownership.
+        # First implementation keeps active_player_idx as the authoritative
+        # real-player turn owner, while turn_actors lets the FE see the
+        # inserted Dungeon placeholder.
+        self.turn_actors: list[TurnActor] = []
+        self.active_actor_idx: int = 0
+
         # compatibility with old frontend / APIs for now
         self.player_x: int = 0
         self.player_y: int = 0
@@ -646,10 +741,16 @@ class DungeonGraph:
         self.game_scope: str = "game"       # "game" | "results"
         self.game_over: bool = False
         self.game_result: Optional[dict[str, Any]] = None
+        
+        # Game phase:
+        # - exploration: normal dungeon exploration / purge target hunting
+        # - escape: post-purge disaster/escape phase
+        self.game_phase: Literal["exploration", "escape"] = "exploration"
+        self.escape_trigger: Optional[dict[str, Any]] = None
 
         # Persistent kill tracking
         self.kill_log: list[dict[str, Any]] = []
-        self.kills_total_by_monster_id: dict[str, int] = {}
+        self.kills_total_by_entity_id: dict[str, int] = {}
         self.kills_by_player_id: dict[int, dict[str, int]] = {}
 
     # ---------- Core map ops ----------
@@ -664,10 +765,11 @@ class DungeonGraph:
 
         self.runtime_config = runtime_config
 
-        self.rules_general = runtime_config.get("GENERAL", {})
-        self.rules_player_features = runtime_config.get("PLAYER_FEATURES", {})
-        self.rules_turn = runtime_config.get("TURN_RULES", {})
-        self.rules_skill = runtime_config.get("SKILL_RULES", {})
+        self.rules_general = runtime_config.get("GENERAL", copy.deepcopy(GENERAL))
+        self.rules_player = runtime_config.get("PLAYER_FEATURES", copy.deepcopy(PLAYER_FEATURES))
+        self.rules_turn = runtime_config.get("TURN_RULES", copy.deepcopy(TURN_RULES))
+        self.rules_skill = runtime_config.get("SKILL_RULES", copy.deepcopy(SKILL_RULES))
+        self.rules_mechanics = runtime_config.get("GAME_MECHANICS", copy.deepcopy(GAME_MECHANICS))
 
         return {
             "ok": True,
@@ -726,7 +828,7 @@ class DungeonGraph:
         Convert an unplaced tile archetype into a runtime TileNode.
 
         Important:
-        - Does NOT populate the tile with a monster.
+        - Does NOT populate the tile with a entity.
         - Rotation is chosen only to guarantee the entry door.
         - Room population happens after the tile is confirmed/locked.
         """
@@ -819,26 +921,26 @@ class DungeonGraph:
 
         raise ValueError(f"Unsupported tile_source: {tile_source}")
 
-    def serialize_monster_archetype_for_ui(
+    def serialize_entity_archetype_for_ui(
             self,
-            monster_data: dict[str, Any],
+            entity_data: dict[str, Any],
             *,
             index: Optional[int] = None,
             confirmable: bool = True,
     ) -> dict:
         """
-        Serialize a drawn monster candidate for the encounter UI.
+        Serialize a drawn entity candidate for the encounter UI.
 
-        Candidates are already popped from self.monster_pool while pending.
+        Candidates are already popped from self.entity_pool while pending.
         """
         row = {
-            "monster_id": monster_data.get("monster_id"),
-            "strength": monster_data.get("strength"),
-            "loot_id": monster_data.get("loot_id"),
-            "img_file": monster_data.get("img_file"),
-            "sort": monster_data.get("sort"),
+            "entity_id": entity_data.get("entity_id"),
+            "strength": entity_data.get("strength"),
+            "loot_id": entity_data.get("loot_id"),
+            "img_file": entity_data.get("img_file"),
+            "sort": entity_data.get("sort"),
             "confirmable": confirmable,
-            "image_path": f"/static/media/tile-content/{monster_data.get('monster_id')}.png",
+            "image_path": f"/static/media/tile-content/{entity_data.get('entity_id')}.png",
         }
 
         if index is not None:
@@ -851,29 +953,51 @@ class DungeonGraph:
             ChooseArenaOpponentFreeAction(target_player_id=target_player_id)
         )
 
-    def _return_monster_candidates_to_pool(
+    def _return_entity_candidates_to_pool(
             self,
-            monsters: list[dict[str, Any]],
+            entities: list[dict[str, Any]],
     ) -> None:
         """
-        Return unselected monster candidates to the bag.
+        Return unselected entity candidates to the bag.
 
         The bag is randomized after return to avoid predictable append-order effects.
         """
-        if not monsters:
+        if not entities:
             return
 
-        self.monster_pool.extend(monsters)
-        random.shuffle(self.monster_pool)
+        self.entity_pool.extend(entities)
+        random.shuffle(self.entity_pool)
 
-    def _draw_monster_candidate_from_pool(self) -> dict[str, Any]:
-        if not self.monster_pool:
-            raise ValueError("No more monsters available.")
+    def _draw_entity_candidate_from_pool(self) -> dict[str, Any]:
+        if not self.entity_pool:
+            raise ValueError("No more entities available.")
 
-        idx = random.randrange(len(self.monster_pool))
-        monster = self.monster_pool.pop(idx)
+        idx = random.randrange(len(self.entity_pool))
+        entity = self.entity_pool.pop(idx)
 
-        return dict(monster)
+        return dict(entity)
+
+    def _place_entity_on_tile(
+            self,
+            *,
+            tile: TileNode,
+            entity_id: str,
+    ) -> None:
+        """
+        Place an entity on a tile and initialize its runtime HP.
+
+        Entity archetypes are immutable definitions.
+        TileNode.entity_hp is the mutable runtime instance HP.
+        """
+        self._assert_can_place_entity_on_tile(
+            tile=tile,
+            entity_id=entity_id,
+        )
+
+        entity = get_entity_by_id(entity_id)
+
+        tile.entity_id = entity_id
+        tile.entity_hp = int(entity.get("hp", 1))
     
     def _get_player_for_fight_role(
             self,
@@ -917,28 +1041,28 @@ class DungeonGraph:
 
         raise ValueError(f"Unsupported fight role: {role!r}")
 
-    def _get_pending_monster_choice_tile(self) -> TileNode:
+    def _get_pending_entity_choice_tile(self) -> TileNode:
         turn = self.ensure_turn_active()
 
-        choice = turn.pending_monster_choice
+        choice = turn.pending_entity_choice
         if not choice:
-            raise ValueError("No pending monster choice.")
+            raise ValueError("No pending entity choice.")
 
         x = int(choice["target_x"])
         y = int(choice["target_y"])
 
         tile = self.get_tile(x, y)
         if tile is None:
-            raise ValueError("Pending monster choice tile is not committed.")
+            raise ValueError("Pending entity choice tile is not committed.")
 
         return tile
 
-    def _execute_confirm_monster_candidate_free_action(
+    def _execute_confirm_entity_candidate_free_action(
             self,
-            action: ConfirmMonsterCandidateFreeAction,
+            action: ConfirmEntityCandidateFreeAction,
     ) -> dict:
         """
-        Confirm a pending monster candidate and continue reveal.
+        Confirm a pending entity candidate and continue reveal.
 
         Oracle:
         - initially any of the 2 candidates may be confirmed.
@@ -948,12 +1072,12 @@ class DungeonGraph:
         """
         turn, active = self.ensure_active_player_owns_turn()
 
-        if turn.mode != "awaiting_monster_choice":
-            raise ValueError(f"Cannot confirm monster while turn mode is '{turn.mode}'.")
+        if turn.mode != "awaiting_entity_choice":
+            raise ValueError(f"Cannot confirm entity while turn mode is '{turn.mode}'.")
 
-        choice = turn.pending_monster_choice
+        choice = turn.pending_entity_choice
         if not choice:
-            raise ValueError("No pending monster choice.")
+            raise ValueError("No pending entity choice.")
 
         candidates = list(choice.get("candidates") or [])
         confirmable_indices = set(int(i) for i in choice.get("confirmable_indices") or [])
@@ -961,12 +1085,12 @@ class DungeonGraph:
         candidate_index = int(action.candidate_index)
 
         if candidate_index not in confirmable_indices:
-            raise ValueError("This monster candidate is not confirmable.")
+            raise ValueError("This entity candidate is not confirmable.")
 
         if not (0 <= candidate_index < len(candidates)):
-            raise ValueError("Invalid monster candidate index.")
+            raise ValueError("Invalid entity candidate index.")
 
-        tile = self._get_pending_monster_choice_tile()
+        tile = self._get_pending_entity_choice_tile()
 
         selected = candidates[candidate_index]
         unselected = [
@@ -974,24 +1098,27 @@ class DungeonGraph:
             if i != candidate_index
         ]
 
-        tile.monster_id = selected["monster_id"]
+        self._place_entity_on_tile(
+            tile=tile,
+            entity_id=selected["entity_id"],
+        )
 
-        self._return_monster_candidates_to_pool(unselected)
+        self._return_entity_candidates_to_pool(unselected)
 
         continuation = self._continue_after_tile_population(tile=tile)
 
         return {
             "ok": True,
-            "status": "monster_candidate_confirmed",
+            "status": "entity_candidate_confirmed",
             "action_kind": action.kind,
             "selected_index": candidate_index,
-            "selected_monster": self.serialize_monster_archetype_for_ui(
+            "selected_entity": self.serialize_entity_archetype_for_ui(
                 selected,
                 index=candidate_index,
                 confirmable=True,
             ),
             "returned_candidates": [
-                self.serialize_monster_archetype_for_ui(m, index=i, confirmable=False)
+                self.serialize_entity_archetype_for_ui(m, index=i, confirmable=False)
                 for i, m in enumerate(unselected)
             ],
             "tile": tile.to_dict(),
@@ -1001,29 +1128,29 @@ class DungeonGraph:
             "players": self.serialize_players(),
         }
 
-    def _execute_redraw_monster_candidate_action(
+    def _execute_redraw_entity_candidate_action(
             self,
-            action: RedrawMonsterCandidateAction,
+            action: RedrawEntityCandidateAction,
     ) -> dict:
         turn, active = self.ensure_active_player_owns_turn()
 
-        if turn.mode != "awaiting_monster_choice":
-            raise ValueError(f"Cannot redraw monster while turn mode is '{turn.mode}'.")
+        if turn.mode != "awaiting_entity_choice":
+            raise ValueError(f"Cannot redraw entity while turn mode is '{turn.mode}'.")
 
-        choice = turn.pending_monster_choice
+        choice = turn.pending_entity_choice
         if not choice:
-            raise ValueError("No pending monster choice.")
+            raise ValueError("No pending entity choice.")
 
         if not active.is_skill_active("skill_alc_02"):
-            raise ValueError("Monster redraw requires active skill_alc_02.")
+            raise ValueError("Entity redraw requires active skill_alc_02.")
 
         if not choice.get("has_alc_02"):
-            raise ValueError("This pending monster choice was not created with skill_alc_02 available.")
+            raise ValueError("This pending entity choice was not created with skill_alc_02 available.")
 
-        if not self.monster_pool:
-            raise ValueError("No more monsters available.")
+        if not self.entity_pool:
+            raise ValueError("No more entities available.")
 
-        tile = self._get_pending_monster_choice_tile()
+        tile = self._get_pending_entity_choice_tile()
 
         # skill_alc_02 costs HP, not Actions.
         # Therefore this must NOT call spend_action().
@@ -1033,7 +1160,7 @@ class DungeonGraph:
 
         # Draw newest candidate first, because if the HP cost knocks the player out,
         # this newest candidate is the one that must be taken.
-        new_candidate = self._draw_monster_candidate_from_pool()
+        new_candidate = self._draw_entity_candidate_from_pool()
 
         candidates = list(choice.get("candidates") or [])
         candidates.append(new_candidate)
@@ -1069,16 +1196,19 @@ class DungeonGraph:
                 if i != newest_index
             ]
 
-            tile.monster_id = selected["monster_id"]
-            self._return_monster_candidates_to_pool(unselected)
+            self._place_entity_on_tile(
+                tile=tile,
+                entity_id=selected["entity_id"],
+            )
+            self._return_entity_candidates_to_pool(unselected)
 
             # Prevent Discover-entry after KO.
             if turn.pending_discovery:
                 turn.pending_discovery["will_enter_after_confirm"] = False
                 turn.pending_discovery["entry_cancelled_reason"] = "active_player_unconscious_after_skill_alc_02"
 
-            # Clear monster choice now; tile is populated.
-            turn.pending_monster_choice = None
+            # Clear entity choice now; tile is populated.
+            turn.pending_entity_choice = None
 
             # Clear pending discovery too: reveal is complete, but player does not enter.
             turn.pending_discovery = None
@@ -1092,7 +1222,7 @@ class DungeonGraph:
                     "action_kind": action.kind,
                     "redraw": {
                         "newest_index": newest_index,
-                        "selected_monster": self.serialize_monster_archetype_for_ui(
+                        "selected_entity": self.serialize_entity_archetype_for_ui(
                             selected,
                             index=newest_index,
                             confirmable=True,
@@ -1117,7 +1247,7 @@ class DungeonGraph:
 
             finalize_result["alchemist_redraw"] = {
                 "newest_index": newest_index,
-                "selected_monster": self.serialize_monster_archetype_for_ui(
+                "selected_entity": self.serialize_entity_archetype_for_ui(
                     selected,
                     index=newest_index,
                     confirmable=True,
@@ -1133,18 +1263,18 @@ class DungeonGraph:
         # Normal redraw: still awaiting choice.
         return {
             "ok": True,
-            "status": "monster_candidate_redrawn",
+            "status": "entity_candidate_redrawn",
             "action_kind": action.kind,
             "redraw": {
                 "newest_index": newest_index,
                 "redraw_count": choice["redraw_count"],
-                "new_candidate": self.serialize_monster_archetype_for_ui(
+                "new_candidate": self.serialize_entity_archetype_for_ui(
                     new_candidate,
                     index=newest_index,
                     confirmable=True,
                 ),
                 "candidates": [
-                    self.serialize_monster_archetype_for_ui(
+                    self.serialize_entity_archetype_for_ui(
                         m,
                         index=i,
                         confirmable=i == newest_index,
@@ -1186,6 +1316,11 @@ class DungeonGraph:
         target = self._find_player_by_player_id(action.target_player_id)
         if target is None:
             raise ValueError("Arena opponent not found.")
+
+        self._assert_player_can_be_interacted_with(
+            target,
+            interaction="arena_challenge",
+        )
 
         if target.player_id == active.player_id:
             raise ValueError("Cannot challenge yourself in Arena.")
@@ -1248,7 +1383,7 @@ class DungeonGraph:
 
         turn.pending_arena_pvp = None
         turn.pending_arena_loot_choice = None
-        turn.pending_monster_encounter = None
+        turn.pending_entity_encounter = None
         turn.item_use_locked_by_combat = True
 
         self.set_turn_mode("fight")
@@ -1408,15 +1543,127 @@ class DungeonGraph:
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
-    
-    def confirm_monster_candidate(self, candidate_index: int) -> dict:
-        return self.execute_runtime_action(
-            ConfirmMonsterCandidateFreeAction(candidate_index=candidate_index)
+
+    def _execute_activate_ground_object_free_action(
+            self,
+            action: ActivateGroundObjectFreeAction,
+    ) -> dict:
+        """
+        Activate a non-mobile active ground object on the active player's tile.
+
+        Example:
+        - object_id == "exit"
+        - mobile == False
+        - active == True
+        - effect == "PLAYER_QUIT"
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode != "idle":
+            raise ValueError(f"Cannot activate ground object while turn mode is '{turn.mode}'.")
+
+        tile = self.get_active_tile()
+        if tile is None:
+            raise ValueError("Active tile not found.")
+
+        if not tile.object_id:
+            raise ValueError("No ground object on active tile.")
+
+        item_feat = ITEM_FEATURES.get(tile.object_id)
+        if item_feat is None:
+            raise ValueError(f"Unknown ground object: {tile.object_id!r}")
+
+        if bool(item_feat.get("mobile", True)):
+            raise ValueError("Mobile ground items must be picked up, not activated.")
+
+        if not bool(item_feat.get("active", False)):
+            raise ValueError("This ground object is not active.")
+
+        effect = item_feat.get("effect")
+
+        if effect == "PLAYER_QUIT":
+            return self._execute_player_quit_effect_from_ground_object(
+                active=active,
+                tile=tile,
+                object_id=tile.object_id,
+                item_feat=item_feat,
+                action_kind=action.kind,
+            )
+
+        raise ValueError(f"Unsupported ground object effect: {effect!r}")
+
+    def _execute_player_quit_effect_from_ground_object(
+            self,
+            *,
+            active: Player,
+            tile: TileNode,
+            object_id: str,
+            item_feat: dict[str, Any],
+            action_kind: str,
+    ) -> dict:
+        """
+        PLAYER_QUIT effect.
+
+        Current meaning:
+        - active player exits the dungeon
+        - player remains in self.players for final statistics
+        - player is marked as no longer active in the game
+        - turn ends and advances
+        """
+        escaped_snapshot = active.to_dict()
+
+        # Runtime flags.
+        # If Player later gets explicit fields, replace these setattr calls
+        # with proper methods/properties.
+        setattr(active, "has_quit_game", True)
+        setattr(active, "escaped_game", True)
+        setattr(active, "escape_turn_nr", self.turn_state.turn_nr if self.turn_state else None)
+        setattr(active, "escape_position", {"x": tile.x, "y": tile.y})
+        setattr(active, "escape_object_id", object_id)
+
+        quit_result = {
+            "player_id": active.player_id,
+            "display_name": active.display_name,
+            "object_id": object_id,
+            "effect": item_feat.get("effect"),
+            "tile": {"x": tile.x, "y": tile.y},
+            "turn_nr": self.turn_state.turn_nr if self.turn_state else None,
+            "snapshot": escaped_snapshot,
+        }
+
+        # Optional: remove the exit object after use?
+        # For now I would keep it on the tile, because multiple players may escape
+        # through the opened exit unless rules later say otherwise.
+        #
+        # tile.object_id = None
+
+        turn = self.ensure_turn_active()
+        turn.pending_turn_end_cause = "player_quit"
+
+        self.set_turn_mode("awaiting_turn_end_commit")
+
+        finalize_result = self._finalize_current_turn_and_advance(
+            end_cause="player_quit"
         )
 
-    def redraw_monster_candidate(self) -> dict:
-        return self.execute_runtime_action(RedrawMonsterCandidateAction())
+        finalize_result["player_quit"] = quit_result
+        finalize_result["tile"] = tile.to_dict()
+
+        return finalize_result
     
+    def activate_ground_object(self) -> dict:
+        return self.execute_runtime_action(
+            ActivateGroundObjectFreeAction()
+        )
+    
+    def confirm_entity_candidate(self, candidate_index: int) -> dict:
+        return self.execute_runtime_action(
+            ConfirmEntityCandidateFreeAction(candidate_index=candidate_index)
+        )
+
+    def redraw_entity_candidate(self) -> dict:
+        return self.execute_runtime_action(RedrawEntityCandidateAction())
+
     def set_active_player_by_index(self, player_index: int) -> dict:
         if not self.players:
             raise ValueError("No players initialized.")
@@ -1427,9 +1674,20 @@ class DungeonGraph:
         self._sync_compat_player_position()
         self.current_fight_state = None
 
+        active = self.get_active_player()
+
+        if self.turn_actors and active is not None:
+            for idx, actor in enumerate(self.turn_actors):
+                if actor.kind == "player" and actor.player_id == active.player_id:
+                    self.active_actor_idx = idx
+                    break
+
         return {
             "ok": True,
             "active_player_idx": self.active_player_idx,
+            "active_actor": self.serialize_active_actor(),
+            "turn_actors": self.serialize_turn_actors(),
+            "game_masters": self.serialize_game_masters(),
             "active_player": self.serialize_active_player(),
         }
 
@@ -1439,9 +1697,19 @@ class DungeonGraph:
                 self.active_player_idx = idx
                 self._sync_compat_player_position()
                 self.current_fight_state = None
+
+                if self.turn_actors:
+                    for actor_idx, actor in enumerate(self.turn_actors):
+                        if actor.kind == "player" and actor.player_id == player_id:
+                            self.active_actor_idx = actor_idx
+                            break
+
                 return {
                     "ok": True,
                     "active_player_idx": self.active_player_idx,
+                    "active_actor": self.serialize_active_actor(),
+                    "turn_actors": self.serialize_turn_actors(),
+                    "game_masters": self.serialize_game_masters(),
                     "active_player": self.serialize_active_player(),
                 }
 
@@ -1500,18 +1768,42 @@ class DungeonGraph:
             "tiles": tiles,
             "player": {"x": self.player_x, "y": self.player_y},
             "tiles_left": len(self.tile_pool),
-            "monsters_left": len(self.monster_pool),
-            
+            "entities_left": len(self.entity_pool),
+
+            # ----------------------------------------------------
+            # Game / result scope
+            # ----------------------------------------------------
             "game_scope": self.game_scope,
             "game_over": self.game_over,
             "game_result": self.game_result,
+            "game_phase": self.game_phase,
+            "escape_trigger": self.escape_trigger,
             "kill_stats": self.serialize_kill_stats(),
-            
+
+            # ----------------------------------------------------
+            # Turn actor view
+            #
+            # First milestone:
+            # - active_player_idx / TurnState still own real gameplay
+            # - active_actor / turn_actors expose the new actor model to FE
+            # - Dungeon/GameMaster can be serialized without being a Player
+            # ----------------------------------------------------
+            "active_actor": self.serialize_active_actor(),
+            "turn_actors": self.serialize_turn_actors(),
+            "game_masters": self.serialize_game_masters(),
+
+            # ----------------------------------------------------
+            # Room-X / Karak diagnostics
+            # ----------------------------------------------------
             "room_x_discovered": self.room_x_discovered,
             "room_x_karak_limit": int(self.rules_general.get("room_x_karak_limit", 5)),
             "karak_triggered": self.karak_triggered,
             "last_karak_event": self.last_karak_event,
             "last_room_x_event": self.last_room_x_event,
+
+            # ----------------------------------------------------
+            # Current turn state
+            # ----------------------------------------------------
             "turn": self.serialize_turn_state(),
 
             # Scout pocket, active-player view.
@@ -1530,7 +1822,7 @@ class DungeonGraph:
                 for t in getattr(self, "tile_pocket", [])
             ],
 
-            "monster_choices": list(getattr(self, "monster_choices", [])),
+            "entity_choices": list(getattr(self, "entity_choices", [])),
         }
 
     def serialize_turn_state(self) -> Optional[dict]:
@@ -1555,16 +1847,22 @@ class DungeonGraph:
         self.current_fight_state = None
 
         self.tile_pool = copy.deepcopy(self._orig_tile_pool)
-        self.monster_pool = copy.deepcopy(self._orig_monster_pool)
+        self.entity_pool = copy.deepcopy(self._orig_entity_pool)
 
         self.turn_state = None
         self.turn_counter = 0
         self.game_scope = "game"
+        self.game_masters = {}
+        self.turn_actors = []
+        self.active_actor_idx = 0
         self.game_over = False
         self.game_result = None
+        
+        self.game_phase = "exploration"
+        self.escape_trigger = None
 
         self.kill_log = []
-        self.kills_total_by_monster_id = {}
+        self.kills_total_by_entity_id = {}
         self.kills_by_player_id = {}
         
         self.ensure_entrance()
@@ -1780,7 +2078,7 @@ class DungeonGraph:
             )
         )
 
-    def teleport_battlemage_to_monster_tile(self, *, tx: int, ty: int) -> dict:
+    def teleport_battlemage_to_entity_tile(self, *, tx: int, ty: int) -> dict:
         return self.execute_runtime_action(
             TeleportAction(
                 teleport_kind="skill_bat_02",
@@ -1876,13 +2174,13 @@ class DungeonGraph:
         Modes:
         - idle:
             normal move / reveal
-        - awaiting_monster_encounter:
+        - awaiting_entity_encounter:
             movement is allowed only if skill_thi_02 or skill_pri_02 may skip.
 
         Discovered target:
         - consumes 1 Action
         - player enters immediately
-        - if target has monster: enter awaiting_monster_encounter
+        - if target has entity: enter awaiting_entity_encounter
 
         Hidden target:
         - creates pending tile reveal
@@ -1895,8 +2193,8 @@ class DungeonGraph:
 
         skip_result = None
 
-        if turn.mode == "awaiting_monster_encounter":
-            skip_result = self._validate_and_apply_monster_skip_before_move()
+        if turn.mode == "awaiting_entity_encounter":
+            skip_result = self._validate_and_apply_entity_skip_before_move()
             # helper returns mode to idle so the normal movement code can continue
             turn, active = self.ensure_active_player_owns_turn()
 
@@ -1936,7 +2234,7 @@ class DungeonGraph:
                 raise ValueError("Path blocked, cannot move.")
 
             # Record current tile as retreat-safe only if it is safe.
-            # If we are leaving a monster tile via skill_thi_02/skill_pri_02,
+            # If we are leaving a entity tile via skill_thi_02/skill_pri_02,
             # this will intentionally NOT overwrite last_valid_safe_tile.
             self.register_last_valid_safe_tile_from_active_player()
             self.spend_action(action.price)
@@ -1958,13 +2256,13 @@ class DungeonGraph:
                 and entry_result["arena_pvp"].get("requires_target") == "player"
             )
 
-            monster_encounter = None
+            entity_encounter = None
 
             if arena_triggered:
-                monster_encounter = None
+                entity_encounter = None
 
-            elif self._tile_has_active_monster(target):
-                monster_encounter = self._maybe_enter_monster_encounter_after_entry(
+            elif self._tile_has_active_entity(target):
+                entity_encounter = self._maybe_enter_entity_encounter_after_entry(
                     player=active,
                     tile=target,
                     entry_cause="move",
@@ -1986,8 +2284,8 @@ class DungeonGraph:
                 "status": (
                     "moved_awaiting_arena_target_choice"
                     if arena_triggered
-                    else "moved_awaiting_monster_encounter"
-                    if monster_encounter
+                    else "moved_awaiting_entity_encounter"
+                    if entity_encounter
                     else "moved"
                 ),
                 "action_kind": action.kind,
@@ -1996,7 +2294,7 @@ class DungeonGraph:
                 "new_position": {"x": nx, "y": ny},
                 "tile": target.to_dict(),
                 "entry": entry_result,
-                "monster_encounter": monster_encounter,
+                "entity_encounter": entity_encounter,
                 "turn": self.serialize_turn_state(),
                 "active_player": self.serialize_active_player(),
                 "players": self.serialize_players(),
@@ -2164,7 +2462,7 @@ class DungeonGraph:
             return self._execute_warlock_swap_teleport(action=action, active=active, price=price)
 
         if action.teleport_kind == "skill_bat_02":
-            return self._execute_battlemage_monster_teleport(action=action, active=active, price=price)
+            return self._execute_battlemage_entity_teleport(action=action, active=active, price=price)
 
         raise ValueError(f"Unsupported teleport kind: {action.teleport_kind}")
 
@@ -2246,6 +2544,11 @@ class DungeonGraph:
         target_player = self._find_player_by_player_id(action.target_player_id)
         if target_player is None:
             raise ValueError("Target player not found.")
+
+        self._assert_player_can_be_interacted_with(
+            target_player,
+            interaction="skill_bea_02",
+        )
 
         if target_player.player_id == active.player_id:
             raise ValueError("Cannot target yourself with skill_bea_02.")
@@ -2359,6 +2662,11 @@ class DungeonGraph:
         if target_player is None:
             raise ValueError("Target player not found.")
 
+        self._assert_player_can_be_interacted_with(
+            target_player,
+            interaction="skill_wlk_02",
+        )
+
         if target_player.player_id == active.player_id:
             raise ValueError("Cannot swap with yourself.")
 
@@ -2418,7 +2726,7 @@ class DungeonGraph:
             "target_player": target_player.to_dict(),
         }
 
-    def _execute_battlemage_monster_teleport(
+    def _execute_battlemage_entity_teleport(
             self,
             *,
             action: TeleportAction,
@@ -2442,8 +2750,8 @@ class DungeonGraph:
         if target is None:
             raise ValueError("Battlemage may only teleport to a revealed committed tile.")
 
-        if not target.monster_id:
-            raise ValueError("Battlemage teleport target must contain a monster.")
+        if not target.entity_id:
+            raise ValueError("Battlemage teleport target must contain a entity.")
 
         # Capture this before payment. For ALL-cost teleports, actions_left becomes 0,
         # but the fight still started as the player's first Action.
@@ -2465,13 +2773,13 @@ class DungeonGraph:
             is_turn_owner=True,
         )
 
-        self.current_fight_state = start_monster_fight_state(
+        self.current_fight_state = start_entity_fight_state(
             player=active,
-            monster_id=target.monster_id,
+            entity_id=target.entity_id,
             tile_x=target.x,
             tile_y=target.y,
             is_before_second_action=is_before_second_action,
-            monster_tile_discovered_this_turn=False,
+            entity_tile_discovered_this_turn=False,
         )
 
         turn.item_use_locked_by_combat = True
@@ -2479,7 +2787,7 @@ class DungeonGraph:
 
         return {
             "ok": True,
-            "status": "teleported_to_monster_and_fight_started",
+            "status": "teleported_to_entity_and_fight_started",
             "teleport_kind": action.teleport_kind,
             "action_kind": action.kind,
             "price": price,
@@ -2505,7 +2813,7 @@ class DungeonGraph:
         - stores it in active player's Scout pocket
         - does not move player
         - does not place tile on board
-        - does not draw monster
+        - does not draw entity
 
         skill_acr_02 / Sprint interaction:
         - if Sprint is provisionally selected before the first Action, Scout pull is forbidden
@@ -2597,7 +2905,7 @@ class DungeonGraph:
         - commits the rotated pending tile
         - applies tile discovery effects
         - then either:
-            - starts monster-choice phase, or
+            - starts entity-choice phase, or
             - default-populates immediately, or
             - continues immediately if no population needed
         - player entry happens only after population is finalized
@@ -2643,14 +2951,14 @@ class DungeonGraph:
 
         # --------------------------------------------------
         # Populate only after final rotation/confirmation.
-        # This may pause in awaiting_monster_choice.
+        # This may pause in awaiting_entity_choice.
         # --------------------------------------------------
         population_result = self._begin_or_resolve_room_population_after_confirm(pending)
 
         return {
             "ok": True,
             "status": (
-                "confirmed_awaiting_monster_choice"
+                "confirmed_awaiting_entity_choice"
                 if population_result.get("requires_choice")
                 else "confirmed"
             ),
@@ -2665,15 +2973,15 @@ class DungeonGraph:
             "turn": self.serialize_turn_state(),
         }
 
-    def _tile_requires_monster_population(self, tile: TileNode) -> bool:
+    def _tile_requires_entity_population(self, tile: TileNode) -> bool:
         """
         Current rule:
-        - only normal room tiles receive monsters/chests
+        - only normal room tiles receive entities/chests
         - room_x and corridors do not
         """
         return tile.tile_type == "room"
 
-    def _active_player_can_use_monster_choice_skill(self, skill_id: str) -> bool:
+    def _active_player_can_use_entity_choice_skill(self, skill_id: str) -> bool:
         active = self.get_active_player()
         if active is None:
             return False
@@ -2686,46 +2994,46 @@ class DungeonGraph:
         If the tile is not a normal room:
             continue immediately.
 
-        If no relevant monster-choice skill is active:
-            draw one monster immediately and continue.
+        If no relevant entity-choice skill is active:
+            draw one entity immediately and continue.
 
         If skill_ora_02 and/or skill_alc_02 is active:
-            enter awaiting_monster_choice.
+            enter awaiting_entity_choice.
         """
         turn, active = self.ensure_active_player_owns_turn()
 
-        if not self._tile_requires_monster_population(tile):
+        if not self._tile_requires_entity_population(tile):
             continuation = self._continue_after_tile_population(tile=tile)
             return {
                 "requires_choice": False,
                 "population": {
                     "populated": False,
                     "reason": "tile_not_normal_room",
-                    "monster_id": None,
+                    "entity_id": None,
                 },
                 "continuation": continuation,
             }
 
-        if tile.monster_id:
+        if tile.entity_id:
             continuation = self._continue_after_tile_population(tile=tile)
             return {
                 "requires_choice": False,
                 "population": {
                     "populated": False,
-                    "reason": "tile_already_has_monster",
-                    "monster_id": tile.monster_id,
+                    "reason": "tile_already_has_entity",
+                    "entity_id": tile.entity_id,
                 },
                 "continuation": continuation,
             }
 
-        if not self.monster_pool:
+        if not self.entity_pool:
             continuation = self._continue_after_tile_population(tile=tile)
             return {
                 "requires_choice": False,
                 "population": {
                     "populated": False,
-                    "reason": "monster_pool_empty",
-                    "monster_id": None,
+                    "reason": "entity_pool_empty",
+                    "entity_id": None,
                 },
                 "continuation": continuation,
             }
@@ -2737,8 +3045,12 @@ class DungeonGraph:
         # Default behavior: no choice, draw exactly one.
         # --------------------------------------------------
         if not has_ora and not has_alc:
-            monster = self._draw_monster_candidate_from_pool()
-            tile.monster_id = monster["monster_id"]
+            entity = self._draw_entity_candidate_from_pool()
+
+            self._place_entity_on_tile(
+                tile=tile,
+                entity_id=entity["entity_id"],
+            )
 
             continuation = self._continue_after_tile_population(tile=tile)
 
@@ -2746,9 +3058,10 @@ class DungeonGraph:
                 "requires_choice": False,
                 "population": {
                     "populated": True,
-                    "reason": "normal_monster_draw",
-                    "monster_id": tile.monster_id,
-                    "monster": self.serialize_monster_archetype_for_ui(monster),
+                    "reason": "normal_entity_draw",
+                    "entity_id": tile.entity_id,
+                    "entity_hp": tile.entity_hp,
+                    "entity": self.serialize_entity_archetype_for_ui(entity),
                 },
                 "continuation": continuation,
             }
@@ -2769,9 +3082,9 @@ class DungeonGraph:
         candidates: list[dict[str, Any]] = []
 
         for _ in range(candidate_count):
-            if not self.monster_pool:
+            if not self.entity_pool:
                 break
-            candidates.append(self._draw_monster_candidate_from_pool())
+            candidates.append(self._draw_entity_candidate_from_pool())
 
         if not candidates:
             continuation = self._continue_after_tile_population(tile=tile)
@@ -2779,15 +3092,15 @@ class DungeonGraph:
                 "requires_choice": False,
                 "population": {
                     "populated": False,
-                    "reason": "monster_pool_empty_after_choice_start",
-                    "monster_id": None,
+                    "reason": "entity_pool_empty_after_choice_start",
+                    "entity_id": None,
                 },
                 "continuation": continuation,
             }
 
         confirmable_indices = list(range(len(candidates)))
 
-        turn.pending_monster_choice = {
+        turn.pending_entity_choice = {
             "target_x": tile.x,
             "target_y": tile.y,
             "has_ora_02": has_ora,
@@ -2800,19 +3113,19 @@ class DungeonGraph:
             "reason": "oracle_or_alchemist_choice",
         }
 
-        self.set_turn_mode("awaiting_monster_choice")
+        self.set_turn_mode("awaiting_entity_choice")
 
         return {
             "requires_choice": True,
             "population": {
                 "populated": False,
-                "reason": "awaiting_monster_choice",
+                "reason": "awaiting_entity_choice",
                 "target_x": tile.x,
                 "target_y": tile.y,
                 "has_ora_02": has_ora,
                 "has_alc_02": has_alc,
                 "candidates": [
-                    self.serialize_monster_archetype_for_ui(
+                    self.serialize_entity_archetype_for_ui(
                         m,
                         index=i,
                         confirmable=i in confirmable_indices,
@@ -2933,12 +3246,12 @@ class DungeonGraph:
 
     def _continue_after_tile_population(self, *, tile: TileNode) -> dict:
         """
-        Continue reveal after tile geometry and monster population are finalized.
+        Continue reveal after tile geometry and entity population are finalized.
 
         Discover:
         - active player enters the tile if conscious.
         - entry effects run.
-        - if tile has monster, enter awaiting_monster_encounter.
+        - if tile has entity, enter awaiting_entity_encounter.
 
         Peek:
         - active player stays on origin tile.
@@ -2953,7 +3266,7 @@ class DungeonGraph:
 
         reveal_kind = pending_discovery.get("reveal_kind", "discover")
         entry_result = None
-        monster_encounter = None
+        entity_encounter = None
         skipped_entry_reason = None
 
         if reveal_kind == "discover":
@@ -2978,11 +3291,11 @@ class DungeonGraph:
                 )
 
                 if arena_triggered:
-                    monster_encounter = None
+                    entity_encounter = None
 
-                elif self._tile_has_active_monster(tile):
-                    # Do NOT mark active monster tile as safe.
-                    monster_encounter = self._maybe_enter_monster_encounter_after_entry(
+                elif self._tile_has_active_entity(tile):
+                    # Do NOT mark active entity tile as safe.
+                    entity_encounter = self._maybe_enter_entity_encounter_after_entry(
                         player=active,
                         tile=tile,
                         entry_cause="discovery",
@@ -2999,7 +3312,7 @@ class DungeonGraph:
             raise ValueError(f"Unsupported reveal_kind: {reveal_kind}")
 
         turn.pending_discovery = None
-        turn.pending_monster_choice = None
+        turn.pending_entity_choice = None
 
         arena_triggered_final = bool(
             entry_result
@@ -3010,11 +3323,11 @@ class DungeonGraph:
         if arena_triggered_final:
             # Keep mode as awaiting_arena_target_choice.
             self.snapshot_active_ground_item()
-        elif monster_encounter is None:
+        elif entity_encounter is None:
             self.set_turn_mode("idle")
             self.snapshot_active_ground_item()
         else:
-            # Keep mode as awaiting_monster_encounter.
+            # Keep mode as awaiting_entity_encounter.
             self.snapshot_active_ground_item()
 
         self.current_fight_state = None
@@ -3024,14 +3337,14 @@ class DungeonGraph:
             "status": (
                 "reveal_completed_awaiting_arena_target_choice"
                 if arena_triggered_final
-                else "reveal_completed_awaiting_monster_encounter"
-                if monster_encounter
+                else "reveal_completed_awaiting_entity_encounter"
+                if entity_encounter
                 else "reveal_completed"
             ),
             "reveal_kind": reveal_kind,
             "entered_tile": bool(entry_result),
             "skipped_entry_reason": skipped_entry_reason,
-            "monster_encounter": monster_encounter,
+            "entity_encounter": entity_encounter,
             "tile": tile.to_dict(),
             "entry": entry_result,
             "turn": self.serialize_turn_state(),
@@ -3454,11 +3767,11 @@ class DungeonGraph:
         if turn.mode == "pending_tile":
             raise ValueError("Cannot end turn before confirming the pending tile.")
 
-        if turn.mode == "awaiting_monster_choice":
-            raise ValueError("Cannot end turn before resolving monster choice.")
+        if turn.mode == "awaiting_entity_choice":
+            raise ValueError("Cannot end turn before resolving entity choice.")
 
-        if turn.mode == "awaiting_monster_encounter":
-            raise ValueError("Cannot end turn before resolving monster encounter.")
+        if turn.mode == "awaiting_entity_encounter":
+            raise ValueError("Cannot end turn before resolving entity encounter.")
         
         if turn.mode == "awaiting_arena_target_choice":
             raise ValueError("Cannot end turn before choosing Arena opponent.")
@@ -3495,38 +3808,48 @@ class DungeonGraph:
 
         Allowed modes:
         - idle
-        - awaiting_monster_encounter
+        - awaiting_entity_encounter
 
-        If awaiting_monster_encounter:
+        If awaiting_entity_encounter:
         - clears pending encounter
         - enters fight
         """
         turn, active = self.ensure_active_player_owns_turn()
 
-        if turn.mode not in ("idle", "awaiting_monster_encounter"):
+        if turn.mode not in ("idle", "awaiting_entity_encounter"):
             raise ValueError(f"Cannot start fight while turn mode is '{turn.mode}'.")
 
         tile = self.get_active_tile()
         if tile is None:
             raise ValueError("Active tile not found.")
 
-        if not tile.monster_id:
-            raise ValueError("No monster on current tile.")
+        if not tile.entity_id:
+            raise ValueError("No entity on current tile.")
 
-        monster_tile_discovered_this_turn = (
+        can_combat, combat_reason = self.can_start_combat_on_tile(tile)
+
+        if not can_combat:
+            raise ValueError(combat_reason)
+
+        entity = get_entity_by_id(tile.entity_id)
+
+        if "combat" not in set(entity.get("injury_modes") or []):
+            raise ValueError("This entity cannot be damaged by combat.")
+
+        entity_tile_discovered_this_turn = (
                 (tile.x, tile.y) in turn.discovered_tile_coords_this_turn
         )
 
-        self.current_fight_state = start_monster_fight_state(
+        self.current_fight_state = start_entity_fight_state(
             player=active,
-            monster_id=tile.monster_id,
+            entity_id=tile.entity_id,
             tile_x=tile.x,
             tile_y=tile.y,
             is_before_second_action=self._is_fight_before_second_action(turn),
-            monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
+            entity_tile_discovered_this_turn=entity_tile_discovered_this_turn,
         )
 
-        turn.pending_monster_encounter = None
+        turn.pending_entity_encounter = None
         turn.item_use_locked_by_combat = True
 
         self.set_turn_mode("fight")
@@ -3545,7 +3868,7 @@ class DungeonGraph:
         """
         Backend implementation for tossing dice in the current fight.
 
-        Default role is 'challenged', preserving existing monster-fight behavior.
+        Default role is 'challenged', preserving existing entity-fight behavior.
         """
         turn, _active = self.ensure_active_player_owns_turn()
 
@@ -3609,18 +3932,18 @@ class DungeonGraph:
             "fight": self.current_fight_state.to_dict(),
             "turn": self.serialize_turn_state(),
         }
-    
-    
+
     def _execute_resolve_fight_free_action(self, action: ResolveFightFreeAction) -> dict:
         """
-        Backend implementation for resolving the current monster fight.
+        Backend implementation for resolving the current entity fight.
 
         Semantics:
         - resolves the current FightState
-        - applies HP consequences
+        - applies player HP consequences
+        - applies entity HP consequences
         - applies p_bomb consequences
         - consumes selected combat scrolls
-        - records monster kills when monsters are removed
+        - records entity kills only when entity HP reaches 0
         - clears the live fight state after resolution
         - routes the turn into the next legal mode:
             - item_pickup
@@ -3645,12 +3968,9 @@ class DungeonGraph:
             raise ValueError("No active fight state.")
 
         # --------------------------------------------------------------
-        # Step 4 guard:
-        # Arena PvP has phase-aware fight preparation now, but its
-        # runtime consequences are implemented in Step 5.
-        #
-        # This must be before monster/tile validation, because Arena tiles
-        # do not contain monsters.
+        # Arena PvP is resolved through its own branch.
+        # This must happen before entity/tile validation, because Arena
+        # fights do not use tile.entity_id.
         # --------------------------------------------------------------
         if fight_state.context.fight_kind == "arena_pvp":
             return self._execute_resolve_arena_pvp_fight_free_action(action)
@@ -3659,16 +3979,16 @@ class DungeonGraph:
         if tile is None:
             raise ValueError("Active tile not found.")
 
-        if not tile.monster_id:
-            raise ValueError("No monster on current tile.")
+        if not tile.entity_id:
+            raise ValueError("No entity on current tile.")
 
-        monster_id = tile.monster_id
-        monster = get_monster_by_id(monster_id)
+        entity_id = tile.entity_id
+        entity = get_entity_by_id(entity_id)
 
         # ------------------------------------------------------------------
         # Local helpers
         # ------------------------------------------------------------------
-                
+
         def consume_selected_scrolls(*, resolved_fight_state: FightState) -> list[dict[str, Any]]:
             """
             Consume selected combat scroll-slot items after fight resolution.
@@ -3746,7 +4066,6 @@ class DungeonGraph:
             turn.pending_arena_loot_choice = None
             turn.fight_continue_after_item_pickup = False
             turn.fight_continue_skill_id = None
-            
 
         def apply_swordsman_continuation_state(*, enabled: bool) -> None:
             if enabled:
@@ -3770,6 +4089,7 @@ class DungeonGraph:
                 retreat_result: Optional[dict[str, Any]] = None,
                 ko_reaction_payload: Optional[dict[str, Any]] = None,
                 kill_event_payload: Optional[dict[str, Any]] = None,
+                entity_damage_payload: Optional[dict[str, Any]] = None,
         ) -> dict[str, Any]:
             response: dict[str, Any] = {
                 "ok": True,
@@ -3778,6 +4098,7 @@ class DungeonGraph:
                 "fight": fight_dict,
                 "outcome": outcome,
                 "hp_consequence": hp_consequence,
+                "entity_damage_consequence": entity_damage_payload,
                 "p_bomb_consequence": p_bomb_consequence,
                 "consumed_scrolls": consumed_scrolls,
                 "active_player": active.to_dict(),
@@ -3799,6 +4120,41 @@ class DungeonGraph:
                 response["kill_stats"] = self.serialize_kill_stats()
 
             return response
+
+        def route_retreat_after_surviving_entity(
+                *,
+                entity_damage_payload: Optional[dict[str, Any]],
+                status_prefix: str,
+        ) -> dict[str, Any]:
+            """
+            Route player away from the tile when the entity remains alive.
+
+            New generalized rule:
+            - if the entity is still alive after fight resolution,
+              the entity keeps the tile and the player retreats.
+            """
+            reset_post_fight_pending_state()
+
+            if may_continue_by_swo_02:
+                retreat_result = self._perform_retreat_without_ending_turn()
+
+                return build_response(
+                    status=f"{status_prefix}_with_retreat_and_continue",
+                    include_tile=True,
+                    retreat_result=retreat_result,
+                    entity_damage_payload=entity_damage_payload,
+                )
+
+            retreat_result = self._execute_retreat_turn_ending_free_action(
+                RetreatTurnEndingFreeAction()
+            )
+
+            return build_response(
+                status=f"{status_prefix}_with_retreat",
+                include_tile=True,
+                retreat_result=retreat_result,
+                entity_damage_payload=entity_damage_payload,
+            )
 
         # ------------------------------------------------------------------
         # Resolve fight state
@@ -3856,12 +4212,12 @@ class DungeonGraph:
 
         # ------------------------------------------------------------------
         # If the active player became unconscious and no KO reaction intercepted,
-        # force monster-fight unconscious handling.
+        # force entity-fight unconscious handling.
         # This overrides skill_swo_02 continuation.
         # ------------------------------------------------------------------
         if active.hp <= 0:
-            return self._resolve_active_player_unconscious_after_monster_fight(
-                source="monster_fight_unconscious",
+            return self._resolve_active_player_unconscious_after_entity_fight(
+                source="entity_fight_unconscious",
                 fight_dict=fight_dict,
                 outcome=outcome,
                 hp_consequence=hp_consequence,
@@ -3871,24 +4227,47 @@ class DungeonGraph:
             )
 
         # ------------------------------------------------------------------
-        # Player wins: monster dies, loot drops, special kill effects may follow.
+        # Player wins the combat round:
+        # - entity takes 1 combat damage
+        # - entity dies only if HP reaches 0
+        # - if entity survives, player retreats
         # ------------------------------------------------------------------
         if outcome == "challenged_win":
-            kill_event = self.record_monster_kill(
-                monster_id=monster_id,
-                killer_player=active,
-                source="monster_fight",
-                tile_x=tile.x,
-                tile_y=tile.y,
+            entity_damage = self.apply_damage_to_tile_entity(
+                tile=tile,
+                damage=1,
+                injury_mode="combat",
+                source="entity_fight",
+                actor_player=active,
             )
 
-            tile.monster_id = None
-            tile.object_id = monster["loot_id"]
+            if not entity_damage.get("applied"):
+                raise ValueError(
+                    f"Combat damage could not be applied to entity {entity_id!r}: "
+                    f"{entity_damage.get('reason')}"
+                )
+
+            # --------------------------------------------------------------
+            # Entity survived:
+            # new generalized rule says entity keeps the tile, player retreats.
+            # --------------------------------------------------------------
+            if not entity_damage.get("destroyed"):
+                return route_retreat_after_surviving_entity(
+                    entity_damage_payload=entity_damage,
+                    status_prefix="fight_resolved_entity_survived",
+                )
+
+            # --------------------------------------------------------------
+            # Entity destroyed:
+            # old kill / loot routing continues.
+            # The kill event is created inside apply_damage_to_tile_entity().
+            # --------------------------------------------------------------
+            kill_event = entity_damage.get("kill_event")
 
             reset_post_fight_pending_state()
             apply_swordsman_continuation_state(enabled=may_continue_by_swo_02)
 
-            if monster_id == "Mummy":
+            if entity_id == "Mummy":
                 turn.pending_curse_choice = True
                 self.set_turn_mode("awaiting_curse_choice")
 
@@ -3896,13 +4275,14 @@ class DungeonGraph:
                     status="fight_resolved_awaiting_curse",
                     include_tile=True,
                     kill_event_payload=kill_event,
+                    entity_damage_payload=entity_damage,
                 )
 
-            if monster_id == "GiantSnake":
+            if entity_id == "GiantSnake":
                 turn.pending_poison_choice = {
                     "source": "GiantSnake",
                     "requires_target": "player_skill",
-                    "killed_monster_id": monster_id,
+                    "killed_entity_id": entity_id,
                 }
                 self.set_turn_mode("awaiting_poison_choice")
 
@@ -3910,6 +4290,7 @@ class DungeonGraph:
                     status="fight_resolved_awaiting_poison",
                     include_tile=True,
                     kill_event_payload=kill_event,
+                    entity_damage_payload=entity_damage,
                 )
 
             # --------------------------------------------------------------
@@ -3942,32 +4323,18 @@ class DungeonGraph:
                 status="fight_resolved",
                 include_tile=True,
                 kill_event_payload=kill_event,
+                entity_damage_payload=entity_damage,
             )
 
         # ------------------------------------------------------------------
-        # Monster win or draw: retreat.
-        # Both branches are identical except for the already-resolved outcome.
+        # Entity win or draw:
+        # - entity remains on tile
+        # - player retreats
         # ------------------------------------------------------------------
         if outcome in {"initiator_win", "draw"}:
-            reset_post_fight_pending_state()
-
-            if may_continue_by_swo_02:
-                retreat_result = self._perform_retreat_without_ending_turn()
-
-                return build_response(
-                    status="fight_resolved_with_retreat_and_continue",
-                    include_tile=True,
-                    retreat_result=retreat_result,
-                )
-
-            retreat_result = self._execute_retreat_turn_ending_free_action(
-                RetreatTurnEndingFreeAction()
-            )
-
-            return build_response(
-                status="fight_resolved_with_retreat",
-                include_tile=True,
-                retreat_result=retreat_result,
+            return route_retreat_after_surviving_entity(
+                entity_damage_payload=None,
+                status_prefix="fight_resolved",
             )
 
         raise ValueError(f"Unexpected fight outcome: {outcome}")
@@ -4048,6 +4415,80 @@ class DungeonGraph:
 
         return consumed
     # NEW BLOCK --------------------------------------------------------------- ENDED   -
+
+    def apply_damage_to_tile_entity(
+            self,
+            *,
+            tile: TileNode,
+            damage: int,
+            injury_mode: str,
+            source: str,
+            actor_player: Optional[Player] = None,
+    ) -> dict[str, Any]:
+        if not tile.entity_id:
+            raise ValueError("No entity on tile.")
+
+        entity_id = tile.entity_id
+        entity = get_entity_by_id(entity_id)
+
+        injury_modes = set(entity.get("injury_modes") or [])
+
+        if injury_mode not in injury_modes:
+            return {
+                "applied": False,
+                "destroyed": False,
+                "entity_id": entity_id,
+                "reason": "injury_mode_not_allowed",
+                "injury_mode": injury_mode,
+                "allowed_injury_modes": sorted(injury_modes),
+                "entity_hp_before": tile.entity_hp,
+                "entity_hp_after": tile.entity_hp,
+            }
+
+        hp_before = int(tile.entity_hp if tile.entity_hp is not None else entity.get("hp", 1))
+        hp_after = max(0, hp_before - int(damage))
+
+        tile.entity_hp = hp_after
+
+        result: dict[str, Any] = {
+            "applied": True,
+            "destroyed": hp_after <= 0,
+            "entity_id": entity_id,
+            "source": source,
+            "injury_mode": injury_mode,
+            "damage": int(damage),
+            "entity_hp_before": hp_before,
+            "entity_hp_after": hp_after,
+        }
+
+        if hp_after <= 0:
+            kill_event = self.record_entity_kill(
+                entity_id=entity_id,
+                killer_player=actor_player,
+                source=source,
+                tile_x=tile.x,
+                tile_y=tile.y,
+            )
+
+            loot_id = entity.get("loot_id")
+
+            tile.entity_id = None
+            tile.entity_hp = None
+
+            if loot_id:
+                self._place_ground_object_on_tile(
+                    tile=tile,
+                    object_id=loot_id,
+                    source=source,
+                )
+
+            result.update({
+                "kill_event": kill_event,
+                "loot_id": loot_id,
+                "loot_dropped": bool(loot_id),
+            })
+
+        return result
     
     def _first_free_slot_for_item_type(
             self,
@@ -4722,7 +5163,7 @@ class DungeonGraph:
             "players": self.serialize_players(),
             "active_player": self.serialize_active_player(),
         }
-    
+
     def _execute_use_inventory_item_action(self, action: UseInventoryItemAction) -> dict:
         turn, active = self.ensure_active_player_owns_turn()
 
@@ -4739,7 +5180,16 @@ class DungeonGraph:
             raise ValueError("Selected slot does not contain a usable item.")
 
         item_id = item_feat["item_id"]
+        item_type = item_feat.get("item_type")
         effect = item_feat.get("effect")
+
+        if effect == "KEY_ENTITY_DAMAGE":
+            return self._execute_key_damage_entity_effect(
+                active=active,
+                action=action,
+                item_id=item_id,
+                item_feat=item_feat,
+            )
 
         if effect == "TP_HEAL":
             return self._execute_healing_scroll_effect(
@@ -4768,7 +5218,6 @@ class DungeonGraph:
         raise ValueError(f"Unsupported active item effect: {effect}")
     
     
-    
     def _consume_used_item_if_needed(
             self,
             *,
@@ -4787,6 +5236,193 @@ class DungeonGraph:
             raise ValueError("Internal error: consumed item does not match used item.")
 
         return consumed_item_id
+
+    # def _execute_key_damage_entity_effect(
+    #         self,
+    #         *,
+    #         active: Player,
+    #         action: UseInventoryItemAction,
+    #         item_id: str,
+    #         item_feat: dict[str, Any],
+    # ) -> dict:
+    #     """
+    #     Key use against a damageable entity.
+    # 
+    #     Rule:
+    #     - active player uses one key from own key slot
+    #     - target defaults to active player's current tile
+    #     - target tile must contain a damageable entity
+    #     - entity must allow injury_mode == "key"
+    #     - key is consumed only after successful damage application
+    #     - no Action is consumed
+    #     - turn does not automatically end
+    #     """
+    #     if action.slot_group != "key":
+    #         raise ValueError("Key entity damage must use a key slot.")
+    # 
+    #     slot_item_id = active.get_slot_item(action.slot_group, action.slot_index)
+    #     if slot_item_id != item_id:
+    #         raise ValueError("Selected key changed before key-use resolution.")
+    # 
+    #     target_x = active.x if action.target_x is None else int(action.target_x)
+    #     target_y = active.y if action.target_y is None else int(action.target_y)
+    # 
+    #     target_tile = self.get_tile(target_x, target_y)
+    #     if target_tile is None:
+    #         raise ValueError("Key target tile does not exist.")
+    # 
+    #     if not self._tile_has_damageable_entity(target_tile):
+    #         raise ValueError("No damageable entity on target tile.")
+    # 
+    #     entity_id_before = target_tile.entity_id
+    #     entity = get_entity_by_id(entity_id_before)
+    # 
+    #     if "key" not in set(entity.get("injury_modes") or []):
+    #         raise ValueError(f"Entity {entity_id_before!r} cannot be damaged by key.")
+    # 
+    #     entity_damage = self.apply_damage_to_tile_entity(
+    #         tile=target_tile,
+    #         damage=1,
+    #         injury_mode="key",
+    #         source="key_entity_damage",
+    #         actor_player=active,
+    #     )
+    # 
+    #     if not entity_damage.get("applied"):
+    #         raise ValueError(
+    #             f"Key damage could not be applied to entity {entity_id_before!r}: "
+    #             f"{entity_damage.get('reason')}"
+    #         )
+    # 
+    #     consumed_item_id = self._consume_used_item_if_needed(
+    #         player=active,
+    #         slot_group=action.slot_group,
+    #         slot_index=action.slot_index,
+    #         item_id=item_id,
+    #         item_feat=item_feat,
+    #     )
+    # 
+    #     # If key opened/destroyed an entity that produced a ground object,
+    #     # refresh the active ground snapshot.
+    #     self.snapshot_active_ground_item()
+    # 
+    #     return {
+    #         "ok": True,
+    #         "status": "key_used_on_entity",
+    #         "action_kind": action.kind,
+    #         "item_use": {
+    #             "item_id": item_id,
+    #             "item_type": item_feat.get("item_type"),
+    #             "slot_group": action.slot_group,
+    #             "slot_index": action.slot_index,
+    #             "consumed": consumed_item_id is not None,
+    #             "consumed_item_id": consumed_item_id,
+    #             "used_by_player_id": active.player_id,
+    #             "target": {"x": target_x, "y": target_y},
+    #         },
+    #         "entity_damage": entity_damage,
+    #         "tile": target_tile.to_dict(),
+    #         "turn": self.serialize_turn_state(),
+    #         "players": self.serialize_players(),
+    #         "active_player": self.serialize_active_player(),
+    #     }
+
+    def _execute_key_damage_entity_effect(
+            self,
+            *,
+            active: Player,
+            action: UseInventoryItemAction,
+            item_id: str,
+            item_feat: dict[str, Any],
+    ) -> dict:
+        """
+        Key use against a damageable entity.
+
+        Rule:
+        - active player uses a key from own key slot
+        - active player's current tile must contain a damageable entity
+        - entity must allow injury_mode == "key"
+        - this does NOT start a fight_engine fight
+        - entity loses 1 HP
+        - key is consumed only after successful damage application
+        - no Action is consumed
+        - turn does not automatically end
+        """
+        turn, active_from_turn = self.ensure_active_player_owns_turn()
+
+        if active_from_turn.player_id != active.player_id:
+            raise ValueError("Internal error: key user is not active turn owner.")
+
+        if action.slot_group != "key":
+            raise ValueError("Key entity damage must use a key slot.")
+
+        if turn.mode != "idle":
+            raise ValueError(f"Cannot use key while turn mode is '{turn.mode}'.")
+
+        slot_item_id = active.get_slot_item(action.slot_group, action.slot_index)
+        if slot_item_id != item_id:
+            raise ValueError("Selected key changed before key-use resolution.")
+
+        target_tile = self.get_active_tile()
+        if target_tile is None:
+            raise ValueError("Active tile not found.")
+
+        if not self._tile_has_damageable_entity(target_tile):
+            raise ValueError("No damageable entity on active tile.")
+
+        entity_id_before = target_tile.entity_id
+        if entity_id_before is None:
+            raise ValueError("No entity on active tile.")
+
+        entity = get_entity_by_id(entity_id_before)
+        injury_modes = set(entity.get("injury_modes") or [])
+
+        if "key" not in injury_modes:
+            raise ValueError(f"Entity {entity_id_before!r} cannot be damaged by key.")
+
+        entity_damage = self.apply_damage_to_tile_entity(
+            tile=target_tile,
+            damage=1,
+            injury_mode="key",
+            source="key_entity_damage",
+            actor_player=active,
+        )
+
+        if not entity_damage.get("applied"):
+            raise ValueError(
+                f"Key damage could not be applied to entity {entity_id_before!r}: "
+                f"{entity_damage.get('reason')}"
+            )
+
+        consumed_item_id = self._consume_used_item_if_needed(
+            player=active,
+            slot_group=action.slot_group,
+            slot_index=action.slot_index,
+            item_id=item_id,
+            item_feat=item_feat,
+        )
+
+        self.snapshot_active_ground_item()
+
+        return {
+            "ok": True,
+            "status": "key_used_on_entity",
+            "action_kind": action.kind,
+            "item_use": {
+                "item_id": item_id,
+                "item_type": item_feat.get("item_type"),
+                "slot_group": action.slot_group,
+                "slot_index": action.slot_index,
+                "consumed": consumed_item_id is not None,
+                "consumed_item_id": consumed_item_id,
+                "used_by_player_id": active.player_id,
+            },
+            "entity_damage": entity_damage,
+            "tile": target_tile.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
+        }
     
     def _execute_healing_scroll_effect(
             self,
@@ -4889,6 +5525,11 @@ class DungeonGraph:
         target_player = self._find_player_by_player_id(action.target_player_id)
         if target_player is None:
             raise ValueError("Target player not found.")
+
+        self._assert_player_can_be_interacted_with(
+            target_player,
+            interaction="LIFESTEAL",
+        )
 
         if target_player.player_id == active.player_id:
             raise ValueError("You cannot target yourself with LIFESTEAL.")
@@ -5048,9 +5689,9 @@ class DungeonGraph:
             fight_state: FightState,
     ) -> list[dict[str, Any]]:
         """
-        Monster-fight compatibility wrapper.
+        Entity-fight compatibility wrapper.
 
-        Existing monster fights use the challenged side.
+        Existing entity fights use the challenged side.
         """
         return self._get_selected_fight_scroll_items_for_role(
             player=player,
@@ -5070,7 +5711,7 @@ class DungeonGraph:
 
         Used by:
         - Arena PvP, where both sides may use scrolls
-        - monster fight compatibility through role='challenged'
+        - entity fight compatibility through role='challenged'
         """
         side = self._get_fight_side_by_role(
             fight_state=fight_state,
@@ -5238,7 +5879,7 @@ class DungeonGraph:
             "user_damage": None,
             "adjacent_coords": [],
             "affected_players": [],
-            "affected_monsters": [],
+            "affected_entities": [],
         }
 
         user_damage = self.apply_hp_delta_to_player(
@@ -5279,38 +5920,21 @@ class DungeonGraph:
                 if hp_result.get("ko_reaction") and not result.get("ko_reaction"):
                     result["ko_reaction"] = hp_result["ko_reaction"]
 
-            if self._tile_has_active_monster(tile):
-                monster_id = tile.monster_id
-                monster = get_monster_by_id(monster_id)
-                loot_id = monster["loot_id"]
-
-                kill_event = self.record_monster_kill(
-                    monster_id=monster_id,
-                    killer_player=player,
+            if self._tile_has_damageable_entity(tile):
+                entity_damage = self.apply_damage_to_tile_entity(
+                    tile=tile,
+                    damage=1,
+                    injury_mode="combat",
                     source="p_bomb_adjacent_blast",
-                    tile_x=ax,
-                    tile_y=ay,
+                    actor_player=player,
                 )
 
-                tile.monster_id = None
-                tile.object_id = loot_id
+                entity_damage["position"] = {"x": ax, "y": ay}
 
-                result["affected_monsters"].append({
-                    "monster_id": monster_id,
-                    "position": {"x": ax, "y": ay},
-                    "sort": monster.get("sort"),
-                    "damage": "instant_kill",
-                    "affected": True,
-                    "killed": True,
-                    "loot_id": loot_id,
-                    "loot_dropped": True,
-                    "kill_event": kill_event,
-                    "reason": "p_bomb_adjacent_instant_kill_loot_dropped",
-                })
-
+                result["affected_entities"].append(entity_damage)
         return result
 
-    def _build_monster_encounter_for_active_player(
+    def _build_entity_encounter_for_active_player(
             self,
             *,
             player: Player,
@@ -5318,7 +5942,7 @@ class DungeonGraph:
             entry_cause: str,
     ) -> dict[str, Any]:
         """
-        Build the mandatory monster-encounter state after active player enters a monster tile.
+        Build the mandatory entity-encounter state after active player enters a entity tile.
 
         Rules:
         - Everyone must fight by default.
@@ -5356,7 +5980,7 @@ class DungeonGraph:
         return {
             "tile_x": tile.x,
             "tile_y": tile.y,
-            "monster_id": tile.monster_id,
+            "entity_id": tile.entity_id,
             "entered_by": entry_cause,
             "can_skip": can_skip,
             "skip_skill_id": skip_skill_id,
@@ -5364,7 +5988,7 @@ class DungeonGraph:
             "must_fight_reason": must_fight_reason,
         }
 
-    def _maybe_enter_monster_encounter_after_entry(
+    def _maybe_enter_entity_encounter_after_entry(
             self,
             *,
             player: Player,
@@ -5372,7 +5996,7 @@ class DungeonGraph:
             entry_cause: str,
     ) -> Optional[dict[str, Any]]:
         """
-        Enter mandatory monster encounter mode if active player entered a monster tile.
+        Enter mandatory entity encounter mode if active player entered a entity tile.
 
         This does NOT start the fight directly.
         UI/global fight button starts the fight.
@@ -5382,17 +6006,17 @@ class DungeonGraph:
         if player.player_id != turn.owner_player_id:
             return None
 
-        if not self._tile_has_active_monster(tile):
+        if not self._tile_has_active_entity(tile):
             return None
 
-        encounter = self._build_monster_encounter_for_active_player(
+        encounter = self._build_entity_encounter_for_active_player(
             player=player,
             tile=tile,
             entry_cause=entry_cause,
         )
 
-        turn.pending_monster_encounter = encounter
-        self.set_turn_mode("awaiting_monster_encounter")
+        turn.pending_entity_encounter = encounter
+        self.set_turn_mode("awaiting_entity_encounter")
 
         return encounter
     
@@ -5439,7 +6063,11 @@ class DungeonGraph:
                     "skills_ui": self.build_skill_ui_for_player(p),
                 }
                 for p in self.players
-                if p.player_id != player.player_id and p.is_conscious
+                if (
+                        p.player_id != player.player_id
+                        and p.is_conscious
+                        and self._player_is_active_in_game(p)
+                )
             ],
         }
 
@@ -5474,7 +6102,11 @@ class DungeonGraph:
 
         eligible_targets = [
             p for p in self.players
-            if p.player_id != player.player_id and p.is_conscious
+            if (
+                    p.player_id != player.player_id
+                    and p.is_conscious
+                    and self._player_is_active_in_game(p)
+            )
         ]
 
         if not eligible_targets:
@@ -5495,9 +6127,9 @@ class DungeonGraph:
 
         return arena_choice
 
-    def _validate_and_apply_monster_skip_before_move(self) -> dict[str, Any]:
+    def _validate_and_apply_entity_skip_before_move(self) -> dict[str, Any]:
         """
-        Allow movement out of awaiting_monster_encounter only for valid skip skills.
+        Allow movement out of awaiting_entity_encounter only for valid skip skills.
 
         skill_thi_02:
         - no HP cost
@@ -5509,12 +6141,12 @@ class DungeonGraph:
         """
         turn, active = self.ensure_active_player_owns_turn()
 
-        encounter = turn.pending_monster_encounter
+        encounter = turn.pending_entity_encounter
         if not encounter:
-            raise ValueError("No pending monster encounter.")
+            raise ValueError("No pending entity encounter.")
 
         if not encounter.get("can_skip"):
-            raise ValueError("You must fight this monster before moving.")
+            raise ValueError("You must fight this entity before moving.")
 
         if turn.actions_left <= 0:
             raise ValueError("No Actions left; you must fight.")
@@ -5522,10 +6154,10 @@ class DungeonGraph:
         skill_id = encounter.get("skip_skill_id")
 
         if skill_id not in ("skill_thi_02", "skill_pri_02"):
-            raise ValueError("Unsupported monster skip skill.")
+            raise ValueError("Unsupported entity skip skill.")
 
         if not active.is_skill_active(skill_id):
-            raise ValueError("Monster skip skill is no longer active.")
+            raise ValueError("Entity skip skill is no longer active.")
 
         hp_result = None
 
@@ -5536,13 +6168,13 @@ class DungeonGraph:
             hp_result = self.apply_hp_delta_to_player(
                 player=active,
                 delta=-1,
-                source="skill_pri_02_skip_monster",
+                source="skill_pri_02_skip_entity",
             )
 
             if active.hp <= 0:
                 raise ValueError("Internal rule error: skill_pri_02 skip may not cause unconsciousness.")
 
-        turn.pending_monster_encounter = None
+        turn.pending_entity_encounter = None
         self.set_turn_mode("idle")
 
         return {
@@ -5552,7 +6184,7 @@ class DungeonGraph:
             "skipped_from": {
                 "x": encounter.get("tile_x"),
                 "y": encounter.get("tile_y"),
-                "monster_id": encounter.get("monster_id"),
+                "entity_id": encounter.get("entity_id"),
             },
         }
     
@@ -5567,15 +6199,15 @@ class DungeonGraph:
         Apply HP-related fight consequences.
 
         Current implemented HP effects:
-        - Normal monster-fight loss:
-            outcome == "initiator_win" means monster wins, player loses 1 HP.
+        - Normal entity-fight loss:
+            outcome == "initiator_win" means entity wins, player loses 1 HP.
 
         - skill_wlk_01:
             If selected in fight-local choices, player sacrifices 1 HP.
             This applies regardless of win/loss/tie.
 
         - skill_alc_01:
-            If player loses by 1 or 2 strength, the normal monster-damage HP loss is cancelled.
+            If player loses by 1 or 2 strength, the normal entity-damage HP loss is cancelled.
             It does NOT cancel voluntary costs such as skill_wlk_01.
 
         Returns a diagnostic dictionary for API/debug visibility.
@@ -5590,23 +6222,76 @@ class DungeonGraph:
         )
 
         # --------------------------------------------------
-        # Normal monster damage on loss
+        # Normal entity damage on loss
         # --------------------------------------------------
-        monster_damage_delta = 0
+        entity_damage_delta = 0
 
         if outcome == "initiator_win":
-            monster_damage_delta = -1
+            fight_tile = self.get_tile(
+                fight_state.context.tile_x,
+                fight_state.context.tile_y,
+            )
 
-            hp_effects.append({
-                "kind": "monster_damage",
-                "delta": monster_damage_delta,
-                "reason": "Player lost the fight.",
-                "cancelled": False,
-            })
+            entity_sort = self._get_tile_entity_sort(fight_tile)
+
+            # --------------------------------------------------
+            # ITM entities cannot hurt the player.
+            #
+            # They may still be fought/damaged if "combat" is an
+            # allowed injury mode, but losing against an item-like
+            # entity causes no HP loss.
+            # --------------------------------------------------
+            if entity_sort == "ITM":
+                entity_damage_delta = 0
+
+                hp_effects.append({
+                    "kind": "entity_damage",
+                    "delta": 0,
+                    "reason": "Player lost against an ITM entity; ITM entities do not damage players.",
+                    "cancelled": True,
+                    "cancelled_by": "entity_sort_ITM",
+                    "entity_sort": entity_sort,
+                })
+
+            else:
+                entity_damage_delta = -1
+
+                hp_effects.append({
+                    "kind": "entity_damage",
+                    "delta": entity_damage_delta,
+                    "reason": "Player lost the fight.",
+                    "cancelled": False,
+                    "entity_sort": entity_sort,
+                })
+
+                # --------------------------------------------------
+                # skill_alc_01:
+                # loss by 1 or 2 causes no entity-damage HP loss
+                # --------------------------------------------------
+                if player.is_skill_active("skill_alc_01"):
+                    strength_diff = (
+                            fight_state.prediction.initiator_total
+                            - fight_state.prediction.challenged_total
+                    )
+
+                    if 1 <= strength_diff <= 2:
+                        entity_damage_delta = 0
+
+                        hp_effects[-1]["delta"] = 0
+                        hp_effects[-1]["cancelled"] = True
+                        hp_effects[-1]["cancelled_by"] = "skill_alc_01"
+                        hp_effects[-1]["strength_diff"] = strength_diff
+
+                        hp_effects.append({
+                            "kind": "skill_modifier",
+                            "skill_id": "skill_alc_01",
+                            "delta": 0,
+                            "reason": "Loss by 1 or 2 does not cause entity-damage HP loss.",
+                        })
 
             # --------------------------------------------------
             # skill_alc_01:
-            # loss by 1 or 2 causes no monster-damage HP loss
+            # loss by 1 or 2 causes no entity-damage HP loss
             # --------------------------------------------------
             if player.is_skill_active("skill_alc_01"):
                 strength_diff = (
@@ -5615,7 +6300,7 @@ class DungeonGraph:
                 )
 
                 if 1 <= strength_diff <= 2:
-                    monster_damage_delta = 0
+                    entity_damage_delta = 0
 
                     hp_effects[-1]["delta"] = 0
                     hp_effects[-1]["cancelled"] = True
@@ -5626,10 +6311,10 @@ class DungeonGraph:
                         "kind": "skill_modifier",
                         "skill_id": "skill_alc_01",
                         "delta": 0,
-                        "reason": "Loss by 1 or 2 does not cause monster-damage HP loss.",
+                        "reason": "Loss by 1 or 2 does not cause entity-damage HP loss.",
                     })
 
-        total_delta += monster_damage_delta
+        total_delta += entity_damage_delta
 
         # --------------------------------------------------
         # skill_wlk_01:
@@ -5895,7 +6580,7 @@ class DungeonGraph:
 
         return dice.die_1 == 6 or dice.die_2 == 6
     
-    def _resolve_active_player_unconscious_after_monster_fight(
+    def _resolve_active_player_unconscious_after_entity_fight(
             self,
             *,
             source: str,
@@ -5907,10 +6592,10 @@ class DungeonGraph:
             action_kind: str,
     ) -> dict:
         """
-        Resolve generic active-player KO after a monster fight.
+        Resolve generic active-player KO after a entity fight.
 
         Rule:
-        - If active player reaches 0 HP during monster fight:
+        - If active player reaches 0 HP during entity fight:
             - skill_swo_02 continuation is ignored
             - player retreats to last_valid_safe_tile if possible
             - turn ends
@@ -5935,7 +6620,7 @@ class DungeonGraph:
                 turn.pending_item_pickup = False
                 turn.pending_curse_choice = False
                 turn.pending_poison_choice = None
-                turn.pending_monster_encounter = None
+                turn.pending_entity_encounter = None
                 turn.pending_arena_pvp = None
                 turn.pending_arena_loot_choice = None
                 turn.fight_continue_after_item_pickup = False
@@ -5958,7 +6643,7 @@ class DungeonGraph:
             turn.pending_item_pickup = False
             turn.pending_curse_choice = False
             turn.pending_poison_choice = None
-            turn.pending_monster_encounter = None
+            turn.pending_entity_encounter = None
             turn.pending_arena_pvp = None
             turn.pending_arena_loot_choice = None
             turn.fight_continue_after_item_pickup = False
@@ -5984,7 +6669,7 @@ class DungeonGraph:
                 "source": source,
                 "hp": active.hp,
                 "skill_swo_02_ignored": True,
-                "reason": "active_player_reached_0_hp_during_monster_fight",
+                "reason": "active_player_reached_0_hp_during_entity_fight",
             },
             "retreat_result": retreat_result,
             "players": self.serialize_players(),
@@ -6092,105 +6777,256 @@ class DungeonGraph:
             "active_player": self.serialize_active_player(),
         }
 
-    def _get_tile_monster_sort(self, tile: Optional[TileNode]) -> Optional[str]:
+    def _get_tile_entity_sort(self, tile: Optional[TileNode]) -> Optional[str]:
         """
-        Return monster sort for a tile's monster_id.
+        Return entity sort for a tile's entity_id.
 
         Current sort semantics:
-        - LIV / UND = active hostile monster
+        - LIV / UND = active hostile entity
         - ITM       = passive object-like encounter, e.g. Chest
         """
-        if tile is None or not tile.monster_id:
+        if tile is None or not tile.entity_id:
             return None
 
-        monster = get_monster_by_id(tile.monster_id)
-        return monster.get("sort")
+        entity = get_entity_by_id(tile.entity_id)
+        return entity.get("sort")
 
-    def _tile_has_active_monster(self, tile: Optional[TileNode]) -> bool:
+    def tile_content_exclusivity_enabled(self) -> bool:
         """
-        Active monsters block safe retreat and force monster encounter.
+        Rule switch:
+        if enabled, a tile may contain at most one board-content piece:
+        entity_id OR object_id.
 
-        Current active monster sorts:
+        Players are not counted as tile content here.
+        """
+        return bool(
+            getattr(self, "rules_mechanics", {})
+            .get("tile_content_exclusivity", True)
+        )
+
+    def _tile_has_any_board_content(self, tile: Optional[TileNode]) -> bool:
+        """
+        Board-content means:
+        - entity_id
+        - object_id
+
+        Players are deliberately excluded.
+        """
+        if tile is None:
+            return False
+
+        return bool(tile.entity_id or tile.object_id)
+
+    def _assert_can_place_entity_on_tile(
+            self,
+            *,
+            tile: TileNode,
+            entity_id: str,
+    ) -> None:
+        """
+        Validate entity placement according to tile content exclusivity.
+        """
+        if not self.tile_content_exclusivity_enabled():
+            return
+
+        if tile.object_id is not None:
+            raise ValueError(
+                f"Cannot place entity {entity_id!r} on tile ({tile.x}, {tile.y}): "
+                f"tile already contains object {tile.object_id!r}."
+            )
+
+    def _assert_can_place_ground_object_on_tile(
+            self,
+            *,
+            tile: TileNode,
+            object_id: str,
+            source: str,
+    ) -> None:
+        """
+        Validate object/loot placement according to tile content exclusivity.
+        """
+        if not self.tile_content_exclusivity_enabled():
+            return
+
+        if tile.entity_id is not None:
+            raise ValueError(
+                f"Cannot place object {object_id!r} on tile ({tile.x}, {tile.y}) from {source}: "
+                f"tile already contains entity {tile.entity_id!r}."
+            )
+
+        if tile.object_id is not None:
+            raise ValueError(
+                f"Cannot place object {object_id!r} on tile ({tile.x}, {tile.y}) from {source}: "
+                f"tile already contains object {tile.object_id!r}."
+            )
+
+    def _place_ground_object_on_tile(
+            self,
+            *,
+            tile: TileNode,
+            object_id: str,
+            source: str,
+    ) -> None:
+        """
+        Central setter for tile.object_id.
+
+        Use this instead of direct tile.object_id = ...
+        whenever a new ground object is created/dropped.
+        """
+        self._assert_can_place_ground_object_on_tile(
+            tile=tile,
+            object_id=object_id,
+            source=source,
+        )
+
+        tile.object_id = object_id
+
+    def _tile_entity_allows_injury_mode(
+            self,
+            tile: Optional[TileNode],
+            injury_mode: str,
+    ) -> bool:
+        """
+        True if tile has an entity and that entity explicitly allows
+        the requested injury mode.
+        """
+        if tile is None or not tile.entity_id:
+            return False
+
+        entity = get_entity_by_id(tile.entity_id)
+        injury_modes = set(entity.get("injury_modes") or [])
+
+        return injury_mode in injury_modes
+
+    def _tile_entity_allows_combat(self, tile: Optional[TileNode]) -> bool:
+        """
+        True if the tile entity may be fought through the normal combat/fight system.
+        """
+        return self._tile_entity_allows_injury_mode(
+            tile=tile,
+            injury_mode="combat",
+        )
+
+    def can_start_combat_on_tile(self, tile: Optional[TileNode]) -> tuple[bool, str]:
+        """
+        Source-of-truth validator for whether the normal fight system may be started.
+
+        This is deliberately based on injury_modes, not entity sort.
+        Example:
+        - Chest: sort=ITM, injury_modes=["key"] -> cannot combat
+        - ExitHatch: sort=ITM, injury_modes=["combat", "key"] -> can combat
+        - GiantRat: sort=LIV, injury_modes=["combat"] -> can combat
+        """
+        if tile is None:
+            return False, "tile_not_found"
+
+        if not tile.entity_id:
+            return False, "tile_has_no_entity"
+
+        entity = get_entity_by_id(tile.entity_id)
+        injury_modes = set(entity.get("injury_modes") or [])
+
+        if "combat" not in injury_modes:
+            return False, f"entity_not_combat_injurable:{tile.entity_id}"
+
+        return True, "can_start_combat"
+    
+    def _tile_has_damageable_entity(self, tile: Optional[TileNode]) -> bool:
+        if tile is None or not tile.entity_id:
+            return False
+
+        hp = tile.entity_hp
+        if hp is None:
+            entity = get_entity_by_id(tile.entity_id)
+            hp = int(entity.get("hp", 1))
+
+        return hp > 0
+    
+    def _tile_has_active_entity(self, tile: Optional[TileNode]) -> bool:
+        """
+        Active entities block safe retreat and force entity encounter.
+
+        Current active entity sorts:
         - LIV
         - UND
 
-        Passive / object-like monster entries:
+        Passive / object-like entity entries:
         - ITM, e.g. Chest
         """
-        monster_sort = self._get_tile_monster_sort(tile)
-        return monster_sort in {"LIV", "UND"}
+        entity_sort = self._get_tile_entity_sort(tile)
+        return entity_sort in {"LIV", "UND"}
     
     # --------------------------
     # Game-end / result helpers
     # --------------------------
 
-    def _normalize_monster_id(self, monster_id: str) -> str:
+    def _normalize_entity_id(self, entity_id: str) -> str:
         """
-        Normalize monster IDs for config comparison.
+        Normalize entity IDs for config comparison.
 
-        Runtime monster IDs remain canonical/case-sensitive.
+        Runtime entity IDs remain canonical/case-sensitive.
         End-condition matching is case-insensitive.
         """
-        return str(monster_id or "").strip().lower()
+        return str(entity_id or "").strip().lower()
 
-    def _get_initial_monster_counts_by_normalized_id(self) -> dict[str, int]:
+    def _get_initial_entity_counts_by_normalized_id(self) -> dict[str, int]:
         """
-        Count monsters from the pristine original monster pool.
+        Count entities from the pristine original entity pool.
 
-        Used by purge mode when number_of_monsters == 0,
-        meaning: all initially existing monsters of that configured type.
+        Used by purge mode when number_of_entities == 0,
+        meaning: all initially existing entities of that configured type.
         """
         counts: dict[str, int] = {}
 
-        for monster in self._orig_monster_pool:
-            monster_id = monster.get("monster_id")
-            if not monster_id:
+        for entity in self._orig_entity_pool:
+            entity_id = entity.get("entity_id")
+            if not entity_id:
                 continue
 
-            key = self._normalize_monster_id(monster_id)
+            key = self._normalize_entity_id(entity_id)
             counts[key] = counts.get(key, 0) + 1
 
         return counts
 
-    def record_monster_kill(
+    def record_entity_kill(
             self,
             *,
-            monster_id: str,
+            entity_id: str,
             killer_player: Optional[Player],
             source: str,
             tile_x: Optional[int] = None,
             tile_y: Optional[int] = None,
     ) -> dict[str, Any]:
         """
-        Persistently record that a monster was killed.
+        Persistently record that a entity was killed.
 
         Important:
-        - This is called when the monster is actually removed from the board.
+        - This is called when the entity is actually removed from the board.
         - End-condition evaluation is NOT done here.
         - End-condition evaluation happens only after turn finalization.
         """
-        canonical_monster_id = str(monster_id)
-        normalized_monster_id = self._normalize_monster_id(canonical_monster_id)
+        canonical_entity_id = str(entity_id)
+        normalized_entity_id = self._normalize_entity_id(canonical_entity_id)
 
         player_id = killer_player.player_id if killer_player is not None else None
         player_name = killer_player.display_name if killer_player is not None else None
 
-        self.kills_total_by_monster_id[normalized_monster_id] = (
-            self.kills_total_by_monster_id.get(normalized_monster_id, 0) + 1
+        self.kills_total_by_entity_id[normalized_entity_id] = (
+            self.kills_total_by_entity_id.get(normalized_entity_id, 0) + 1
         )
 
         if player_id is not None:
             if player_id not in self.kills_by_player_id:
                 self.kills_by_player_id[player_id] = {}
 
-            self.kills_by_player_id[player_id][normalized_monster_id] = (
-                self.kills_by_player_id[player_id].get(normalized_monster_id, 0) + 1
+            self.kills_by_player_id[player_id][normalized_entity_id] = (
+                self.kills_by_player_id[player_id].get(normalized_entity_id, 0) + 1
             )
 
         event = {
             "kill_index": len(self.kill_log) + 1,
-            "monster_id": canonical_monster_id,
-            "monster_id_normalized": normalized_monster_id,
+            "entity_id": canonical_entity_id,
+            "entity_id_normalized": normalized_entity_id,
             "killer_player_id": player_id,
             "killer_player_name": player_name,
             "source": source,
@@ -6210,8 +7046,8 @@ class DungeonGraph:
         Result-ready kill statistics.
 
         Includes:
-        - global totals by monster ID
-        - per-player totals by monster ID
+        - global totals by entity ID
+        - per-player totals by entity ID
         - chronological kill log
         """
         per_player: dict[int, dict[str, Any]] = {}
@@ -6222,62 +7058,319 @@ class DungeonGraph:
             per_player[player.player_id] = {
                 "player_id": player.player_id,
                 "display_name": player.display_name,
-                "kills_by_monster_id": dict(player_kills),
+                "kills_by_entity_id": dict(player_kills),
                 "total_kills": sum(player_kills.values()),
             }
 
         return {
-            "kills_total_by_monster_id": dict(self.kills_total_by_monster_id),
+            "kills_total_by_entity_id": dict(self.kills_total_by_entity_id),
             "kills_by_player_id": per_player,
             "kill_log": list(self.kill_log),
         }
 
+    def _evaluate_purge_end_condition_from_details(
+            self,
+            details: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """
+        Purge mode:
+
+        Game ends at the end of any player's turn when the configured
+        number of configured entity IDs has been killed.
+
+        Config shape:
+        GENERAL["game_mode_details"] = {
+            "entities": ["dragon"],
+            "number_of_entities": 1,
+            "allow_early_escape": True,
+        }
+
+        Semantics:
+        - entities:
+            list of entity IDs to count, case-insensitive
+        - number_of_entities:
+            required total kill count across the selected entity IDs
+        """
+        raw_entity_ids = details.get("entities", ["dragon"])
+        required_kill_count = int(details.get("number_of_entities", 1))
+
+        if required_kill_count <= 0:
+            return None
+
+        normalized_targets = {
+            self._normalize_entity_id(entity_id)
+            for entity_id in raw_entity_ids
+        }
+
+        if not normalized_targets:
+            return None
+
+        killed_count = 0
+        killed_by_target: dict[str, int] = {}
+
+        for entity_id, count in self.kills_total_by_entity_id.items():
+            normalized_entity_id = self._normalize_entity_id(entity_id)
+
+            if normalized_entity_id in normalized_targets:
+                killed_by_target[entity_id] = int(count)
+                killed_count += int(count)
+
+        if killed_count < required_kill_count:
+            return None
+
+        return {
+            "met": True,
+            "mode": "purge",
+            "reason": "required_entities_killed",
+            "targets": sorted(normalized_targets),
+            "required_kill_count": required_kill_count,
+            "killed_count": killed_count,
+            "killed_by_target": killed_by_target,
+            "details": copy.deepcopy(details),
+        }
+
+    def _evaluate_cave_collapse_end_condition_from_details(
+            self,
+            details: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """
+        Cave-collapse mode:
+
+        The configured purge goal is still the trigger condition.
+        But when the goal is met, the game does not enter results.
+        Instead, it enters the escape/disaster phase.
+        """
+        purge_condition = self._evaluate_purge_end_condition_from_details(details)
+
+        if purge_condition is None:
+            return None
+
+        return {
+            **purge_condition,
+            "mode": "cave_collapse",
+            "reason": "purge_goal_reached_start_cave_collapse",
+            "purge_condition": purge_condition,
+        }
+
+    def _evaluate_firestorm_end_condition_from_details(
+            self,
+            details: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """
+        Firestorm mode:
+
+        The configured purge goal is still the trigger condition.
+        But when the goal is met, the game does not enter results.
+        Instead, it enters the escape/disaster phase with pathing-style destruction later.
+        """
+        purge_condition = self._evaluate_purge_end_condition_from_details(details)
+
+        if purge_condition is None:
+            return None
+
+        return {
+            **purge_condition,
+            "mode": "firestorm",
+            "reason": "purge_goal_reached_start_firestorm",
+            "purge_condition": purge_condition,
+        }
+    
+    def _should_start_escape_phase_from_end_condition(
+            self,
+            end_condition: Optional[dict[str, Any]],
+    ) -> bool:
+        """
+        Decide whether an end-condition-like result should start the
+        escape/world-event phase instead of entering final results.
+        """
+        if end_condition is None:
+            return False
+
+        if self.game_phase != "exploration":
+            return False
+
+        mode = str(end_condition.get("mode") or "").strip().lower()
+
+        return mode in {"cave_collapse", "firestorm"}
+    
+    def start_escape_phase_from_end_condition(
+            self,
+            *,
+            end_condition: dict[str, Any],
+            ended_turn: dict[str, Any],
+            ended_player: dict[str, Any],
+            healing_result: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """
+        Start the post-purge escape/disaster phase.
+
+        This does NOT collapse tiles yet.
+        This does NOT enter result scope.
+        This only:
+        - marks game_phase = escape
+        - stores the trigger
+        - prepares/inserts the Dungeon GameMaster actor after the player
+          whose turn just ended
+        - advances to the next real player for now
+
+        Later patch:
+        - Dungeon actor will become executable / auto-resolved.
+        """
+        mode = str(end_condition.get("mode") or "").strip().lower()
+
+        if mode not in {"cave_collapse", "firestorm"}:
+            raise ValueError(f"Cannot start escape phase from mode: {mode!r}")
+
+        self.game_phase = "escape"
+        self.escape_trigger = {
+            "mode": mode,
+            "end_condition": copy.deepcopy(end_condition),
+            "ended_turn": copy.deepcopy(ended_turn),
+            "ended_player": copy.deepcopy(ended_player),
+            "healing": copy.deepcopy(healing_result),
+        }
+
+        gm = self.ensure_dungeon_game_master()
+        gm.world_event_mode = mode
+        gm.world_event_label = (
+            "Cave Collapse" if mode == "cave_collapse"
+            else "Firestorm"
+        )
+
+        # Insert Dungeon into the parallel actor sequence.
+        dungeon_insert_result = self.insert_dungeon_actor_after_active_player()
+
+        # For this milestone, gameplay turn execution is still player-based.
+        # So after inserting the visible Dungeon placeholder, continue to
+        # the next real player as before.
+        advance_result = self.advance_to_next_player_turn()
+
+        return {
+            "ok": True,
+            "status": "escape_phase_started",
+            "game_phase": self.game_phase,
+            "escape_trigger": self.escape_trigger,
+            "dungeon_insert_result": dungeon_insert_result,
+            "advance_result": advance_result,
+            "active_actor": self.serialize_active_actor(),
+            "turn_actors": self.serialize_turn_actors(),
+            "game_masters": self.serialize_game_masters(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+    
+    def _evaluate_timed_end_condition_from_details(
+            self,
+            details: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """
+        Future mode.
+
+        Example future config:
+        {
+            "max_seconds": 3600
+        }
+        """
+        return None
+
+    def _evaluate_turn_based_end_condition_from_details(
+            self,
+            details: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """
+        Future mode.
+
+        Example future config:
+        {
+            "turns_per_player": 10
+        }
+        """
+        turns_per_player = details.get("turns_per_player")
+
+        if turns_per_player is None:
+            return None
+
+        total_players = max(1, len(self.players))
+        max_turns = int(turns_per_player) * total_players
+
+        if self.turn_counter < max_turns:
+            return None
+
+        return {
+            "met": True,
+            "mode": "turn_based",
+            "reason": "turn_limit_reached",
+            "turn_counter": self.turn_counter,
+            "max_turns": max_turns,
+            "turns_per_player": int(turns_per_player),
+        }
+
+    def _evaluate_on_demand_end_condition_from_details(
+            self,
+            details: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """
+        Future mode.
+
+        Requires a future explicit 'END GAME' action to set a runtime flag.
+        """
+        if not bool(getattr(self, "manual_end_game_requested", False)):
+            return None
+
+        return {
+            "met": True,
+            "mode": "on_demand",
+            "reason": "manual_end_game_requested",
+        }
+    
+    
     def _evaluate_purge_end_condition(self) -> Optional[dict[str, Any]]:
         """
         Purge mode:
 
         Game ends if, at the end of a player's turn,
-        at least the configured number of each configured monster type has been killed.
+        at least the configured number of each configured entity type has been killed.
 
         Config shape:
         GENERAL["game_mode"] == "purge"
         GENERAL["game_mode_details"] = {
-            "monsters": ["dragon"],
-            "number_of_monsters": "all" | 0 | int,
+            "entities": ["dragon"],
+            "number_of_entities": "all" | 0 | int,
             ...
         }
 
         Semantics:
-        - "all" or 0 means: all monsters of that type from the initial monster pool.
+        - "all" or 0 means: all entities of that type from the initial entity pool.
         - int N > 0 means: at least N killed.
-        - monster matching is case-insensitive.
+        - entity matching is case-insensitive.
         """
         details = self.rules_general.get("game_mode_details", {}) or {}
 
-        raw_monsters = details.get("monsters", [])
-        if not raw_monsters:
+        raw_entities = details.get("entities", [])
+        if not raw_entities:
             return None
 
-        target_monster_ids = [
-            self._normalize_monster_id(monster_id)
-            for monster_id in raw_monsters
-            if str(monster_id or "").strip()
+        target_entity_ids = [
+            self._normalize_entity_id(entity_id)
+            for entity_id in raw_entities
+            if str(entity_id or "").strip()
         ]
 
-        if not target_monster_ids:
+        if not target_entity_ids:
             return None
 
-        raw_required = details.get("number_of_monsters", 1)
+        raw_required = details.get("number_of_entities", 1)
 
-        initial_counts = self._get_initial_monster_counts_by_normalized_id()
+        initial_counts = self._get_initial_entity_counts_by_normalized_id()
 
         checks: list[dict[str, Any]] = []
 
-        for normalized_monster_id in target_monster_ids:
-            killed = int(self.kills_total_by_monster_id.get(normalized_monster_id, 0))
+        for normalized_entity_id in target_entity_ids:
+            killed = int(self.kills_total_by_entity_id.get(normalized_entity_id, 0))
 
             if raw_required == "all" or raw_required == 0:
-                required = int(initial_counts.get(normalized_monster_id, 0))
+                required = int(initial_counts.get(normalized_entity_id, 0))
                 requirement_mode = "all"
             else:
                 required = int(raw_required)
@@ -6286,7 +7379,7 @@ class DungeonGraph:
             met = killed >= required and required > 0
 
             checks.append({
-                "monster_id_normalized": normalized_monster_id,
+                "entity_id_normalized": normalized_entity_id,
                 "killed": killed,
                 "required": required,
                 "met": met,
@@ -6301,34 +7394,100 @@ class DungeonGraph:
         return {
             "met": True,
             "mode": "purge",
-            "reason": "configured_monster_kill_goal_reached",
+            "reason": "configured_entity_kill_goal_reached",
             "details": details,
             "checks": checks,
+        }
+
+    def _evaluate_all_players_inactive_end_condition(self) -> Optional[dict[str, Any]]:
+        """
+        Game ends if no player remains active in the game.
+
+        A player who left/escaped the dungeon remains in self.players
+        for final statistics, but is no longer active in turn rotation
+        or targetable interactions.
+        """
+        active_players = self._active_game_players()
+
+        if active_players:
+            return None
+
+        return {
+            "met": True,
+            "mode": "all_players_inactive",
+            "reason": "all_players_quit_or_escaped",
+            "active_player_count": 0,
+            "escaped_player_ids": [
+                p.player_id
+                for p in self.players
+                if bool(getattr(p, "has_quit_game", False))
+            ],
+            "total_player_count": len(self.players),
         }
 
     def evaluate_end_conditions_after_turn(self) -> Optional[dict[str, Any]]:
         """
         Central end-condition dispatcher.
 
-        Called only after a player's turn is actually finalized,
-        never mid-action and never immediately when a monster dies.
+        Called only after a player's turn is finalized.
+
+        Rule hierarchy:
+        1. Universal hard-stop rules.
+           These apply regardless of GENERAL["game_mode"].
+
+        2. Runtime configured game-mode rules.
+           These are selected through self.rules_general["game_mode"] and
+           self.rules_general["game_mode_details"].
         """
         if self.game_over:
             return self.game_result
 
-        mode = str(self.rules_general.get("game_mode", "purge") or "purge").strip().lower()
+        # --------------------------------------------------
+        # 1. Universal hard-stop:
+        # no active players remain.
+        #
+        # This overrides every game mode, including "never".
+        # Escaped / quit players remain in self.players for statistics,
+        # but are not active participants anymore.
+        # --------------------------------------------------
+        no_active_players_condition = self._evaluate_all_players_inactive_end_condition()
+
+        if no_active_players_condition is not None:
+            return no_active_players_condition
+
+        # --------------------------------------------------
+        # 2. Runtime game-mode dispatcher.
+        # --------------------------------------------------
+        mode = str(
+            self.rules_general.get("game_mode", "purge") or "purge"
+        ).strip().lower()
+
+        details = self.rules_general.get("game_mode_details", {}) or {}
 
         if mode == "purge":
-            return self._evaluate_purge_end_condition()
+            return self._evaluate_purge_end_condition_from_details(details)
 
-        # Future:
-        # if mode == "cave_collapse":
-        #     return self._evaluate_cave_collapse_end_condition()
-        #
-        # if mode == "firestorm":
-        #     return self._evaluate_firestorm_end_condition()
+        if mode == "cave_collapse":
+            return self._evaluate_cave_collapse_end_condition_from_details(details)
 
-        return None
+        if mode == "firestorm":
+            return self._evaluate_firestorm_end_condition_from_details(details)
+
+        if mode == "timed":
+            return self._evaluate_timed_end_condition_from_details(details)
+
+        if mode == "turn_based":
+            return self._evaluate_turn_based_end_condition_from_details(details)
+
+        if mode == "on_demand":
+            return self._evaluate_on_demand_end_condition_from_details(details)
+
+        if mode == "never":
+            return None
+
+        # Defensive failure: invalid game mode should not silently disable
+        # game ending.
+        raise ValueError(f"Unsupported game_mode: {mode!r}")
 
     def _enter_results_scope(
             self,
@@ -6336,30 +7495,70 @@ class DungeonGraph:
             end_condition: dict[str, Any],
             ended_turn: dict[str, Any],
             ended_player: dict[str, Any],
-            healing_result: Optional[dict[str, Any]],
+            healing_result: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """
-        Freeze the game into results scope.
+        Enter final results scope.
 
-        Does not advance to the next player.
+        This is the canonical game-over transition used by normal
+        end-condition evaluation after a finalized turn.
+
+        It keeps all players serialized for the result screen.
         """
         self.game_scope = "results"
         self.game_over = True
 
-        self.game_result = {
+        result = {
             "ok": True,
             "status": "game_over",
             "scope": self.game_scope,
+            "game_scope": self.game_scope,
+            "game_over": self.game_over,
             "redirect_to": "/phase4",
+
             "end_condition": end_condition,
             "ended_turn": ended_turn,
             "ended_player": ended_player,
             "healing": healing_result,
+
             "players": self.serialize_players(),
+            "active_player": self.serialize_active_player(),
             "kill_stats": self.serialize_kill_stats(),
         }
 
-        return self.game_result
+        self.game_result = result
+
+        # No active turn after game over.
+        self.turn_state = None
+        self.current_fight_state = None
+
+        return result
+
+    def _enter_results_scope_all_players_inactive(
+            self,
+            *,
+            reason: str,
+    ) -> dict[str, Any]:
+        """
+        End the game because no active player remains.
+        """
+        return self._enter_results_scope(
+            end_condition={
+                "met": True,
+                "mode": "all_players_inactive",
+                "reason": reason,
+                "active_player_count": 0,
+                "escaped_player_ids": [
+                    p.player_id
+                    for p in self.players
+                    if bool(getattr(p, "has_quit_game", False))
+                ],
+                "total_player_count": len(self.players),
+            },
+            ended_turn=self.serialize_turn_state() or {},
+            ended_player=self.serialize_active_player() or {},
+            healing_result=None,
+        )
 
     def serialize_game_results(self) -> dict[str, Any]:
         """
@@ -6380,14 +7579,15 @@ class DungeonGraph:
             ],
             "kill_stats": self.serialize_kill_stats(),
         }
-    
+
     def _execute_curse_free_action(self, action: CurseFreeAction) -> dict:
         """
         Backend implementation for the Mummy kill curse choice.
 
         Flow:
         - only allowed in awaiting_curse_choice mode
-        - active player selects one co-player
+        - active player selects one target player
+        - target must still be active in the game
         - target becomes cursed
         - flow continues into item_pickup mode
         """
@@ -6403,6 +7603,13 @@ class DungeonGraph:
         if target is None:
             raise ValueError("Target player not found.")
 
+        self._assert_player_can_be_interacted_with(
+            target,
+            interaction="curse",
+        )
+
+        # Current rule allows self-curse.
+        # Keep this commented unless you want to forbid it.
         # if target.player_id == active.player_id:
         #     raise ValueError("You cannot curse yourself.")
 
@@ -6421,13 +7628,16 @@ class DungeonGraph:
         else:
             self.enter_forced_item_pickup(origin="post_combat")
 
-        return {"ok": True,
-                "status": "curse_applied",
-                "action_kind": action.kind,
-                "target_player_id": target.player_id,
-                "target_player": target.to_dict(),
-                "turn": self.serialize_turn_state(),
-                "active_player": self.serialize_active_player()}
+        return {
+            "ok": True,
+            "status": "curse_applied",
+            "action_kind": action.kind,
+            "target_player_id": target.player_id,
+            "target_player": target.to_dict(),
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
 
     def _execute_poison_skill_free_action(self, action: PoisonSkillFreeAction) -> dict:
         """
@@ -6436,6 +7646,7 @@ class DungeonGraph:
         Flow:
         - only allowed in awaiting_poison_choice mode
         - active player selects one target player
+        - target must still be active in the game
         - active player selects one exact skill of that player
         - selected skill becomes poisoned
         - flow continues into item_pickup mode, unless skill_bar_02 allows skipping loot
@@ -6451,6 +7662,11 @@ class DungeonGraph:
         target = self._find_player_by_player_id(action.target_player_id)
         if target is None:
             raise ValueError("Target player not found.")
+
+        self._assert_player_can_be_interacted_with(
+            target,
+            interaction="poison",
+        )
 
         poison_result = self._apply_poison_to_player_skill(
             player=target,
@@ -6481,6 +7697,7 @@ class DungeonGraph:
             "target_player": target.to_dict(),
             "turn": self.serialize_turn_state(),
             "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
         }
     
     def _execute_combat_free_action(self, action: CombatFreeAction) -> dict:
@@ -6507,10 +7724,10 @@ class DungeonGraph:
 
     def _execute_retreat_turn_ending_free_action(self, action: RetreatTurnEndingFreeAction) -> dict:
         """
-        Backend implementation for automatic Retreat after a monster-fight loss or draw.
+        Backend implementation for automatic Retreat after a entity-fight loss or draw.
 
         Current Phase-3 semantics:
-        - not player-triggered in normal monster fights
+        - not player-triggered in normal entity fights
         - uses turn_state.last_valid_safe_tile
         - finalizes the turn
         - final turn-finalization may still apply fountain healing effects
@@ -7167,28 +8384,28 @@ class DungeonGraph:
         }
 
     # --------------------------
-    # Monster choice stubs
+    # Entity choice stubs
     # --------------------------
-    def draw_monster_choices(self, count: int) -> dict:
+    def draw_entity_choices(self, count: int) -> dict:
         """
-        Draw monster candidates for selection.
+        Draw entity candidates for selection.
         (stub – no logic yet)
         """
         return {
             "status": "stub",
-            "action": "draw_monster_choices",
+            "action": "draw_entity_choices",
             "count": count,
         }
 
-    def assign_monster(self, monster_id: str, x: int, y: int) -> dict:
+    def assign_entity(self, entity_id: str, x: int, y: int) -> dict:
         """
-        Assign chosen monster to tile.
+        Assign chosen entity to tile.
         (stub – no logic yet)
         """
         return {
             "status": "stub",
-            "action": "assign_monster",
-            "monster_id": monster_id,
+            "action": "assign_entity",
+            "entity_id": entity_id,
             "x": x,
             "y": y,
         }
@@ -7199,7 +8416,20 @@ class DungeonGraph:
         if not (0 <= self.active_player_idx < len(self.players)):
             return None
         return self.players[self.active_player_idx]
+    
+    def _player_is_active_in_game(self, player: Player) -> bool:
+        """
+        A player remains in self.players for statistics after escape,
+        but no longer receives turns.
+        """
+        return not bool(getattr(player, "has_quit_game", False))
 
+    def _active_game_players(self) -> list[Player]:
+        return [
+            p for p in self.players
+            if self._player_is_active_in_game(p)
+        ]
+    
     def get_active_tile(self) -> Optional[TileNode]:
         active = self.get_active_player()
 
@@ -7317,13 +8547,28 @@ class DungeonGraph:
 
         # --------------------------------------------------
         # Case 2: occupied slot + empty ground => drop
+        #
+        # Exclusivity:
+        # - if a tile has any entity, do not allow dropping an object onto it.
+        # - this includes LIV, UND, ITM, Chest, ExitHatch, future Grid, etc.
         # --------------------------------------------------
         if ground_item_id is None and slot_item_id is not None:
+            self._assert_can_place_ground_object_on_tile(
+                tile=tile,
+                object_id=slot_item_id,
+                source="inventory_drop",
+            )
+
             removed = active.drop_item_from_slot(slot_group, slot_index)
             if removed is None:
                 raise ValueError("No item in selected slot.")
 
-            tile.object_id = removed
+            self._place_ground_object_on_tile(
+                tile=tile,
+                object_id=removed,
+                source="inventory_drop",
+            )
+
             self.update_idle_item_pickup_state_after_ground_change()
 
             return {
@@ -7386,7 +8631,23 @@ class DungeonGraph:
 
         # --------------------------------------------------
         # Case 4: occupied slot + compatible ground item => swap
+        #
+        # This is NOT the same as dropping a second object.
+        # It replaces the current ground object with the item
+        # from the selected inventory slot.
+        #
+        # Allowed:
+        # - object <-> inventory item replacement
+        #
+        # Forbidden when tile-content exclusivity is enabled:
+        # - swapping on a tile that still contains an entity
         # --------------------------------------------------
+        if self.tile_content_exclusivity_enabled() and tile.entity_id is not None:
+            raise ValueError(
+                f"Cannot swap item on tile ({tile.x}, {tile.y}): "
+                f"tile already contains entity {tile.entity_id!r}."
+            )
+
         removed = active.drop_item_from_slot(slot_group, slot_index)
         if removed is None:
             raise ValueError("No item in selected slot.")
@@ -7397,7 +8658,10 @@ class DungeonGraph:
             active.place_item_into_slot(slot_group, slot_index, removed)
             raise ValueError("Could not place item into slot.")
 
+        # Replace the old ground object with the removed inventory item.
+        # This is a legal object-for-object swap, not a second object placement.
         tile.object_id = removed
+
         self.update_idle_item_pickup_state_after_ground_change()
 
         return {
@@ -7414,7 +8678,7 @@ class DungeonGraph:
             "turn": self.serialize_turn_state(),
         }
     
-    def start_monster_fight_on_current_tile(self) -> dict:
+    def start_entity_fight_on_current_tile(self) -> dict:
         """
         Compatibility wrapper.
         Later endpoints may directly instantiate StartFightFreeAction.
@@ -7432,7 +8696,7 @@ class DungeonGraph:
     def toss_current_fight(self, role: Literal["initiator", "challenged"] = "challenged") -> dict:
         """
         Compatibility wrapper.
-        Defaults to challenged for existing monster fights.
+        Defaults to challenged for existing entity fights.
         """
         return self.execute_runtime_action(TossFightFreeAction(role=role))
 
@@ -7470,7 +8734,7 @@ class DungeonGraph:
         """
         Toggle one manual combat skill in the current fight.
 
-        Defaults to challenged for existing monster fights.
+        Defaults to challenged for existing entity fights.
         """
         return self.execute_runtime_action(
             ToggleFightSkillFreeAction(
@@ -7486,7 +8750,7 @@ class DungeonGraph:
     ) -> dict:
         """
         Compatibility wrapper.
-        Defaults to challenged for existing monster fights.
+        Defaults to challenged for existing entity fights.
         """
         return self.execute_runtime_action(
             ToggleFightScrollFreeAction(
@@ -7527,7 +8791,7 @@ class DungeonGraph:
                 return True
 
         return False
-    
+
     def can_use_inventory_item_from_slot(
             self,
             *,
@@ -7539,6 +8803,17 @@ class DungeonGraph:
         Validate whether the selected inventory item is an active item-use candidate.
 
         This is for explicit item activation outside combat.
+
+        Supported now:
+        - active scrolls:
+            TP_HEAL
+            LIFESTEAL
+            PURGE
+
+        - active keys:
+            usable only if the active player's current tile contains
+            a damageable entity whose injury_modes include "key"
+
         Combat-only scrolls such as fist/fireball are intentionally excluded here.
         """
         turn = self.ensure_turn_active()
@@ -7552,9 +8827,6 @@ class DungeonGraph:
         if turn.item_use_locked_by_combat:
             return False, "item_use_locked_by_combat", None
 
-        if slot_group != "scroll":
-            return False, "only_scroll_slots_currently_support_item_use", None
-
         item_id = player.get_slot_item(slot_group, slot_index)
         if item_id is None:
             return False, "slot_empty", None
@@ -7563,30 +8835,69 @@ class DungeonGraph:
         if item_feat is None:
             return False, f"unknown_item_id:{item_id}", None
 
-        if item_feat.get("item_type") != "scroll":
-            return False, "slot_item_is_not_scroll", item_feat
-
         if not bool(item_feat.get("active", False)):
             return False, "item_not_active", item_feat
 
+        item_type = item_feat.get("item_type")
         effect = item_feat.get("effect")
 
-        if effect == "TP_HEAL":
-            return True, "usable_tp_heal", item_feat
+        # --------------------------------------------------
+        # Active key use:
+        # key can damage/open a current-tile entity if that entity
+        # explicitly accepts injury_mode == "key".
+        # --------------------------------------------------
+        if slot_group == "key":
+            if item_type != "key":
+                return False, "slot_item_is_not_key", item_feat
 
-        if effect == "LIFESTEAL":
-            return True, "usable_lifesteal", item_feat
+            tile = self.get_tile(player.x, player.y)
+            if tile is None:
+                return False, "active_tile_not_found", item_feat
 
-        if effect == "PURGE":
-            player_is_cursed = bool(getattr(player, "is_cursed", False))
-            player_is_poisoned = bool(getattr(player, "poisoned_skill_ids", set()))
+            if not self._tile_has_damageable_entity(tile):
+                return False, "no_damageable_entity_on_current_tile", item_feat
 
-            if not (player_is_cursed or player_is_poisoned):
-                return False, "purge_requires_player_to_be_cursed_or_poisoned", item_feat
+            entity_id = tile.entity_id
+            if not entity_id:
+                return False, "no_entity_on_current_tile", item_feat
 
-            return True, "usable_purge", item_feat
+            entity = get_entity_by_id(entity_id)
+            injury_modes = set(entity.get("injury_modes") or [])
 
-        return False, f"unsupported_active_item_effect:{effect}", item_feat
+            if "key" not in injury_modes:
+                return False, f"entity_not_key_injurable:{entity_id}", item_feat
+
+            return True, "usable_key_on_entity", item_feat
+
+        # --------------------------------------------------
+        # Active scroll use:
+        # existing explicit item-use path.
+        # --------------------------------------------------
+        if slot_group == "scroll":
+            if item_type != "scroll":
+                return False, "slot_item_is_not_scroll", item_feat
+
+            if effect == "TP_HEAL":
+                return True, "usable_tp_heal", item_feat
+
+            if effect == "LIFESTEAL":
+                return True, "usable_lifesteal", item_feat
+
+            if effect == "PURGE":
+                player_is_cursed = bool(getattr(player, "is_cursed", False))
+                player_is_poisoned = bool(getattr(player, "poisoned_skill_ids", set()))
+
+                if not (player_is_cursed or player_is_poisoned):
+                    return False, "purge_requires_player_to_be_cursed_or_poisoned", item_feat
+
+                return True, "usable_purge", item_feat
+
+            return False, f"unsupported_active_scroll_effect:{effect}", item_feat
+
+        # --------------------------------------------------
+        # Weapons and other slot groups are not explicit-use items.
+        # --------------------------------------------------
+        return False, f"unsupported_active_slot_group:{slot_group}", item_feat
     
     def get_active_player_inventory_ui(self) -> dict:
         active = self.get_active_player()
@@ -7601,9 +8912,74 @@ class DungeonGraph:
         ground_item = serialize_item_ref(ground_item_id)
         ground_item_type = ground_item["item_type"] if ground_item else None
 
+        ground_activation_ui = {
+            "activation_enabled": False,
+            "activation_label": None,
+            "activation_effect": None,
+            "activation_reason": "no_ground_item",
+        }
+
+        if ground_item is not None:
+            ground_mobile = bool(ground_item.get("mobile", True))
+            ground_active = bool(ground_item.get("active", False))
+            ground_effect = ground_item.get("effect")
+
+            if ground_mobile:
+                ground_activation_ui = {
+                    "activation_enabled": False,
+                    "activation_label": None,
+                    "activation_effect": ground_effect,
+                    "activation_reason": "ground_item_is_mobile",
+                }
+
+            elif not ground_active:
+                ground_activation_ui = {
+                    "activation_enabled": False,
+                    "activation_label": None,
+                    "activation_effect": ground_effect,
+                    "activation_reason": "ground_item_not_active",
+                }
+
+            elif not ground_effect:
+                ground_activation_ui = {
+                    "activation_enabled": False,
+                    "activation_label": None,
+                    "activation_effect": None,
+                    "activation_reason": "ground_item_has_no_effect",
+                }
+
+            else:
+                ground_activation_ui = {
+                    "activation_enabled": True,
+                    "activation_label": "activate",
+                    "activation_effect": ground_effect,
+                    "activation_reason": "can_activate_ground_object",
+                }
+
         def build_slot(slot_group: SlotGroup, slot_index: int, item_id: Optional[str]) -> dict:
+            """
+            Build one inventory slot UI record.
+
+            Important distinction:
+            - drop:
+                slot has item, ground is empty, tile has no entity
+
+            - pickup:
+                slot empty, ground has compatible non-treasure item
+
+            - swap:
+                slot has item, ground has compatible non-treasure item,
+                and tile has no entity
+
+            - inactive:
+                everything else
+
+            With tile_content_exclusivity enabled, entity_id blocks every action
+            that would leave or create a ground object on that same tile.
+            """
             slot_has_item = item_id is not None
             ground_has_item = ground_item_id is not None
+            tile_has_entity = tile.entity_id is not None
 
             slot_item = serialize_item_ref(item_id)
 
@@ -7620,11 +8996,18 @@ class DungeonGraph:
                 )
                 can_receive_ground_item = allowed
                 receive_reason = reason
+
             elif ground_has_item and ground_item_type == "treasure":
                 can_receive_ground_item = False
                 receive_reason = "treasure_not_slot_placeable"
 
-            can_drop_slot_item = slot_has_item
+            else:
+                can_receive_ground_item = False
+                receive_reason = "no_ground_item"
+
+            # --------------------------------------------------
+            # Item-use state
+            # --------------------------------------------------
             can_use_slot_item = False
             use_reason = None
             use_effect = None
@@ -7639,19 +9022,93 @@ class DungeonGraph:
                 if slot_item_feat is not None:
                     use_effect = slot_item_feat.get("effect")
 
-            if slot_has_item:
-                if ground_has_item:
-                    if can_receive_ground_item:
-                        available_action = "swap"
-                    else:
-                        available_action = "drop"
-                else:
-                    available_action = "drop"
-            else:
-                if ground_has_item and can_receive_ground_item:
-                    available_action = "pickup"
-                else:
+            # --------------------------------------------------
+            # Slot action state
+            # --------------------------------------------------
+            can_drop_slot_item = False
+            can_pickup_ground_item = False
+            can_swap_slot_item = False
+
+            drop_reason = None
+            pickup_reason = None
+            swap_reason = None
+
+            available_action = "inactive"
+            action_reason = "no_available_action"
+
+            # --------------------------------------------------
+            # Case A: occupied slot + empty ground => DROP
+            #
+            # Legal only if the tile does not contain an entity.
+            # Otherwise we would create entity + object coexistence.
+            # --------------------------------------------------
+            if slot_has_item and not ground_has_item:
+                if self.tile_content_exclusivity_enabled() and tile_has_entity:
+                    can_drop_slot_item = False
+                    drop_reason = f"tile_already_contains_entity:{tile.entity_id}"
                     available_action = "inactive"
+                    action_reason = drop_reason
+                else:
+                    can_drop_slot_item = True
+                    drop_reason = "can_drop"
+                    available_action = "drop"
+                    action_reason = "can_drop"
+
+            # --------------------------------------------------
+            # Case B: empty slot + ground item => PICKUP
+            #
+            # This removes the ground object from the tile, so it does not create
+            # an exclusivity problem. Even if a legacy-bugged tile has both
+            # entity + object, pickup is allowed as a cleanup path.
+            # --------------------------------------------------
+            elif not slot_has_item and ground_has_item:
+                if can_receive_ground_item:
+                    can_pickup_ground_item = True
+                    pickup_reason = "can_pickup"
+                    available_action = "pickup"
+                    action_reason = "can_pickup"
+                else:
+                    can_pickup_ground_item = False
+                    pickup_reason = receive_reason or "cannot_receive_ground_item"
+                    available_action = "inactive"
+                    action_reason = pickup_reason
+
+            # --------------------------------------------------
+            # Case C: occupied slot + ground item => SWAP
+            #
+            # Legal only if:
+            # - the ground item can be received by this slot
+            # - the tile does not contain an entity
+            #
+            # Swap is object-for-object replacement, so it is legal when the tile
+            # has only a ground object. It is illegal on entity tiles, because it
+            # would keep object + entity coexistence.
+            # --------------------------------------------------
+            elif slot_has_item and ground_has_item:
+                if not can_receive_ground_item:
+                    can_swap_slot_item = False
+                    swap_reason = receive_reason or "cannot_receive_ground_item"
+                    available_action = "inactive"
+                    action_reason = swap_reason
+
+                elif self.tile_content_exclusivity_enabled() and tile_has_entity:
+                    can_swap_slot_item = False
+                    swap_reason = f"tile_already_contains_entity:{tile.entity_id}"
+                    available_action = "inactive"
+                    action_reason = swap_reason
+
+                else:
+                    can_swap_slot_item = True
+                    swap_reason = "can_swap"
+                    available_action = "swap"
+                    action_reason = "can_swap"
+
+            # --------------------------------------------------
+            # Case D: empty slot + empty ground => inactive
+            # --------------------------------------------------
+            else:
+                available_action = "inactive"
+                action_reason = "empty_slot_and_empty_ground"
 
             return {
                 "slot_group": slot_group,
@@ -7663,17 +9120,35 @@ class DungeonGraph:
                 # Renderable item object
                 "item": slot_item,
 
-                # UI/action state
+                # Ground/tile context
                 "slot_has_item": slot_has_item,
                 "ground_has_item": ground_has_item,
+                "ground_item_id": ground_item_id,
+                "ground_item_type": ground_item_type,
+                "tile_has_entity": tile_has_entity,
+                "tile_entity_id": tile.entity_id,
+
+                # Pickup/swap/drop state
                 "can_receive_ground_item": can_receive_ground_item,
                 "receive_reason": receive_reason,
-                                "can_drop_slot_item": can_drop_slot_item,
+
+                "can_drop_slot_item": can_drop_slot_item,
+                "drop_reason": drop_reason,
+
+                "can_pickup_ground_item": can_pickup_ground_item,
+                "pickup_reason": pickup_reason,
+
+                "can_swap_slot_item": can_swap_slot_item,
+                "swap_reason": swap_reason,
+
                 # Explicit item-use UI state.
                 "can_use_slot_item": can_use_slot_item,
                 "use_reason": use_reason,
                 "use_effect": use_effect,
+
+                # Single action used by the current frontend button.
                 "available_action": available_action,
+                "action_reason": action_reason,
                 "is_enabled": available_action != "inactive",
             }
 
@@ -7686,6 +9161,8 @@ class DungeonGraph:
 
             # Renderable ground item object
             "ground_item": ground_item,
+
+            "ground_activation_ui": ground_activation_ui,
 
             "treasure_ui": {
                 "ground_item_is_treasure": bool(ground_item and ground_item["item_type"] == "treasure"),
@@ -7727,6 +9204,131 @@ class DungeonGraph:
 
         return feat["item_type"] == "treasure"
 
+    def _execute_activate_ground_object_free_action(
+            self,
+            action: ActivateGroundObjectFreeAction,
+    ) -> dict:
+        """
+        Activate a non-mobile active ground object on the active player's tile.
+
+        Requirements:
+        - active turn owner only
+        - turn mode must be idle or item_pickup
+        - tile.object_id must exist
+        - ITEM_FEATURES[object_id]["mobile"] must be False
+        - ITEM_FEATURES[object_id]["active"] must be True
+        - effect must be supported
+        """
+        turn, active = self.ensure_active_player_owns_turn()
+
+        if turn.mode not in ("idle", "item_pickup"):
+            raise ValueError(f"Cannot activate ground object while turn mode is '{turn.mode}'.")
+
+        tile = self.get_active_tile()
+        if tile is None:
+            raise ValueError("Active tile not found.")
+
+        if tile.object_id is None:
+            raise ValueError("No ground object on active tile.")
+
+        object_id = tile.object_id
+        item_feat = ITEM_FEATURES.get(object_id)
+
+        if item_feat is None:
+            raise ValueError(f"Unknown ground object: {object_id!r}")
+
+        if bool(item_feat.get("mobile", True)):
+            raise ValueError("Mobile ground items must be picked up, not activated.")
+
+        if not bool(item_feat.get("active", False)):
+            raise ValueError("This ground object is not active.")
+
+        effect = item_feat.get("effect")
+
+        if effect == "PLAYER_QUIT":
+            return self._execute_player_quit_effect_from_ground_object(
+                active=active,
+                tile=tile,
+                object_id=object_id,
+                item_feat=item_feat,
+                action_kind=action.kind,
+            )
+
+        raise ValueError(f"Unsupported ground object effect: {effect!r}")
+
+    def _execute_player_quit_effect_from_ground_object(
+            self,
+            *,
+            active: Player,
+            tile: TileNode,
+            object_id: str,
+            item_feat: dict[str, Any],
+            action_kind: str,
+    ) -> dict:
+        """
+        PLAYER_QUIT effect.
+
+        Meaning:
+        - active player exits the dungeon
+        - player remains in self.players for statistics/result display
+        - player no longer receives turns
+        - player should no longer be a valid interaction target
+        - current turn is finalized immediately
+        """
+        turn = self.ensure_turn_active()
+
+        escaped_snapshot = active.to_dict()
+
+        # Preferred clean version, if Player.quit_game(...) exists.
+        active.quit_game(
+            turn_nr=turn.turn_nr,
+            position={"x": tile.x, "y": tile.y},
+            object_id=object_id,
+        )
+
+        quit_result = {
+            "player_id": active.player_id,
+            "display_name": active.display_name,
+            "object_id": object_id,
+            "effect": item_feat.get("effect"),
+            "tile": {"x": tile.x, "y": tile.y},
+            "turn_nr": turn.turn_nr,
+            "snapshot_before_quit": escaped_snapshot,
+            "player_after_quit": active.to_dict(),
+        }
+
+        # Keep the exit object on the board.
+        # Multiple players may escape through the same opened exit unless rules later say otherwise.
+        # tile.object_id = None
+
+        turn.pending_turn_end_cause = "player_quit"
+        turn.pending_item_pickup = False
+        turn.pending_retreat = False
+        turn.pending_curse_choice = False
+        turn.pending_poison_choice = None
+        turn.pending_arena_pvp = None
+        turn.pending_arena_loot_choice = None
+        turn.fight_continue_after_item_pickup = False
+        turn.fight_continue_skill_id = None
+        turn.item_use_locked_by_combat = False
+
+        self.set_turn_mode("idle")
+        self.current_fight_state = None
+
+        advance_result = self.advance_to_next_player_turn()
+
+        return {
+            "ok": True,
+            "status": "player_quit_game",
+            "action_kind": action_kind,
+            "player_quit": quit_result,
+            "tile": tile.to_dict(),
+            "advance_result": advance_result,
+            "turn": self.serialize_turn_state(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+        }
+    
     def pickup_ground_treasure(self) -> dict:
         active = self.get_active_player()
         if active is None:
@@ -7815,6 +9417,7 @@ class DungeonGraph:
         - places all players on entrance (0,0)
         - derives render/presentation data locally from profession
         - uses Player runtime entities from player.py
+        - initializes parallel turn actor sequence from real players
         """
         if not players:
             raise ValueError("No players provided from lobby.")
@@ -7848,16 +9451,192 @@ class DungeonGraph:
         self.players = runtime_players
         self.initial_player_skillsets = {p.player_id: set(p.skills) for p in self.players}
         self.active_player_idx = 0
+
+        # Reset virtual actors for a fresh runtime session.
+        self.game_masters = {}
+        self.rebuild_player_turn_actors()
+
         self._sync_compat_player_position()
         turn_info = self.begin_turn_for_active_player()
 
-        return {"ok": True,
-                "players_initialized": len(self.players),
-                "active_player_idx": self.active_player_idx,
-                "active_player": self.serialize_active_player(),
-                "players": self.serialize_players(),
-                "turn": self.turn_state.to_dict() if self.turn_state else None}
+        return {
+            "ok": True,
+            "players_initialized": len(self.players),
+            "active_player_idx": self.active_player_idx,
+            "active_actor": self.serialize_active_actor(),
+            "turn_actors": self.serialize_turn_actors(),
+            "game_masters": self.serialize_game_masters(),
+            "active_player": self.serialize_active_player(),
+            "players": self.serialize_players(),
+            "turn": self.turn_state.to_dict() if self.turn_state else None,
+        }
+    # ---------- Turn actors / GameMaster actors ----------
 
+    def rebuild_player_turn_actors(self) -> None:
+        """
+        Rebuild the parallel turn actor sequence from real players only.
+
+        This does NOT start turns.
+        This does NOT modify active_player_idx.
+        """
+        self.turn_actors = [
+            TurnActor(kind="player", player_id=p.player_id)
+            for p in self.players
+        ]
+
+        self.active_actor_idx = (
+            self.active_player_idx
+            if self.turn_actors and 0 <= self.active_player_idx < len(self.turn_actors)
+            else 0
+        )
+
+    def ensure_dungeon_game_master(self) -> GameMaster:
+        """
+        Return the Dungeon GameMaster actor, creating it if needed.
+        """
+        gm = self.game_masters.get(DUNGEON_GAME_MASTER_ID)
+
+        if gm is None:
+            gm = make_dungeon_game_master()
+            self.game_masters[DUNGEON_GAME_MASTER_ID] = gm
+
+        return gm
+
+    def insert_dungeon_actor_after_active_player(self) -> dict:
+        """
+        Insert the Dungeon GameMaster actor immediately after the currently
+        active real player in the parallel turn actor sequence.
+
+        First milestone:
+        - serialization/FE visibility only
+        - no automatic Dungeon turn execution yet
+        - no collapse yet
+        """
+        if not self.players:
+            raise ValueError("No players initialized.")
+
+        if not self.turn_actors:
+            self.rebuild_player_turn_actors()
+
+        active = self.get_active_player()
+        if active is None:
+            raise ValueError("No active player.")
+
+        gm = self.ensure_dungeon_game_master()
+
+        # Avoid duplicate insertion.
+        for actor in self.turn_actors:
+            if actor.kind == "game_master" and actor.actor_id == gm.actor_id:
+                return {
+                    "ok": True,
+                    "status": "dungeon_actor_already_inserted",
+                    "active_actor": self.serialize_active_actor(),
+                    "turn_actors": self.serialize_turn_actors(),
+                    "game_masters": self.serialize_game_masters(),
+                }
+
+        insert_idx = None
+
+        for idx, actor in enumerate(self.turn_actors):
+            if actor.kind == "player" and actor.player_id == active.player_id:
+                insert_idx = idx + 1
+                break
+
+        if insert_idx is None:
+            # Fallback: keep frontend-visible order sane.
+            insert_idx = self.active_player_idx + 1
+
+        self.turn_actors.insert(
+            insert_idx,
+            TurnActor(kind="game_master", actor_id=gm.actor_id),
+        )
+
+        gm.inserted = True
+
+        # Keep active_actor_idx aligned with the current active player.
+        for idx, actor in enumerate(self.turn_actors):
+            if actor.kind == "player" and actor.player_id == active.player_id:
+                self.active_actor_idx = idx
+                break
+
+        return {
+            "ok": True,
+            "status": "dungeon_actor_inserted",
+            "active_actor": self.serialize_active_actor(),
+            "turn_actors": self.serialize_turn_actors(),
+            "game_masters": self.serialize_game_masters(),
+        }
+
+    def serialize_game_masters(self) -> dict[str, dict]:
+        return {
+            actor_id: gm.to_dict()
+            for actor_id, gm in self.game_masters.items()
+        }
+
+    def serialize_turn_actor(self, actor: TurnActor) -> dict:
+        row = actor.to_dict()
+
+        if actor.kind == "player":
+            player = self.get_player_by_id(actor.player_id)
+            row["display_name"] = (
+                player.display_name
+                if player and player.display_name
+                else f"Player #{actor.player_id}"
+            )
+            row["active"] = (
+                self.get_active_player() is not None
+                and player is not None
+                and self.get_active_player().player_id == player.player_id
+            )
+            return row
+
+        if actor.kind == "game_master":
+            gm = self.game_masters.get(actor.actor_id or "")
+            row["display_name"] = gm.display_name if gm else actor.actor_id
+            row["active"] = False
+            row["game_master"] = gm.to_dict() if gm else None
+            return row
+
+        row["display_name"] = "Unknown actor"
+        row["active"] = False
+        return row
+
+    def serialize_turn_actors(self) -> list[dict]:
+        if not self.turn_actors and self.players:
+            self.rebuild_player_turn_actors()
+
+        return [
+            self.serialize_turn_actor(actor)
+            for actor in self.turn_actors
+        ]
+
+    def serialize_active_actor(self) -> Optional[dict]:
+        """
+        First milestone:
+        active actor is still derived from the active real player.
+        Later, this will become authoritative for Dungeon turns too.
+        """
+        active = self.get_active_player()
+        if active is None:
+            return None
+
+        return {
+            "kind": "player",
+            "player_id": active.player_id,
+            "actor_id": None,
+            "display_name": active.display_name or f"Player #{active.player_id}",
+        }
+    
+    def get_player_by_id(self, player_id: Optional[int]) -> Optional[Player]:
+        if player_id is None:
+            return None
+
+        for player in self.players:
+            if player.player_id == player_id:
+                return player
+
+        return None
+    
     def serialize_players(self) -> list[dict]:
         out: list[dict] = []
 
@@ -7984,12 +9763,12 @@ class DungeonGraph:
                     else None
                 )
 
-                encounter = turn_for_player.pending_monster_encounter if turn_for_player else None
+                encounter = turn_for_player.pending_entity_encounter if turn_for_player else None
 
                 can_use_fight_button = bool(
                     is_available
                     and turn_for_player
-                    and turn_for_player.mode == "awaiting_monster_encounter"
+                    and turn_for_player.mode == "awaiting_entity_encounter"
                     and encounter
                     and getattr(player, "x", None) == int(encounter.get("tile_x"))
                     and getattr(player, "y", None) == int(encounter.get("tile_y"))
@@ -8001,7 +9780,7 @@ class DungeonGraph:
 
                 if not can_use_fight_button:
                     is_usable_now = False
-                    unusable_reason = "not_awaiting_monster_encounter"
+                    unusable_reason = "not_awaiting_entity_encounter"
             
             if skill_id == "skill_acr_02":
                 turn_for_player = (
@@ -8200,10 +9979,35 @@ class DungeonGraph:
         if not self.players:
             raise ValueError("No players initialized.")
 
-        self.active_player_idx = (self.active_player_idx + 1) % len(self.players)
-        self._sync_compat_player_position()
+        active_players = self._active_game_players()
 
-        return self.begin_turn_for_active_player()
+        if not active_players:
+            return self._enter_results_scope_all_players_inactive(
+                reason="all_players_quit_or_escaped",
+            )
+
+        start_idx = self.active_player_idx
+
+        for step in range(1, len(self.players) + 1):
+            candidate_idx = (start_idx + step) % len(self.players)
+            candidate = self.players[candidate_idx]
+
+            if self._player_is_active_in_game(candidate):
+                self.active_player_idx = candidate_idx
+                self._sync_compat_player_position()
+
+                # Keep parallel actor sequence aligned with the newly active player.
+                if self.turn_actors:
+                    for actor_idx, actor in enumerate(self.turn_actors):
+                        if actor.kind == "player" and actor.player_id == candidate.player_id:
+                            self.active_actor_idx = actor_idx
+                            break
+
+                return self.begin_turn_for_active_player()
+
+        return self._enter_results_scope_all_players_inactive(
+            reason="no_eligible_next_player_found",
+        )
 
     def request_end_turn(self) -> dict:
         """
@@ -8288,6 +10092,14 @@ class DungeonGraph:
                 target_x=target_x,
                 target_y=target_y,
             )
+        )
+
+    def activate_ground_object(self) -> dict:
+        """
+        Public API wrapper for activating the current tile's ground object.
+        """
+        return self.execute_runtime_action(
+            ActivateGroundObjectFreeAction()
         )
     
     def use_inventory_item(
@@ -8406,16 +10218,16 @@ class DungeonGraph:
                 self.set_turn_mode("idle")
 
 
-    def _active_player_is_on_monster_tile(self) -> bool:
+    def _active_player_is_on_entity_tile(self) -> bool:
         tile = self.get_active_tile()
-        return self._tile_has_active_monster(tile)
+        return self._tile_has_active_entity(tile)
 
     def _tile_is_safe_for_retreat(self, tile: Optional[TileNode]) -> bool:
         """
-        A retreat-safe tile is committed and does not contain an active hostile monster.
+        A retreat-safe tile is committed and does not contain an active hostile entity.
 
         Important:
-        - active monsters with sort LIV / UND are unsafe
+        - active entities with sort LIV / UND are unsafe
         - passive object-like entries such as Chest / sort ITM are safe
         - future escape gate / grid should also remain safe unless explicitly hostile
         """
@@ -8425,16 +10237,16 @@ class DungeonGraph:
         if self.get_tile(tile.x, tile.y) is None:
             return False
 
-        return not self._tile_has_active_monster(tile)
+        return not self._tile_has_active_entity(tile)
 
     def register_last_valid_safe_tile_from_active_player(self) -> None:
         """
         Store active player's current tile as retreat target only if it is safe.
 
         Important:
-        - monster tiles are NOT safe
+        - entity tiles are NOT safe
         - this prevents skill_thi_02 / skill_pri_02 skip movement from overwriting
-          last_valid_safe_tile with the monster tile
+          last_valid_safe_tile with the entity tile
         """
         turn, active = self.ensure_active_player_owns_turn()
         tile = self.get_tile(active.x, active.y)
@@ -8498,6 +10310,18 @@ class DungeonGraph:
                 return p
         return None
 
+    def _assert_player_can_be_interacted_with(
+            self,
+            player: Player,
+            *,
+            interaction: str,
+    ) -> None:
+        if not self._player_is_active_in_game(player):
+            raise ValueError(
+                f"Player {player.player_id} cannot be targeted by {interaction}: "
+                "player has already left the dungeon."
+            )
+    
     def _apply_curse_to_player(self, target: Player) -> None:
         """
         Apply the unique global curse mark.
@@ -8708,6 +10532,14 @@ class DungeonGraph:
         end_condition = self.evaluate_end_conditions_after_turn()
 
         if end_condition is not None:
+            if self._should_start_escape_phase_from_end_condition(end_condition):
+                return self.start_escape_phase_from_end_condition(
+                    end_condition=end_condition,
+                    ended_turn=finished_turn,
+                    ended_player=finished_player,
+                    healing_result=healing_result,
+                )
+
             return self._enter_results_scope(
                 end_condition=end_condition,
                 ended_turn=finished_turn,
@@ -8742,9 +10574,19 @@ class DungeonGraph:
             "advance_result": advance_result,
         }
     
-
     def execute_runtime_action(self, action: RuntimeAction) -> dict:
         """
         Central runtime dispatcher for Action / FreeAction / TurnEndingFreeAction.
         """
         return action.execute(self)
+
+    def ensure_dungeon_game_master(self) -> GameMaster:
+        gm = self.game_masters.get("__dungeon__")
+        if gm is None:
+            gm = GameMaster(
+                actor_id="__dungeon__",
+                display_name="Dungeon",
+                icon_path="/static/media/ui/dungeon.png",
+            )
+            self.game_masters[gm.actor_id] = gm
+        return gm

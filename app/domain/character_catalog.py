@@ -8,13 +8,13 @@ except ImportError:
 
 SkillScope = Literal["combat", "move"]
 SkillUiControl = Literal["passive", "button", "toggle", "number_stepper", "choice_set"]
-SkillAvailabilityMode = Literal["always", "turn_start_only", "while_standing_on_monster", "awaiting_heal_choice",
-                                "on_knockout", "on_monster_draw", "on_monster_draw_room",
+SkillAvailabilityMode = Literal["always", "turn_start_only", "while_standing_on_entity", "awaiting_heal_choice",
+                                "on_knockout", "on_entity_draw", "on_entity_draw_room",
                                 "before_action_if_private_tiles_lt_3"]
 SkillResetMode = Literal["turn_end", "after_use", "after_resolution", "after_heal_resolution",
                          "after_peek_or_other_action", "after_choice", "after_draw_resolution", "after_private_draw"]
 SkillFreezeMode = Literal["after_first_action", "after_fight_start_or_leave_tile", "consumed_by_next_action"]
-SkillTargetType = Literal["player", "monster_tile", "fountain"]
+SkillTargetType = Literal["player", "entity_tile", "fountain"]
 
 
 class SkillInfo(TypedDict, total=False):
@@ -30,11 +30,11 @@ class SkillInfo(TypedDict, total=False):
     - availability_mode:
         "always"
         "turn_start_only"
-        "while_standing_on_monster"
+        "while_standing_on_entity"
         "awaiting_heal_choice"
         "on_knockout"
-        "on_monster_draw"
-        "on_monster_draw_room"
+        "on_entity_draw"
+        "on_entity_draw_room"
         "before_action_if_private_tiles_lt_3"
 
     - reset_mode:
@@ -53,7 +53,7 @@ class SkillInfo(TypedDict, total=False):
         "consumed_by_next_action"
 
     - requires_target:
-        "player" | "monster_tile" | "fountain"
+        "player" | "entity_tile" | "fountain"
     === by Sziller ==="""
     
     scope: SkillScope
@@ -102,7 +102,7 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "scope": "combat",
                      "active": False,
                      "ui_control": "passive",
-                     "description": "Gains +1 strength against monster NOT"
+                     "description": "Gains +1 strength against entity NOT"
                                     "having been revealed in her current move."},
     "skill_bat_01": {"value": 2,
                      "name": "Sword Master",
@@ -220,9 +220,9 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "ui_control": "button",
                      "availability_mode": "always",
                      "reset_mode": "after_use",
-                     "requires_target": "monster_tile",
+                     "requires_target": "entity_tile",
                      "requires_confirmation": True,
-                     "description": "May teleport onto a revealed monster"
+                     "description": "May teleport onto a revealed entity"
                                     "then fight it. Costs ALL Actions."},
 
     "skill_acr_02": {"value": 1,
@@ -251,18 +251,18 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "scope": "move",
                      "active": True,
                      "ui_control": "toggle",
-                     "availability_mode": "while_standing_on_monster",
+                     "availability_mode": "while_standing_on_entity",
                      "freeze_mode": "after_fight_start_or_leave_tile",
                      "reset_mode": "after_resolution",
-                     "description": "Does not have to fight a monster if"
+                     "description": "Does not have to fight a entity if"
                                     "she has at least an Action left,"
-                                    "but may not end her turn on a monster,"
+                                    "but may not end her turn on a entity,"
                                     "so following her 4th action"
-                                    " - if she lands on a monster - "
+                                    " - if she lands on a entity - "
                                     "she must fight it:"
                                     "if `outcome` = 'loss' or 'tie',"
                                     "has to move back to the last valid tile."
-                                    "For every monster she skips she must"
+                                    "For every entity she skips she must"
                                     "subtract 1 HP!"},
 
     "skill_ran_02": {"value": 1,
@@ -316,14 +316,14 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "scope": "move",
                      "active": True,
                      "ui_control": "toggle",
-                     "availability_mode": "while_standing_on_monster",
+                     "availability_mode": "while_standing_on_entity",
                      "freeze_mode": "after_fight_start_or_leave_tile",
                      "reset_mode": "after_resolution",
-                     "description": "Does not have to fight a monster if"
+                     "description": "Does not have to fight a entity if"
                                     "she has at least an Action left,"
-                                    "but may not end her turn on a monster,"
+                                    "but may not end her turn on a entity,"
                                     "so following her 4th action"
-                                    " - if she lands on a monster - "
+                                    " - if she lands on a entity - "
                                     "she must fight it:"
                                     "if `outcome` = 'loss' or 'tie',"
                                     "has to move back to the last valid tile."},
@@ -333,24 +333,24 @@ SKILL_CATALOG: dict[str, SkillInfo] = {
                      "scope": "move",
                      "active": True,
                      "ui_control": "choice_set",
-                     "availability_mode": "on_monster_draw_room",
+                     "availability_mode": "on_entity_draw_room",
                      "reset_mode": "after_choice",
                      "requires_confirmation": True,
                      "description": "If Player *discovers* a tile_type='room':"
-                                    "Player draws 2 items from MONSTER_POOL"
+                                    "Player draws 2 items from ENTITY_POOL"
                                     "Populates the tile with one of his liking,"
                                     "and puts the otherone back in the"
-                                    "MONSTER_POOL"},
+                                    "ENTITY_POOL"},
 
     "skill_alc_02": {"value": 2,
                      "name": "Transformation",
                      "scope": "move",
                      "active": True,
                      "ui_control": "button",
-                     "availability_mode": "on_monster_draw",
+                     "availability_mode": "on_entity_draw",
                      "reset_mode": "after_draw_resolution",
                      "requires_confirmation": False,
-                     "description": "May redraw new monsters during the turn"
+                     "description": "May redraw new entities during the turn"
                                     "at the cost of 1 HP each."},
 
     "skill_swo_02": {"value": 2,

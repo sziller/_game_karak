@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.bootstrap import BootstrapService
 from app.engine.game_engine import DungeonGraph
-from app.domain.game_entities import ASCII_TILES, ITEM_FEATURES, get_monster_by_id
+from app.domain.game_entities import ASCII_TILES, ITEM_FEATURES, get_entity_by_id
 
 from app.routers.router_frontend import build_frontend_router
 from app.routers.router_phase1_bootstrap import build_bootstrap_router
@@ -96,7 +96,7 @@ app.include_router(build_lobby_router(bootstrap, lobby, graph))
 app.include_router(build_game_router(graph=graph,
                                      ascii_tiles=ASCII_TILES,
                                      item_features=ITEM_FEATURES,
-                                     get_monster_by_id=get_monster_by_id))
+                                     get_entity_by_id=get_entity_by_id))
 app.include_router(build_results_router(
     bootstrap_service=bootstrap,
     lobby_service=lobby,

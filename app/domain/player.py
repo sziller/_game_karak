@@ -155,6 +155,15 @@ class Player:
     # - may affect multiple skills on the same player
     poisoned_skill_ids: Set[SkillId] = field(default_factory=set)
     is_evil: bool = False
+    
+    # =====================================================
+    # Game participation / escape state
+    # =====================================================
+    has_quit_game: bool = False
+    escaped_game: bool = False
+    escape_turn_nr: Optional[int] = None
+    escape_position: Optional[Dict[str, int]] = None
+    escape_object_id: Optional[str] = None
 
     # =====================================================
     # Inventory
@@ -206,7 +215,26 @@ class Player:
             raise RuntimeError("Player has already turned evil")
         self.is_evil = True
         # TODO: use game level function, referring to parameters: nr_of_players and skillset in the game
+    
+    def quit_game(
+            self,
+            *,
+            turn_nr: Optional[int],
+            position: Dict[str, int],
+            object_id: Optional[str],
+    ) -> None:
+        """
+        Mark this player as having exited/quit active play.
 
+        The player remains in the players list so final statistics,
+        inventory, treasure, kills, and other result data remain available.
+        """
+        self.has_quit_game = True
+        self.escaped_game = True
+        self.escape_turn_nr = turn_nr
+        self.escape_position = dict(position)
+        self.escape_object_id = object_id
+    
     def is_skill_active(self, skill_id: str) -> bool:
         if skill_id not in self.skills:
             return False
@@ -550,7 +578,15 @@ class Player:
                            "is_cursed": self.is_cursed,
                            "is_poisoned": self.is_poisoned(),
                            "poisoned_skill_ids": sorted(self.poisoned_skill_ids),
-                           "is_conscious": self.is_conscious},
+                           "is_conscious": self.is_conscious,
+                           "has_quit_game": self.has_quit_game,
+                           "escaped_game": self.escaped_game},
+                "escape": {
+                    "has_quit_game": self.has_quit_game,
+                    "escaped_game": self.escaped_game,
+                    "escape_turn_nr": self.escape_turn_nr,
+                    "escape_position": self.escape_position,
+                    "escape_object_id": self.escape_object_id},
                 "hp": {"current": self.hp,
                        "max": self.max_hp},
                 "skills": sorted(self.skills),

@@ -4,29 +4,29 @@ import random
 def roll_dice_pair():
     return [random.randint(1, 6), random.randint(1, 6)]
 
-def skill_extended_tie_margin_as_sum(dice, monster_strength, tie_margin=2):
-    """Treat ties more leniently: returning a fake monster_strength if needed."""
+def skill_extended_tie_margin_as_sum(dice, entity_strength, tie_margin=2):
+    """Treat ties more leniently: returning a fake entity_strength if needed."""
     player_sum = sum(dice)
-    if monster_strength - tie_margin <= player_sum < monster_strength:
-        return monster_strength  # Fake it to exactly match monster strength
+    if entity_strength - tie_margin <= player_sum < entity_strength:
+        return entity_strength  # Fake it to exactly match entity strength
     return player_sum
 
-def skill_none(dice, monster_strength=None):
+def skill_none(dice, entity_strength=None):
     return sum(dice)
 
-def skill_add_one(dice, monster_strength=None):
+def skill_add_one(dice, entity_strength=None):
     return sum(dice) + 1
 
-def skill_add_if_tie(dice, monster_strength):
+def skill_add_if_tie(dice, entity_strength):
     player_sum = sum(dice)
-    if player_sum == monster_strength:
+    if player_sum == entity_strength:
         return player_sum + 1
     return player_sum
 
-def skill_reroll_if_loss(dice, monster_strength, is_aggressive=False):
+def skill_reroll_if_loss(dice, entity_strength, is_aggressive=False):
     player_sum = sum(dice)
 
-    needs_reroll = (player_sum < monster_strength) or (is_aggressive and player_sum == monster_strength)
+    needs_reroll = (player_sum < entity_strength) or (is_aggressive and player_sum == entity_strength)
 
     if not needs_reroll:
         return player_sum
@@ -35,10 +35,10 @@ def skill_reroll_if_loss(dice, monster_strength, is_aggressive=False):
     return sum(dice)
 
 
-def skill_reroll_one_if_loss(dice, monster_strength, is_aggressive=False):
+def skill_reroll_one_if_loss(dice, entity_strength, is_aggressive=False):
     player_sum = sum(dice)
 
-    needs_reroll = (player_sum < monster_strength) or (is_aggressive and player_sum == monster_strength)
+    needs_reroll = (player_sum < entity_strength) or (is_aggressive and player_sum == entity_strength)
 
     if not needs_reroll:
         return player_sum
@@ -47,7 +47,7 @@ def skill_reroll_one_if_loss(dice, monster_strength, is_aggressive=False):
     dice[idx] = random.randint(1, 6)
     return sum(dice)
 
-def skill_dinovadasz(dice, monster_strength=None):
+def skill_dinovadasz(dice, entity_strength=None):
     """
     Dinóvadász:
     +2 strength if:
@@ -61,31 +61,31 @@ def skill_dinovadasz(dice, monster_strength=None):
 
     return d1 + d2
 
-def skill_reroll_ones(dice, monster_strength=None):
+def skill_reroll_ones(dice, entity_strength=None):
     dice = [random.randint(1, 6) if d == 1 else d for d in dice]
     return sum(dice)
 
-def skill_reroll_ones_recursive(dice, monster_strength=None):
+def skill_reroll_ones_recursive(dice, entity_strength=None):
     while 1 in dice:
         dice = [random.randint(1, 6) if d == 1 else d for d in dice]
     return sum(dice)
 
 
-def skill_ones_are_sixes(dice, monster_strength=None):
+def skill_ones_are_sixes(dice, entity_strength=None):
     dice = [6 if d == 1 else d for d in dice]
     return sum(dice)
 
 # --- Simulation with full outcome breakdown ---
 
-def simulate_combat(skill_fn, monster_strength, trials=10000, **skill_kwargs):
+def simulate_combat(skill_fn, entity_strength, trials=10000, **skill_kwargs):
     win = tie = loss = 0
     for _ in range(trials):
         player_dice = roll_dice_pair()
-        player_total = skill_fn(player_dice, monster_strength=monster_strength, **skill_kwargs)
+        player_total = skill_fn(player_dice, entity_strength=entity_strength, **skill_kwargs)
 
-        if player_total > monster_strength:
+        if player_total > entity_strength:
             win += 1
-        elif player_total == monster_strength:
+        elif player_total == entity_strength:
             tie += 1
         else:
             loss += 1
@@ -111,11 +111,11 @@ def print_table(results):
 
 
 if __name__ == "__main__":
-    monster_strengths = [14, 13, 12, 11, 10, 9, 8, 7, 6, 5]
+    entity_strengths = [14, 13, 12, 11, 10, 9, 8, 7, 6, 5]
     trials = 50_000
 
-    for ms in monster_strengths:
-        print(f"\nChances against a Monster(!) with net strength:                       < {ms:>2} >")
+    for ms in entity_strengths:
+        print(f"\nChances against a Entity(!) with net strength:                       < {ms:>2} >")
         all_results = list()
         all_results.append(("Magus,Jos,Keses,Kardmester", "Normal",
                             simulate_combat(skill_none, ms, trials)))

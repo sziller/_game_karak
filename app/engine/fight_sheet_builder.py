@@ -5,27 +5,27 @@ from typing import Optional
 from core.config import SKILL_RULES, PVP_COMBAT_RULES
 
 from engine.fight_models import DiceState, FightParticipantRef, FightRow, FightRowButton, FightSideState, PlayerFightChoices
-from domain.game_entities import ITEM_FEATURES, get_monster_by_id
+from domain.game_entities import ITEM_FEATURES, get_entity_by_id
 from domain.player import Player
 
 # ============================================================
 # Public builders
 # ============================================================
 
-def build_monster_side_state(
+def build_entity_side_state(
     *,
     participant: FightParticipantRef,
-    monster_id: str,
+    entity_id: str,
 ) -> FightSideState:
     """
-    Build a monster-side fight table.
+    Build a entity-side fight table.
 
     First version:
-    - fixed monster strength row
+    - fixed entity strength row
     - result row
     """
-    monster = get_monster_by_id(monster_id)
-    strength = int(monster["strength"])
+    entity = get_entity_by_id(entity_id)
+    strength = int(entity["strength"])
 
     side = FightSideState(
         participant=participant,
@@ -35,12 +35,12 @@ def build_monster_side_state(
 
     side.rows.append(
         FightRow(
-            row_id="monster_base",
+            row_id="entity_base",
             kind="info",
-            label="monster",
-            text=f"{monster_id}",
+            label="entity",
+            text=f"{entity_id}",
             value=strength,
-            source_id=monster_id,
+            source_id=entity_id,
         )
     )
 
@@ -52,10 +52,10 @@ def build_player_side_state(
     *,
     participant: FightParticipantRef,
     player: Player,
-    monster_id: Optional[str] = None,
-    fight_kind: str = "monster",
+    entity_id: Optional[str] = None,
+    fight_kind: str = "entity",
     is_before_second_action: bool = False,
-    monster_tile_discovered_this_turn: bool = False,
+    entity_tile_discovered_this_turn: bool = False,
     existing_dice_state: Optional[DiceState] = None,
     existing_choices: Optional[PlayerFightChoices] = None,
 ) -> FightSideState:
@@ -92,7 +92,7 @@ def build_player_side_state(
     rows.append(
         _build_weapon_row(
             player,
-            monster_id=monster_id,
+            entity_id=entity_id,
             opponent_sort=opponent_sort,
         )
     )
@@ -102,9 +102,9 @@ def build_player_side_state(
             player,
             dice_state=dice_state,
             fight_kind=fight_kind,
-            monster_id=monster_id,
+            entity_id=entity_id,
             is_before_second_action=is_before_second_action,
-            monster_tile_discovered_this_turn=monster_tile_discovered_this_turn,
+            entity_tile_discovered_this_turn=entity_tile_discovered_this_turn,
         )
     )
     
@@ -483,7 +483,7 @@ def _get_weapon_strength_for_fight(
     *,
     item_id: str,
     player: Player,
-    monster_id: Optional[str],
+    entity_id: Optional[str],
     opponent_sort: Optional[str] = None,
 ) -> tuple[int, Optional[str]]:
     """
@@ -492,8 +492,8 @@ def _get_weapon_strength_for_fight(
     Implemented:
     - base weapon strength from ITEM_FEATURES
     - skill_bat_01: sword gives +3 instead of +2
-    - kris: +1 against LIV monsters
-    - hammer: +1 against UND monsters
+    - kris: +1 against LIV entities
+    - hammer: +1 against UND entities
     """
     feat = ITEM_FEATURES.get(item_id)
     if feat is None:
@@ -509,9 +509,9 @@ def _get_weapon_strength_for_fight(
 
     effective_opponent_sort = opponent_sort
 
-    if effective_opponent_sort is None and monster_id is not None:
-        monster = get_monster_by_id(monster_id)
-        effective_opponent_sort = monster.get("sort")
+    if effective_opponent_sort is None and entity_id is not None:
+        entity = get_entity_by_id(entity_id)
+        effective_opponent_sort = entity.get("sort")
 
     effect = feat.get("effect")
 
@@ -529,7 +529,7 @@ def _get_weapon_strength_for_fight(
 def _build_weapon_row(
     player: Player,
     *,
-    monster_id: Optional[str] = None,
+    entity_id: Optional[str] = None,
     opponent_sort: Optional[str] = None,
 ) -> FightRow:
     """
@@ -542,9 +542,9 @@ def _build_weapon_row(
     - skill_bat_01:
         swords give +3 instead of +2
     - kris:
-        +1 against LIV monsters
+        +1 against LIV entities
     - hammer:
-        +1 against UND monsters
+        +1 against UND entities
     - skill_acr_01:
         daggers in scroll slots count as +1 each
 
@@ -566,7 +566,7 @@ def _build_weapon_row(
         value, note = _get_weapon_strength_for_fight(
             item_id=item_id,
             player=player,
-            monster_id=monster_id,
+            entity_id=entity_id,
             opponent_sort=opponent_sort,
         )
 
@@ -606,14 +606,14 @@ def _get_beasthunter_context_bonus(
     player: Player,
     *,
     fight_kind: str,
-    monster_id: Optional[str],
-    monster_tile_discovered_this_turn: bool,
+    entity_id: Optional[str],
+    entity_tile_discovered_this_turn: bool,
 ) -> int:
     """
     skill_bea_01 / Ambush.
 
     Default:
-    - applies only against monsters.
+    - applies only against entities.
 
     Optional config:
     - SKILL_RULES["skill_bea_01"]["allow_in_arena_pvp"] = True
@@ -634,10 +634,10 @@ def _get_beasthunter_context_bonus(
 
         return 1
 
-    if monster_id is None:
+    if entity_id is None:
         return 0
 
-    if not monster_tile_discovered_this_turn:
+    if not entity_tile_discovered_this_turn:
         return 1
 
     return 0
@@ -760,10 +760,10 @@ def _build_skill_auto_row(
     player: Player,
     *,
     dice_state: DiceState,
-    fight_kind: str = "monster",
-    monster_id: Optional[str] = None,
+    fight_kind: str = "entity",
+    entity_id: Optional[str] = None,
     is_before_second_action: bool = False,
-    monster_tile_discovered_this_turn: bool = False,
+    entity_tile_discovered_this_turn: bool = False,
 ) -> FightRow:
     """
     Automatic passive combat skill modifiers.
@@ -772,7 +772,7 @@ def _build_skill_auto_row(
     - skill_bar_01: Barbarian HP-based strength bonus
     - skill_sco_01: Scout close-dice bonus
     - skill_ora_01: Oracle +1 before second action
-    - skill_bea_01: Beasthunter +1 if monster tile was not discovered this turn
+    - skill_bea_01: Beasthunter +1 if entity tile was not discovered this turn
     """
     parts: list[str] = []
     notes: list[str] = []
@@ -799,12 +799,12 @@ def _build_skill_auto_row(
 
     beasthunter_bonus = _get_beasthunter_context_bonus(player,
                                                        fight_kind=fight_kind,
-                                                       monster_id=monster_id,
-                                                       monster_tile_discovered_this_turn=monster_tile_discovered_this_turn)
+                                                       entity_id=entity_id,
+                                                       entity_tile_discovered_this_turn=entity_tile_discovered_this_turn)
     if beasthunter_bonus:
         total += beasthunter_bonus
         parts.append(f"skill_bea_01({beasthunter_bonus:+d})")
-        notes.append("Beasthunter bonus: monster tile was not discovered this turn.")
+        notes.append("Beasthunter bonus: entity tile was not discovered this turn.")
 
     if parts:
         text = " + ".join(parts)
@@ -1128,11 +1128,11 @@ if __name__ == "__main__":
     from fight_models import FightParticipantRef
     from domain.player import Player
 
-    monster_participant = FightParticipantRef(
-        participant_kind="monster",
+    entity_participant = FightParticipantRef(
+        participant_kind="entity",
         role="initiator",
         display_name="Giant Rat",
-        monster_id="GiantRat",
+        entity_id="GiantRat",
     )
 
     player_participant = FightParticipantRef(
@@ -1146,9 +1146,9 @@ if __name__ == "__main__":
     player.place_weapon("dagger", 0)
     player.place_weapon("sword", 1)
 
-    monster_side = build_monster_side_state(
-        participant=monster_participant,
-        monster_id="GiantRat",
+    entity_side = build_entity_side_state(
+        participant=entity_participant,
+        entity_id="GiantRat",
     )
 
     player_side = build_player_side_state(
@@ -1156,8 +1156,8 @@ if __name__ == "__main__":
         player=player,
     )
 
-    print("MONSTER SIDE:")
-    for k, v in monster_side.to_dict().items():
+    print("ENTITY SIDE:")
+    for k, v in entity_side.to_dict().items():
         print(f"    {k}: {v}")
     print("PLAYER SIDE:")
     for k, v in player_side.to_dict().items():

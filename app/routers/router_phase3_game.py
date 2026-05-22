@@ -11,15 +11,15 @@ from dto import (
     ConfirmTileRequest,
     SelectPocketTileRequest,
     PlacePocketTileRequest,
-    DrawMonsterChoicesRequest,
-    AssignMonsterRequest,
+    DrawEntityChoicesRequest,
+    AssignEntityRequest,
 )
 
 
 class SelectActivePlayerRequest(BaseModel):
     player_id: int = Field(..., ge=0)
 
-    
+
 class FightToggleScrollRequest(BaseModel):
     slot_id: str
     role: Literal["initiator", "challenged"] = "challenged"
@@ -27,12 +27,12 @@ class FightToggleScrollRequest(BaseModel):
 
 class FightTossRequest(BaseModel):
     role: Literal["initiator", "challenged"] = "challenged"
-    
-    
+
+
 class InventorySlotActionRequest(BaseModel):
     slot_group: str
     slot_index: int = Field(..., ge=0)
-    
+
 
 class UseInventoryItemRequest(BaseModel):
     slot_group: str
@@ -45,7 +45,7 @@ class UseInventoryItemRequest(BaseModel):
 class HealingChoiceRequest(BaseModel):
     target_hp: int = Field(..., ge=1)
 
-    
+
 class CurseChoiceRequest(BaseModel):
     target_player_id: int = Field(..., ge=0)
 
@@ -53,7 +53,7 @@ class CurseChoiceRequest(BaseModel):
 class PoisonChoiceRequest(BaseModel):
     target_player_id: int = Field(..., ge=0)
     target_skill_id: str
-    
+
 
 class ToggleSkillUiRequest(BaseModel):
     skill_id: str
@@ -63,14 +63,14 @@ class ToggleSkillUiRequest(BaseModel):
 class SetSkillUiValueRequest(BaseModel):
     skill_id: str
     value: int
-    
-    
+
+
 class FightRerollDieRequest(BaseModel):
     die_index: int = Field(..., ge=1, le=2)
     skill_id: str
     role: Literal["initiator", "challenged"] = "challenged"
-    
-    
+
+
 class FightRerollBothRequest(BaseModel):
     skill_id: str
     role: Literal["initiator", "challenged"] = "challenged"
@@ -80,7 +80,7 @@ class SkillTeleportPlayerRequest(BaseModel):
     target_player_id: int = Field(..., ge=0)
 
 
-class SkillTeleportMonsterTileRequest(BaseModel):
+class SkillTeleportEntityTileRequest(BaseModel):
     x: int
     y: int
 
@@ -88,15 +88,15 @@ class SkillTeleportMonsterTileRequest(BaseModel):
 class KoReactionFountainChoiceRequest(BaseModel):
     x: int
     y: int
-    
-    
-class ConfirmMonsterCandidateRequest(BaseModel):
+
+
+class ConfirmEntityCandidateRequest(BaseModel):
     candidate_index: int = Field(..., ge=0)
 
 
 class ArenaOpponentChoiceRequest(BaseModel):
     target_player_id: int = Field(..., ge=0)
-    
+
 
 class FightCommitRoleRequest(BaseModel):
     role: Literal["initiator", "challenged"]
@@ -107,9 +107,10 @@ class ArenaLootChoiceRequest(BaseModel):
     source_slot_group: Optional[Literal["weapon", "scroll", "key"]] = None
     source_slot_index: Optional[int] = Field(default=None, ge=0)
 
-def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> APIRouter:
+
+def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
-    
+
     ITEM_ASSET_BASE_PATH = "/static/media/tile-content"
 
     def serialize_item_ref(item_id: str | None) -> dict | None:
@@ -134,7 +135,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             **item,
             "image_path": f"{ITEM_ASSET_BASE_PATH}/{img_file}",
         }
-    
+
     def serialize_ascii_tiles(tiles):
         out = {}
         for k, tile in tiles.items():
@@ -146,7 +147,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
                 for row in tile
             ]
         return out
-    
+
     @router.post(
         "/players/select",
         summary="Select active player",
@@ -157,7 +158,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.set_active_player_by_player_id(req.player_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
     @router.get(
         "/players",
         summary="Get runtime players",
@@ -196,7 +197,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.item_to_slot(req.slot_group, req.slot_index)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/inventory/use_item",
         summary="Use active inventory item",
@@ -216,7 +217,21 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
+    @router.post(
+        "/ground/activate",
+        summary="Activate active ground object",
+        description=(
+                "Activates a non-mobile active ground object on the active player's tile. "
+                "Example: opened exit object with effect PLAYER_QUIT."
+        ),
+    )
+    def activate_ground_object():
+        try:
+            return graph.activate_ground_object()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     @router.get(
         "/ascii_tiles",
         summary="Get ASCII tile definitions",
@@ -248,59 +263,27 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             raise HTTPException(status_code=400, detail="No active player.")
 
         tile = graph.get_active_tile()
-        if not tile or not tile.monster_id:
-            raise HTTPException(status_code=400, detail="No monster on current tile")
+        if not tile or not tile.entity_id:
+            raise HTTPException(status_code=400, detail="No entity on current tile")
 
         try:
-            monster = get_monster_by_id(tile.monster_id)
+            entity = get_entity_by_id(tile.entity_id)
         except KeyError as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # --------------------------------------------------
-        # Special-case: Chest is not a normal combat flow
-        # --------------------------------------------------
-        if monster["monster_id"] == "Chest":
-            if not active.has_any_key():
-                raise HTTPException(status_code=400, detail="A chest can only be opened if you have a key.")
+        injury_modes = set(entity.get("injury_modes") or [])
 
-            consumed = active.consume_one_key()
-            if consumed is None:
-                raise HTTPException(status_code=400, detail="A chest can only be opened if you have a key.")
+        if "combat" not in injury_modes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Entity {tile.entity_id!r} cannot be damaged by combat.",
+            )
 
-            loot_id = monster["loot_id"]
-            tile.monster_id = None
-            tile.object_id = loot_id
-            graph.clear_current_fight_state()
-
-            try:
-                item = serialize_item_ref(loot_id)
-            except ValueError as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-            return {
-                "ok": True,
-                "mode": "chest_opened",
-                "x": tile.x,
-                "y": tile.y,
-
-                # Runtime identity
-                "object_id": loot_id,
-
-                # Renderable item object
-                "item": item,
-
-                "inventory": active.inventory.to_dict(),
-                "tile": tile.to_dict(),
-            }
-
-        # --------------------------------------------------
-        # Normal monster fight
-        # --------------------------------------------------
         try:
-            return graph.start_monster_fight_on_current_tile()
+            return graph.start_entity_fight_on_current_tile()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.get(
         "/fight/state",
         summary="Get current fight state",
@@ -317,7 +300,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         summary="Toss dice for current fight",
         description=(
                 "Tosses dice for the selected player side and rebuilds the fight table. "
-                "Defaults to challenged side for existing monster fights."
+                "Defaults to challenged side for existing entity fights."
         ),
     )
     def fight_toss(req: Optional[FightTossRequest] = None):
@@ -340,7 +323,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
     @router.post(
         "/fight/reroll_both",
         summary="Reroll both dice for current fight",
@@ -381,13 +364,13 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/fight/commit_role",
         summary="Commit one fight side",
         description=(
-            "Freezes one fight side. "
-            "Arena PvP uses this to commit the initiator before challenged player interaction."
+                "Freezes one fight side. "
+                "Arena PvP uses this to commit the initiator before challenged player interaction."
         ),
     )
     def fight_commit_role(req: FightCommitRoleRequest):
@@ -395,7 +378,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.commit_current_fight_role(req.role)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/fight/resolve",
         summary="Resolve current fight",
@@ -406,13 +389,13 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.resolve_current_fight()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/arena/choose_opponent",
         summary="Choose Arena PvP opponent",
         description=(
-            "Chooses the challenged player after the active player enters an unused Arena. "
-            "The chosen player is teleported to the Arena tile and an Arena PvP fight state is created."
+                "Chooses the challenged player after the active player enters an unused Arena. "
+                "The chosen player is teleported to the Arena tile and an Arena PvP fight state is created."
         ),
     )
     def arena_choose_opponent(req: ArenaOpponentChoiceRequest):
@@ -420,13 +403,13 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.choose_arena_opponent(req.target_player_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/arena/choose_loot",
         summary="Choose Arena PvP loot",
         description=(
-            "Resolves the Arena PvP winner's optional steal choice. "
-            "Winner may steal one compatible inventory item, steal one treasure unit, or skip."
+                "Resolves the Arena PvP winner's optional steal choice. "
+                "Winner may steal one compatible inventory item, steal one treasure unit, or skip."
         ),
     )
     def arena_choose_loot(req: ArenaLootChoiceRequest):
@@ -438,7 +421,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/inventory/pickup_treasure",
         summary="Pick up treasure from current tile",
@@ -460,8 +443,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.continue_after_item_pickup()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
-    
+
     @router.post(
         "/itempickup/finish",
         summary="Finish current item pickup",
@@ -472,7 +454,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.finish_item_pickup()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/curse/choose_target",
         summary="Choose curse target after killing a Mummy",
@@ -497,7 +479,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/healing/choose_target",
         summary="Choose fountain healing target HP",
@@ -522,11 +504,11 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/reset",
         summary="Reset world",
-        description="Clears the dungeon, restores pristine tile/monster pools, reseeds the entrance.",
+        description="Clears the dungeon, restores pristine tile/entity pools, reseeds the entrance.",
         name="reset_world",
     )
     def reset_world():
@@ -540,6 +522,37 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     def repair_players():
         try:
             return graph.repair_players_on_missing_tiles()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @router.post(
+        "/debug/insert_dungeon_actor",
+        summary="Insert Dungeon virtual actor after active player",
+        description=(
+            "Development helper. Inserts the Dungeon GameMaster actor into the "
+            "parallel turn actor sequence after the current active player. "
+            "Does not execute collapse."
+        ),
+    )
+    def debug_insert_dungeon_actor():
+        try:
+            return graph.insert_dungeon_actor_after_active_player()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    
+    @router.post(
+        "/debug/insert_dungeon_actor",
+        summary="Insert Dungeon virtual actor after active player",
+        description=(
+            "Development helper. Inserts the Dungeon GameMaster actor into the "
+            "parallel turn actor sequence after the current active player. "
+            "Does not execute collapse."
+        ),
+    )
+    def debug_insert_dungeon_actor():
+        try:
+            return graph.insert_dungeon_actor_after_active_player()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     
@@ -591,27 +604,27 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             raise HTTPException(status_code=400, detail=str(e))
 
     @router.post(
-        "/monster/confirm_candidate",
-        summary="Confirm monster candidate during room population",
-        description="Confirms one pending monster candidate and continues the reveal pipeline.",
+        "/entity/confirm_candidate",
+        summary="Confirm entity candidate during room population",
+        description="Confirms one pending entity candidate and continues the reveal pipeline.",
     )
-    def confirm_monster_candidate(req: ConfirmMonsterCandidateRequest):
+    def confirm_entity_candidate(req: ConfirmEntityCandidateRequest):
         try:
-            return graph.confirm_monster_candidate(req.candidate_index)
+            return graph.confirm_entity_candidate(req.candidate_index)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
     @router.post(
-        "/monster/redraw_candidate",
-        summary="Use Alchemist monster redraw",
-        description="Consumes 1 Action and 1 HP to draw a new monster candidate. Only the newest candidate is confirmable.",
+        "/entity/redraw_candidate",
+        summary="Use Alchemist entity redraw",
+        description="Consumes 1 Action and 1 HP to draw a new entity candidate. Only the newest candidate is confirmable.",
     )
-    def redraw_monster_candidate():
+    def redraw_entity_candidate():
         try:
-            return graph.redraw_monster_candidate()
+            return graph.redraw_entity_candidate()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/teleport",
         summary="Teleport to target coordinates",
@@ -623,7 +636,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.teleport_player(tx=request.x, ty=request.y)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
     @router.post(
         "/skills/toggle",
         summary="Toggle turn-local skill UI selection",
@@ -670,15 +683,15 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
 
     @router.post(
         "/skills/bat_02/teleport",
-        summary="Use Battlemage monster teleport",
-        description="Teleports the active Battlemage onto a revealed monster tile and starts a fight. Costs ALL Actions.",
+        summary="Use Battlemage entity teleport",
+        description="Teleports the active Battlemage onto a revealed entity tile and starts a fight. Costs ALL Actions.",
     )
-    def battlemage_monster_teleport(req: SkillTeleportMonsterTileRequest):
+    def battlemage_entity_teleport(req: SkillTeleportEntityTileRequest):
         try:
-            return graph.teleport_battlemage_to_monster_tile(tx=req.x, ty=req.y)
+            return graph.teleport_battlemage_to_entity_tile(tx=req.x, ty=req.y)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/pocket/select",
         summary="Select tile from pocket (stub)",
@@ -699,7 +712,7 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
             return graph.scout_pull_tile()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     @router.post(
         "/pocket/place",
         summary="Place selected pocket tile (stub)",
@@ -708,27 +721,24 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
         return graph.place_pocket_tile(req.x, req.y)
 
     @router.post(
-        "/monster/draw",
-        summary="Draw monster choices (stub)",
+        "/entity/draw",
+        summary="Draw entity choices (stub)",
     )
-    def draw_monsters(req: DrawMonsterChoicesRequest):
-        return graph.draw_monster_choices(req.count)
+    def draw_entities(req: DrawEntityChoicesRequest):
+        return graph.draw_entity_choices(req.count)
 
     @router.post(
-        "/monster/assign",
-        summary="Assign monster to tile (stub)",
+        "/entity/assign",
+        summary="Assign entity to tile (stub)",
     )
-    def assign_monster(req: AssignMonsterRequest):
-        return graph.assign_monster(req.monster_id, req.x, req.y)
-    
+    def assign_entity(req: AssignEntityRequest):
+        return graph.assign_entity(req.entity_id, req.x, req.y)
+
     @router.post(
         "/turn/end",
         summary="End current turn",
         description="Ends the current player's turn and advances to the next player's turn.",
     )
-    
-    
-    
     def end_turn():
         try:
             return graph.request_end_turn()
@@ -742,6 +752,6 @@ def build_game_router(graph, ascii_tiles, item_features, get_monster_by_id) -> A
     # )
     # def fight_legacy_alias():
     #     return fight_start()
-    
+
     return router
 

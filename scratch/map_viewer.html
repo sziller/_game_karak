@@ -215,7 +215,7 @@ button { margin: 4px; }
 
 <div id="tile-counters" style="margin-top: 20px;">
     <div>Tiles left: <span id="tiles-left">?</span></div>
-    <div>Monster tiles left: <span id="monster-tiles-left">?</span></div>
+    <div>Entity tiles left: <span id="entity-tiles-left">?</span></div>
     <div>Room X pulled: <span id="roomx-pulled">?</span></div>
 </div>
 
@@ -437,7 +437,7 @@ function renderMapAscii() {
                     }
                 }
 
-                if (tile.monster_id) {
+                if (tile.entity_id) {
                     tile3x3[1][1] = { ch: "M", color: "yellow" };
                 }
             }
@@ -564,12 +564,12 @@ baseImg.style.transform = `rotate(${tile.rotation_q * 90}deg)`;
 
         tileBox.appendChild(baseImg);
 
-        // Monster (upright, scaled with tile)
+        // Entity (upright, scaled with tile)
     
     // Content layer (mutually exclusive)
-if (tile.monster_id) {
+if (tile.entity_id) {
     const img = document.createElement("img");
-    img.src = `/media/tile-content/${tile.monster_id}.png`;
+    img.src = `/media/tile-content/${tile.entity_id}.png`;
     img.style.position = "absolute";
     img.style.width = "70%";
     img.style.height = "70%";
@@ -619,7 +619,7 @@ if (tile.monster_id) {
         }
 
         document.getElementById("tiles-left").textContent = data.tiles_left;
-        document.getElementById("monster-tiles-left").textContent = data.monsters_left;
+        document.getElementById("entity-tiles-left").textContent = data.entities_left;
         document.getElementById("roomx-pulled").textContent = data.room_x_pulled;
 
         const map = document.getElementById("map");
@@ -635,7 +635,7 @@ if (tile.monster_id) {
 
         const playerTile = currentTiles[`${playerX},${playerY}`];
  
-        if (playerTile && playerTile.monster_id) {
+        if (playerTile && playerTile.entity_id) {
         setFightActive(true);
         } else {
         setFightActive(false);
@@ -885,7 +885,7 @@ if (tile.monster_id) {
         lines.push(`  E: ${tile.doors.E ? "open" : "closed"}`);
         lines.push(`  S: ${tile.doors.S ? "open" : "closed"}`);
         lines.push(`  W: ${tile.doors.W ? "open" : "closed"}`);
-        lines.push(`Monster: ${tile.monster_id ?? "-"}`);
+        lines.push(`Entity: ${tile.entity_id ?? "-"}`);
         lines.push(`Feature: ${tile.feature ?? "-"}`);
     }
 
@@ -908,16 +908,16 @@ if (tile.monster_id) {
     }
 
     // -----------------------
-    // Monster choices
+    // Entity choices
     // -----------------------
     lines.push("");
-    lines.push("=== Monster Choices ===");
+    lines.push("=== Entity Choices ===");
 
-    const monsters = mapData.monster_choices ?? [];
-    if (monsters.length === 0) {
+    const entities = mapData.entity_choices ?? [];
+    if (entities.length === 0) {
         lines.push("(none)");
     } else {
-        monsters.forEach((m, i) => {
+        entities.forEach((m, i) => {
             lines.push(`#${i + 1}: ${m}`);
         });
     }

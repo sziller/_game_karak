@@ -54,7 +54,7 @@
 
 <div style="margin-top: 20px;">
   Tiles left: <span id="tiles-left">?</span> |
-  Monsters left: <span id="monster-tiles-left">?</span> |
+  Entities left: <span id="entity-tiles-left">?</span> |
   Room X pulled: <span id="roomx-pulled">?</span>
 </div>
 
@@ -310,8 +310,8 @@ function renderMap() {
       ctx.restore();
 
       // --- CONTENT ---
-      if (tile.monster || tile.tool) {
-        const contentName = tile.monster || tile.tool;
+      if (tile.entity || tile.tool) {
+        const contentName = tile.entity || tile.tool;
         const contentImg = loadImage(CONTENT_DIR + contentName + ".png");
         ctx.drawImage(
           contentImg,
@@ -343,7 +343,7 @@ async function loadMap() {
   playerY = d.player.y;
 
   document.getElementById("tiles-left").textContent = d.tiles_left;
-  document.getElementById("monster-tiles-left").textContent = d.monsters_left;
+  document.getElementById("entity-tiles-left").textContent = d.entities_left;
   document.getElementById("roomx-pulled").textContent = d.room_x_pulled;
 
   const tile = tiles[`${playerX},${playerY}`];

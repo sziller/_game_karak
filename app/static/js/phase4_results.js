@@ -131,36 +131,36 @@ function getTreasureValue(player) {
     return Number(inv?.treasure || 0);
 }
 
-function getPlayerKillsByMonster(player) {
+function getPlayerKillsByEntity(player) {
     const killStats = latestResults?.kill_stats || {};
     const byPlayer = killStats?.kills_by_player_id || {};
     const row = byPlayer[normalizePlayerId(player?.player_id)] || byPlayer[player?.player_id] || {};
 
-    return row?.kills_by_monster_id || {};
+    return row?.kills_by_entity_id || {};
 }
 
 function getTotalKills(player) {
-    const kills = getPlayerKillsByMonster(player);
+    const kills = getPlayerKillsByEntity(player);
     return Object.values(kills).reduce((sum, value) => sum + Number(value || 0), 0);
 }
 
-function getTargetMonsterIds() {
+function getTargetEntityIds() {
     const checks =
         latestResults?.result?.end_condition?.checks ||
         latestResults?.end_condition?.checks ||
         [];
 
     return checks
-        .map(row => row?.monster_id_normalized)
+        .map(row => row?.entity_id_normalized)
         .filter(Boolean);
 }
 
-function getTargetMonsterKills(player) {
-    const targetIds = getTargetMonsterIds();
-    const kills = getPlayerKillsByMonster(player);
+function getTargetEntityKills(player) {
+    const targetIds = getTargetEntityIds();
+    const kills = getPlayerKillsByEntity(player);
 
-    return targetIds.reduce((sum, monsterId) => {
-        return sum + Number(kills?.[monsterId] || 0);
+    return targetIds.reduce((sum, entityId) => {
+        return sum + Number(kills?.[entityId] || 0);
     }, 0);
 }
 
@@ -205,7 +205,7 @@ function getSortValue(player, key) {
             return getSkillNames(player).join(" ");
 
         case "target_kills":
-            return getTargetMonsterKills(player);
+            return getTargetEntityKills(player);
 
         case "all_kills":
             return getTotalKills(player);
@@ -319,13 +319,13 @@ function renderSkillList(player) {
     `;
 }
 
-function renderMonsterKillList(player, { targetOnly = false } = {}) {
-    const kills = getPlayerKillsByMonster(player);
+function renderEntityKillList(player, { targetOnly = false } = {}) {
+    const kills = getPlayerKillsByEntity(player);
     let entries = Object.entries(kills);
 
     if (targetOnly) {
-        const targetIds = new Set(getTargetMonsterIds());
-        entries = entries.filter(([monsterId]) => targetIds.has(monsterId));
+        const targetIds = new Set(getTargetEntityIds());
+        entries = entries.filter(([entityId]) => targetIds.has(entityId));
     }
 
     if (!entries.length) {
@@ -343,11 +343,11 @@ function renderMonsterKillList(player, { targetOnly = false } = {}) {
     });
 
     return `
-        <div class="results-monster-list">
-            ${entries.map(([monsterId, count]) => `
-                <div class="results-monster-line">
-                    <span class="results-monster-name">${escapeHtml(monsterId)}</span>
-                    <span class="results-monster-count">${Number(count || 0)}</span>
+        <div class="results-entity-list">
+            ${entries.map(([entityId, count]) => `
+                <div class="results-entity-line">
+                    <span class="results-entity-name">${escapeHtml(entityId)}</span>
+                    <span class="results-entity-count">${Number(count || 0)}</span>
                 </div>
             `).join("")}
         </div>
@@ -460,10 +460,10 @@ function renderResultsTable() {
                         ${renderSortButton("✨", "skills", "Skills")}
                     </th>
                     <th class="results-col-target-kills">
-                        ${renderSortButton("🎯", "target_kills", "Target monsters killed")}
+                        ${renderSortButton("🎯", "target_kills", "Target entities killed")}
                     </th>
                     <th class="results-col-all-kills">
-                        ${renderSortButton("☠️", "all_kills", "All monsters killed")}
+                        ${renderSortButton("☠️", "all_kills", "All entities killed")}
                     </th>
                     <th class="results-col-pvp">
                         ${renderSortButton("⚔️", "pvp", "PvP wins")}
@@ -486,8 +486,8 @@ function renderResultsTable() {
                             </div>
                         </td>
                         <td>${renderSkillList(player)}</td>
-                        <td>${renderMonsterKillList(player, { targetOnly: true })}</td>
-                        <td>${renderMonsterKillList(player)}</td>
+                        <td>${renderEntityKillList(player, { targetOnly: true })}</td>
+                        <td>${renderEntityKillList(player)}</td>
                         <td class="results-number-cell">${getPvpWins(player)}</td>
                         <td>${renderMiniInventory(player)}</td>
                     </tr>

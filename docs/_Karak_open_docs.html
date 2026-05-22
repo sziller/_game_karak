@@ -1151,7 +1151,7 @@ pre.rouge {
 <ul class="sectlevel2">
 <li><a href="#_tiles">8.1. Tiles</a></li>
 <li><a href="#_validtile_invalidtile">8.2. ValidTile / InvalidTile</a></li>
-<li><a href="#_movement_restriction_from_monster_tiles">8.3. Movement restriction from monster Tiles</a></li>
+<li><a href="#_movement_restriction_from_entity_tiles">8.3. Movement restriction from entity Tiles</a></li>
 <li><a href="#_lastvalidtile">8.4. LastValidTile</a></li>
 </ul>
 </li>
@@ -1274,7 +1274,7 @@ Enabled by <code>skill_wiz_02</code></p>
 <p>swapping place with a specific Player</p>
 </li>
 <li>
-<p>onto a Monster</p>
+<p>onto a Entity</p>
 </li>
 </ul>
 </div>
@@ -1613,7 +1613,7 @@ After being performed, it ends the current Player&#8217;s Turn.</p>
 <div class="sect4">
 <h5 id="_retreat">Retreat</h5>
 <div class="paragraph">
-<p>After a Monster fight, in case of a <code>loss-outcome</code> or <code>tie-outcome</code>.</p>
+<p>After a Entity fight, in case of a <code>loss-outcome</code> or <code>tie-outcome</code>.</p>
 </div>
 <div class="dlist">
 <dl>
@@ -1727,7 +1727,7 @@ After being performed, it ends the current Player&#8217;s Turn.</p>
 <h4 id="_definition_4">Definition</h4>
 <div class="paragraph">
 <p>Determined Action progression.
-Entering a Field with a Monster in it results in a Fight.</p>
+Entering a Field with a Entity in it results in a Fight.</p>
 </div>
 <div class="dlist">
 <dl>
@@ -2248,7 +2248,7 @@ Entering a Field with a Monster in it results in a Fight.</p>
 <p><em>False</em>: unplaced but already drawn tiles</p>
 </li>
 <li>
-<p><em>True</em>: means the Tile is already on the Field (location and rotation determined), it also has or has had a monster/
+<p><em>True</em>: means the Tile is already on the Field (location and rotation determined), it also has or has had a entity/
         item in it, if <code>type</code> == <em>room</em>
 <code>visited</code>: &lt;bool&gt;</p>
 <div class="ulist">
@@ -2278,7 +2278,7 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
 <div class="ulist">
 <ul>
 <li>
-<p>Tiles with a living Monster in them are <em>InvalidTiles</em></p>
+<p>Tiles with a living Entity in them are <em>InvalidTiles</em></p>
 </li>
 <li>
 <p>You cannot end (thus start) your <strong>Turn</strong> on an <em>Invalid Tile</em></p>
@@ -2303,9 +2303,9 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
 </div>
 </div>
 <div class="sect2">
-<h3 id="_movement_restriction_from_monster_tiles">8.3. Movement restriction from monster Tiles</h3>
+<h3 id="_movement_restriction_from_entity_tiles">8.3. Movement restriction from entity Tiles</h3>
 <div class="paragraph">
-<p>A Player may <strong>not</strong> move <strong>from</strong> a Monster-occupied Tile.</p>
+<p>A Player may <strong>not</strong> move <strong>from</strong> a Entity-occupied Tile.</p>
 </div>
 <div class="dlist">
 <dl>
@@ -2369,7 +2369,7 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
     <span class="s">"skill_bea_01"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
                      <span class="s">"scope"</span><span class="p">:</span> <span class="s">"combat"</span><span class="p">,</span>
-                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"Gains +1 strength against monster NOT"</span>
+                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"Gains +1 strength against entity NOT"</span>
                                     <span class="s">"having been revealed in her current move."</span><span class="p">},</span>
     <span class="s">"skill_bat_01"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
@@ -2446,7 +2446,7 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
     <span class="s">"skill_bat_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
                      <span class="s">"scope"</span><span class="p">:</span> <span class="s">"move"</span><span class="p">,</span>
-                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"May teleport onto a revealed monster"</span>
+                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"May teleport onto a revealed entity"</span>
                                     <span class="s">"then fight it. Costs 1 Action."</span><span class="p">},</span>
     <span class="s">"skill_acr_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
@@ -2463,15 +2463,15 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
     <span class="s">"skill_pri_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>  <span class="c1"># weaker version of &lt;skill_thi_02&gt;
 </span>                     <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
                      <span class="s">"scope"</span><span class="p">:</span> <span class="s">"move"</span><span class="p">,</span>
-                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"Does not have to fight a monster if"</span>
+                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"Does not have to fight a entity if"</span>
                                     <span class="s">"she has at least an Action left,"</span>
-                                    <span class="s">"but may not end her turn on a monster,"</span>
+                                    <span class="s">"but may not end her turn on a entity,"</span>
                                     <span class="s">"so following her 4th action"</span>
-                                    <span class="s">" - if she lands on a monster - "</span>
+                                    <span class="s">" - if she lands on a entity - "</span>
                                     <span class="s">"she must fight it:"</span>
                                     <span class="s">"if `outcome` = 'loss' or 'tie',"</span>
                                     <span class="s">"has to move back to the last valid tile."</span>
-                                    <span class="s">"For every monster she skips she must"</span>
+                                    <span class="s">"For every entity she skips she must"</span>
                                     <span class="s">"subtract 1 HP!"</span><span class="p">},</span>
     <span class="s">"skill_ran_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
@@ -2497,11 +2497,11 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
     <span class="s">"skill_thi_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>  <span class="c1"># stronger version of &lt;skill_pri_02&gt;
 </span>                     <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
                      <span class="s">"scope"</span><span class="p">:</span> <span class="s">"move"</span><span class="p">,</span>
-                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"Does not have to fight a monster if"</span>
+                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"Does not have to fight a entity if"</span>
                                     <span class="s">"she has at least an Action left,"</span>
-                                    <span class="s">"but may not end her turn on a monster,"</span>
+                                    <span class="s">"but may not end her turn on a entity,"</span>
                                     <span class="s">"so following her 4th action"</span>
-                                    <span class="s">" - if she lands on a monster - "</span>
+                                    <span class="s">" - if she lands on a entity - "</span>
                                     <span class="s">"she must fight it:"</span>
                                     <span class="s">"if `outcome` = 'loss' or 'tie',"</span>
                                     <span class="s">"has to move back to the last valid tile."</span><span class="p">},</span>
@@ -2509,14 +2509,14 @@ A Tile <code>archetype_id</code> = "room_x_arena" is activates a PvP Fight on tu
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
                      <span class="s">"scope"</span><span class="p">:</span> <span class="s">"move"</span><span class="p">,</span>
                      <span class="s">"description"</span><span class="p">:</span> <span class="s">"If Player *discovers* a tile_type='room':"</span>
-                                    <span class="s">"Player draws 2 items from MONSTER_POOL"</span>
+                                    <span class="s">"Player draws 2 items from ENTITY_POOL"</span>
                                     <span class="s">"Populates the tile with one of his liking,"</span>
                                     <span class="s">"and puts the otherone back in the"</span>
-                                    <span class="s">"MONSTER_POOL"</span><span class="p">},</span>
+                                    <span class="s">"ENTITY_POOL"</span><span class="p">},</span>
     <span class="s">"skill_alc_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>
                      <span class="s">"scope"</span><span class="p">:</span> <span class="s">"move"</span><span class="p">,</span>
-                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"May redraw new monsters during the turn"</span>
+                     <span class="s">"description"</span><span class="p">:</span> <span class="s">"May redraw new entities during the turn"</span>
                                     <span class="s">"at the cost of 1 HP each."</span><span class="p">},</span>
     <span class="s">"skill_swo_02"</span><span class="p">:</span> <span class="p">{</span><span class="s">"value"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
                      <span class="s">"name"</span><span class="p">:</span> <span class="bp">None</span><span class="p">,</span>

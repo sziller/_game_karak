@@ -1,7 +1,17 @@
+GAME_MECHANICS = {
+    # If True, a tile may contain at most one board-content piece:
+    # - one entity_id
+    # OR
+    # - one object_id
+    #
+    # Players are not counted here.
+    "tile_content_exclusivity": True,
+}
+
 GENERAL = {"max_of_players": 5,
            "room_x_karak_limit": 5,
            "curse_room_triggers": [1, 2, 3],
-           "game_mode": "purge",    # purge: certain set of monsters are killed at the end of any players turn
+           "game_mode": "cave_collapse",    # purge: certain set of entities are killed at the end of any players turn
                                     # cave_collapse:    at the end of purge, game goes on and players must escape a
                                     #                   collapse style dungeon destruction
                                     # firestorm:        at the end of purge, game goes on and players must escape a
@@ -10,7 +20,7 @@ GENERAL = {"max_of_players": 5,
                                     # turn_based:       game ends after a fixed amount of turns (*nr_of_players)
                                     # on_demand:        game ends once an "END GAME" button is bushed
                                     # never:            gema never ends
-           "game_mode_details": {"monsters": ["dragon"], "number_of_monsters": 1, "allow_early_escape": True}}
+           "game_mode_details": {"entities": ["Mummy"], "number_of_entities": 1, "allow_early_escape": True}}
 
 PLAYER_FEATURES = {"max_hp": 5,
                    "total_of_scrolls": 3,
@@ -20,7 +30,7 @@ PLAYER_FEATURES = {"max_hp": 5,
 # PvP-specific combat interpretation.
 PVP_COMBAT_RULES = {
     # None:
-    #   Players have no monster sort in PvP. LIV+1 / UND+1 weapon effects do not apply.
+    #   Players have no entity sort in PvP. LIV+1 / UND+1 weapon effects do not apply.
     #
     # "LIV":
     #   Players count as living in PvP. LIV+1 weapon effects apply.

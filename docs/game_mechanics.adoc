@@ -55,7 +55,7 @@ Included variants:
 * between teleport gates
 * onto a specific Player
 * swapping place with a specific Player
-* onto a Monster
+* onto a Entity
 
 .Hook
 [NOTE]
@@ -241,7 +241,7 @@ Refer to::
 
 ===== Retreat
 
-After a Monster fight, in case of a `loss-outcome` or `tie-outcome`.
+After a Entity fight, in case of a `loss-outcome` or `tie-outcome`.
 
 Effect::
 
@@ -285,7 +285,7 @@ do_end_turn = None
 
 ==== Definition
 Determined Action progression.
-Entering a Field with a Monster in it results in a Fight.
+Entering a Field with a Entity in it results in a Fight.
 
 Exceptions::
 

@@ -325,6 +325,110 @@ pre {
     padding-right: 4px;
 }
 
+/* =========================================================
+   11B. TURN ACTOR STRIP
+   Shows the backend-provided actor sequence above real players.
+   Dungeon/GameMaster is displayed here, not as a player row.
+   ========================================================= */
+
+.turn-actor-strip {
+    margin-bottom: 8px;
+    padding: 6px;
+
+    border: 1px solid #333;
+    border-radius: 6px;
+
+    background: #111;
+
+    box-sizing: border-box;
+}
+
+.turn-actor-strip-title {
+    margin-bottom: 5px;
+
+    font-size: 10px;
+    line-height: 1;
+
+    color: #888899;
+
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.turn-actor-strip-list {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+
+    gap: 4px;
+
+    min-width: 0;
+}
+
+.turn-actor-chip {
+    max-width: 100%;
+
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+
+    padding: 3px 6px;
+
+    border: 1px solid #444;
+    border-radius: 999px;
+
+    background: #181818;
+    color: #ddd;
+
+    font-size: 10px;
+    line-height: 1;
+
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.turn-actor-chip.active {
+    border-color: #88ff88;
+    background: #142014;
+    box-shadow: 0 0 0 1px rgba(136, 255, 136, 0.25);
+}
+
+.turn-actor-chip.player {
+    background: #151a20;
+}
+
+.turn-actor-chip.dungeon {
+    border-color: #aa5555;
+    background: #241818;
+    color: #ffd0d0;
+}
+
+.turn-actor-chip-icon {
+    flex: 0 0 auto;
+}
+
+.turn-actor-chip-label {
+    min-width: 0;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.turn-actor-chip-detail {
+    flex: 0 0 auto;
+
+    opacity: 0.7;
+
+    font-size: 9px;
+    white-space: nowrap;
+}
+
+.turn-actor-chip-detail::before {
+    content: "· ";
+}
+
+
 /* One player card / row. JS creates this with class="player-row". */
 .player-row {
     display: flex;
@@ -1226,7 +1330,7 @@ pre {
 }
 
 /* Encounter and ground should also fill their top cells. */
-.top-monster-panel,
+.top-entity-panel,
 .top-ground-panel {
     min-width: 0;
     min-height: 0;
@@ -1536,10 +1640,10 @@ pre {
    35. ENCOUNTER PANEL
    Top-left display:
    - active player's tableau image always on the left
-   - monster/player/choice target on the right when relevant
+   - entity/player/choice target on the right when relevant
    ========================================================= */
 
-.top-monster-panel {
+.top-entity-panel {
     min-width: 0;
     min-height: 0;
 
@@ -1590,7 +1694,7 @@ pre {
     object-fit: contain;
 }
 
-/* Right-side opponent/monster area. */
+/* Right-side opponent/entity area. */
 .encounter-target {
     height: 100%;
     min-width: 0;
@@ -1608,8 +1712,8 @@ pre {
     opacity: 0.25;
 }
 
-/* Monster icon, same conceptual asset as map content icon. */
-.encounter-monster-img {
+/* Entity icon, same conceptual asset as map content icon. */
+.encounter-entity-img {
     display: block;
 
     max-width: 88px;
@@ -1683,11 +1787,11 @@ pre {
     color: #ccaa44;
 }
 
-.encounter-monster-choice-box {
+.encounter-entity-choice-box {
     grid-template-columns: 1fr 1.5fr;
 }
 
-.encounter-monster-choice {
+.encounter-entity-choice {
     min-width: 0;
     min-height: 0;
 
@@ -1698,7 +1802,7 @@ pre {
     overflow: hidden;
 }
 
-.monster-choice-candidates {
+.entity-choice-candidates {
     display: flex;
     flex-direction: row;
     gap: 6px;
@@ -1712,7 +1816,7 @@ pre {
     overflow: hidden;
 }
 
-.monster-choice-card {
+.entity-choice-card {
     width: 72px;
     height: 86px;
 
@@ -1729,7 +1833,7 @@ pre {
     overflow: hidden;
 }
 
-.monster-choice-card img {
+.entity-choice-card img {
     display: block;
 
     max-width: 48px;
@@ -1741,7 +1845,7 @@ pre {
     object-fit: contain;
 }
 
-.monster-choice-card span {
+.entity-choice-card span {
     margin-top: 3px;
 
     width: 100%;
@@ -1751,21 +1855,21 @@ pre {
     white-space: nowrap;
 }
 
-.monster-choice-card.confirmable {
+.entity-choice-card.confirmable {
     border-color: #88cc88;
 }
 
-.monster-choice-card.not-confirmable {
+.entity-choice-card.not-confirmable {
     opacity: 0.35;
 }
 
-.monster-choice-actions {
+.entity-choice-actions {
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
-.monster-choice-actions button {
+.entity-choice-actions button {
     width: 100%;
     max-width: 120px;
 }
@@ -2046,6 +2150,11 @@ pre {
 
 .player-row.active.turn-change-enter {
     animation: active-player-turn-change-enter 260ms ease-out;
+}
+
+.player-row.player-left-game {
+    opacity: 0.55;
+    filter: grayscale(0.7);
 }
 
 @keyframes player-row-turn-change-enter {

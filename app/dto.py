@@ -76,13 +76,13 @@ class PlacePocketTileRequest(BaseModel):
     y: int
 
 
-# --- Monster selection ---
-class DrawMonsterChoicesRequest(BaseModel):
+# --- Entity selection ---
+class DrawEntityChoicesRequest(BaseModel):
     count: int = 2  # how many to draw (rule-checked later)
 
 
-class AssignMonsterRequest(BaseModel):
-    monster_id: str
+class AssignEntityRequest(BaseModel):
+    entity_id: str
     x: int
     y: int
 
