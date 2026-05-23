@@ -170,6 +170,9 @@ def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> AP
             "players": graph.serialize_players() if hasattr(graph, "serialize_players") else [],
             "active_player_idx": getattr(graph, "active_player_idx", 0),
             "active_player": graph.serialize_active_player() if hasattr(graph, "serialize_active_player") else None,
+            "active_actor": graph.serialize_active_actor() if hasattr(graph, "serialize_active_actor") else None,
+            "turn_actors": graph.serialize_turn_actors() if hasattr(graph, "serialize_turn_actors") else [],
+            "game_masters": graph.serialize_game_masters() if hasattr(graph, "serialize_game_masters") else {},
             "turn": graph.serialize_turn_state() if hasattr(graph, "serialize_turn_state") else None,
         }
 

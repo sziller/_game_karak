@@ -127,8 +127,32 @@ function getInventory(player) {
 }
 
 function getTreasureValue(player) {
-    const inv = getInventory(player);
-    return Number(inv?.treasure || 0);
+    return Number(
+        player?.result_status?.credited_treasure ??
+        player?.result?.credited_treasure ??
+        getInventory(player)?.treasure ??
+        0
+    );
+}
+
+function getRawTreasureValue(player) {
+    return Number(
+        player?.result_status?.raw_treasure ??
+        getInventory(player)?.treasure ??
+        0
+    );
+}
+
+function isPlayerCredited(player) {
+    return !!player?.result_status?.is_credited;
+}
+
+function isPlayerUncredited(player) {
+    return !!player?.result_status?.is_uncredited;
+}
+
+function getFinalStatusLabel(player) {
+    return player?.result_status?.final_status_label || "-";
 }
 
 function getPlayerKillsByEntity(player) {
@@ -165,9 +189,38 @@ function getTargetEntityKills(player) {
 }
 
 function getPvpWins(player) {
-    // Future field.
-    // Keep stable now so the table is already shaped for later PvP stats.
-    return Number(player?.pvp_wins || player?.stats?.pvp_wins || 0);
+    return Number(
+        player?.pvp_stats?.wins ??
+        player?.pvp_wins ??
+        player?.stats?.pvp_wins ??
+        0
+    );
+}
+
+function getPvpLosses(player) {
+    return Number(player?.pvp_stats?.losses ?? 0);
+}
+
+function getPvpDraws(player) {
+    return Number(player?.pvp_stats?.draws ?? 0);
+}
+
+function renderPvpStats(player) {
+    const wins = getPvpWins(player);
+    const losses = getPvpLosses(player);
+    const draws = getPvpDraws(player);
+
+    if (!wins && !losses && !draws) {
+        return `<span class="muted">-</span>`;
+    }
+
+    return `
+        <div class="results-pvp-stat">
+            <div><b>${wins}</b> W</div>
+            <div>${losses} L</div>
+            <div>${draws} D</div>
+        </div>
+    `;
 }
 
 function getSkillNames(player) {
@@ -476,19 +529,30 @@ function renderResultsTable() {
 
             <tbody>
                 ${sortedPlayers.map((player, index) => `
-                    <tr class="results-row">
-                        <td class="results-rank-cell">${index + 1}</td>
-                        <td class="results-number-cell">${getTreasureValue(player)}</td>
+    <tr class="results-row ${isPlayerUncredited(player) ? "results-row-uncredited" : "results-row-credited"}">
+                        <td class="results-rank-cell">${player?.result_rank ?? (index + 1)}</td>
+                        <td class="results-number-cell">
+    ${getTreasureValue(player)}
+    ${isPlayerUncredited(player)
+        ? `<div class="results-uncredited-note">uncredited</div>`
+        : ""}
+    ${getRawTreasureValue(player) !== getTreasureValue(player)
+        ? `<div class="results-raw-note">carried: ${getRawTreasureValue(player)}</div>`
+        : ""}
+</td>
                         <td class="results-icon-cell">${renderPlayerIcon(player)}</td>
                         <td>
                             <div class="results-player-name">
-                                ${escapeHtml(player?.display_name || `Player ${getPlayerNr(player)}`)}
-                            </div>
+    ${escapeHtml(player?.display_name || `Player ${getPlayerNr(player)}`)}
+</div>
+<div class="results-final-status">
+    ${escapeHtml(getFinalStatusLabel(player))}
+</div>
                         </td>
                         <td>${renderSkillList(player)}</td>
-                        <td>${renderEntityKillList(player, { targetOnly: true })}</td>
+                        <td>${renderEntityKillList(player, {targetOnly: true})}</td>
                         <td>${renderEntityKillList(player)}</td>
-                        <td class="results-number-cell">${getPvpWins(player)}</td>
+                        <td class="results-pvp-cell">${renderPvpStats(player)}</td>
                         <td>${renderMiniInventory(player)}</td>
                     </tr>
                 `).join("")}

@@ -191,6 +191,76 @@
     color: #ddd;
 }
 
+.results-pvp-cell {
+    text-align: center;
+}
+
+.results-pvp-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    align-items: center;
+    justify-content: center;
+
+    font-size: 10px;
+    line-height: 1.1;
+
+    color: #bbb;
+}
+
+.results-pvp-stat b {
+    color: #ddd;
+}
+
+/* ---------------------------------------------------------
+   Credited / uncredited result states
+   Dead or trapped players are shown as uncredited.
+   --------------------------------------------------------- */
+
+.results-row-uncredited {
+    opacity: 0.55;
+    filter: grayscale(0.65);
+}
+
+.results-row-uncredited .results-player-name {
+    text-decoration: line-through;
+}
+
+.results-final-status {
+    margin-top: 3px;
+
+    font-size: 11px;
+    line-height: 1.1;
+
+    color: #aaa;
+}
+
+.results-row-uncredited .results-final-status {
+    color: #ff7777;
+    font-weight: bold;
+}
+
+.results-uncredited-note {
+    margin-top: 3px;
+
+    font-size: 10px;
+    line-height: 1.1;
+
+    color: #ff7777;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.results-raw-note {
+    margin-top: 2px;
+
+    font-size: 10px;
+    line-height: 1.1;
+
+    color: #aaa;
+}
+
 .results-icon-cell {
     text-align: center;
 }

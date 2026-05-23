@@ -310,6 +310,16 @@ pre {
     image-rendering: auto;
 }
 
+.tile-collapse-warning {
+    outline: 3px solid rgba(255, 210, 80, 0.85);
+    outline-offset: -3px;
+    box-shadow: inset 0 0 18px rgba(255, 160, 40, 0.35);
+}
+
+.tile-collapsed {
+    filter: grayscale(0.9) brightness(0.55);
+}
+
 /* =========================================================
    11. PLAYERS PANEL / PLAYER ROWS
    ========================================================= */
@@ -327,7 +337,7 @@ pre {
 
 /* =========================================================
    11B. TURN ACTOR STRIP
-   Shows the backend-provided actor sequence above real players.
+   Shows backend-provided actor sequence above real players.
    Dungeon/GameMaster is displayed here, not as a player row.
    ========================================================= */
 
@@ -341,6 +351,7 @@ pre {
     background: #111;
 
     box-sizing: border-box;
+    overflow: hidden;
 }
 
 .turn-actor-strip-title {
@@ -355,24 +366,40 @@ pre {
     letter-spacing: 0.04em;
 }
 
-.turn-actor-strip-list {
+.turn-actor-track {
     display: flex;
     flex-direction: row;
-    flex-wrap: wrap;
+    align-items: center;
 
-    gap: 4px;
+    gap: 5px;
 
     min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+
+    padding-bottom: 2px;
+}
+
+/* Hide ugly scrollbar in most browsers, but keep horizontal scroll usable. */
+.turn-actor-track::-webkit-scrollbar {
+    height: 3px;
+}
+
+.turn-actor-track::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 999px;
 }
 
 .turn-actor-chip {
-    max-width: 100%;
+    flex: 0 0 auto;
+
+    max-width: 130px;
 
     display: inline-flex;
     align-items: center;
     gap: 4px;
 
-    padding: 3px 6px;
+    padding: 4px 7px;
 
     border: 1px solid #444;
     border-radius: 999px;
@@ -385,22 +412,51 @@ pre {
 
     box-sizing: border-box;
     overflow: hidden;
+
+    opacity: 0.72;
+    transform: scale(0.94);
+
+    transition:
+        transform 140ms ease-out,
+        opacity 140ms ease-out,
+        border-color 140ms ease-out,
+        background 140ms ease-out;
 }
 
+/* Current active actor. */
 .turn-actor-chip.active {
+    opacity: 1;
+    transform: scale(1);
+
     border-color: #88ff88;
     background: #142014;
+
     box-shadow: 0 0 0 1px rgba(136, 255, 136, 0.25);
 }
 
+/* Next actor in sequence. */
+.turn-actor-chip.next {
+    opacity: 0.9;
+    border-color: #777;
+}
+
+/* Normal player actor. */
 .turn-actor-chip.player {
     background: #151a20;
 }
 
+/* Dungeon / GameMaster actor. */
 .turn-actor-chip.dungeon {
     border-color: #aa5555;
     background: #241818;
     color: #ffd0d0;
+}
+
+.turn-actor-chip.dungeon.active {
+    border-color: #ff7777;
+    background: #351818;
+
+    box-shadow: 0 0 0 1px rgba(255, 90, 90, 0.35);
 }
 
 .turn-actor-chip-icon {
@@ -428,6 +484,7 @@ pre {
     content: "· ";
 }
 
+/* -------------------------------------------------------------------------------*/
 
 /* One player card / row. JS creates this with class="player-row". */
 .player-row {
@@ -515,7 +572,7 @@ pre {
     height: 100%;
 
     object-fit: contain;
-    image-rendering: pixelated;
+    image-rendering: auto;
 }
 
 /* Fallback if no portrait exists. */
@@ -2155,6 +2212,88 @@ pre {
 .player-row.player-left-game {
     opacity: 0.55;
     filter: grayscale(0.7);
+}
+
+/* =========================================================
+   41B. VIRTUAL GAME-MASTER PLAYER ROW
+   Dungeon appears in the player-tab column as a turn event row,
+   but it is not a real player and cannot be targeted.
+   ========================================================= */
+
+.player-row.virtual-player-row {
+    background: #180f0f;
+
+    border-color: #ffffff;
+    border-width: 3px;
+
+    outline: 2px solid #ffffff;
+    outline-offset: -2px;
+}
+
+.player-row.virtual-player-row:hover {
+    background: #221313;
+}
+
+.player-row.virtual-player-row.active {
+    background: #251010;
+    border-color: #cc5555;
+    outline: 2px solid #aa4444;
+}
+
+.virtual-player-portrait {
+    border-color: #aa5555 !important;
+    background: #241818;
+}
+
+.virtual-player-symbol {
+    width: 100%;
+    height: 100%;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 28px;
+    color: #ffd0d0;
+}
+
+.virtual-player-state {
+    color: #ffaaaa;
+}
+
+.virtual-player-state .player-hp-value::after {
+    content: "";
+}
+
+.virtual-player-text {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    min-height: 64px;
+}
+
+.virtual-event-title {
+    font-size: 13px;
+    font-weight: bold;
+    color: #ffd0d0;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.virtual-event-sub {
+    margin-top: 4px;
+
+    font-size: 10px;
+    line-height: 1.25;
+
+    color: #c89696;
+}
+
+.virtual-player-mini {
+    opacity: 0.85;
 }
 
 @keyframes player-row-turn-change-enter {

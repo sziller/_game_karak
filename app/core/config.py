@@ -20,7 +20,7 @@ GENERAL = {"max_of_players": 5,
                                     # turn_based:       game ends after a fixed amount of turns (*nr_of_players)
                                     # on_demand:        game ends once an "END GAME" button is bushed
                                     # never:            gema never ends
-           "game_mode_details": {"entities": ["Mummy"], "number_of_entities": 1, "allow_early_escape": True}}
+           "game_mode_details": {"entities": ["Dragon"], "number_of_entities": "all", "allow_early_escape": True}}
 
 PLAYER_FEATURES = {"max_hp": 5,
                    "total_of_scrolls": 3,

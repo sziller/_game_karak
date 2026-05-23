@@ -17,6 +17,9 @@ from domain.game_entities import (TILE_POOL as _TILE_POOL,
 from domain.player import Player, SlotGroup
 from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
 from domain.game_master import (DUNGEON_GAME_MASTER_ID,
+                                DUNGEON_GAME_MASTER_NAME,
+                                DUNGEON_GAME_MASTER_ICON_PATH,
+                                COLLAPSED_TILE_IMAGE_PATH,
                                 GameMaster,
                                 make_dungeon_game_master)
 
@@ -118,6 +121,10 @@ class TileNode:
 
         self.passable_neighbors: Dict[DIRECTION, bool] = {}
 
+        self.collapse_state: Literal["stable", "collapsed"] = "stable"
+        self.collapsed_by_round: Optional[int] = None
+        self.will_collapse_next: bool = False
+
     def to_dict(self) -> dict:
         object_item = None
 
@@ -177,10 +184,67 @@ class TileNode:
             "tool": self.tool,
             "feature": self.feature,
             "arena_pvp_used": self.arena_pvp_used,
+            "collapse_state": self.collapse_state,
+            "collapsed_by_round": self.collapsed_by_round,
+            "will_collapse_next": self.will_collapse_next,
+            "collapsed_tile_image_path": COLLAPSED_TILE_IMAGE_PATH,
         }
 
 
+DisasterExpansionShape = Literal["square", "radial", "path"]
 
+
+@dataclass
+class WorldEventState:
+    active: bool = False
+    mode: Optional[Literal["cave_collapse", "firestorm"]] = None
+
+    # Current implementation uses the purge-triggering player's position
+    # as epicenter fallback. Later, Dragon tile should be stored explicitly.
+    epicenter: Optional[tuple[int, int]] = None
+
+    # 0 = announcement-only
+    dungeon_round: int = 0
+
+    # Highest destroyed distance/layer so far.
+    # Starts at -1 so first destruction round starts at 0.
+    destroyed_distance: int = -1
+
+    expansion_shape: DisasterExpansionShape = "square"
+    expansion_rate: int = 1
+
+    collapsed_tile_image_path: str = COLLAPSED_TILE_IMAGE_PATH
+
+    last_destroyed_coords: list[tuple[int, int]] = field(default_factory=list)
+    next_destroyed_coords: list[tuple[int, int]] = field(default_factory=list)
+
+    last_message: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "active": self.active,
+            "mode": self.mode,
+            "epicenter": (
+                {"x": self.epicenter[0], "y": self.epicenter[1]}
+                if self.epicenter is not None
+                else None
+            ),
+            "dungeon_round": self.dungeon_round,
+            "destroyed_distance": self.destroyed_distance,
+            "expansion_shape": self.expansion_shape,
+            "expansion_rate": self.expansion_rate,
+            "collapsed_tile_image_path": self.collapsed_tile_image_path,
+            "last_destroyed_coords": [
+                {"x": x, "y": y}
+                for x, y in self.last_destroyed_coords
+            ],
+            "next_destroyed_coords": [
+                {"x": x, "y": y}
+                for x, y in self.next_destroyed_coords
+            ],
+            "last_message": self.last_message,
+        }
+    
 
 @dataclass
 class TurnActor:
@@ -747,11 +811,19 @@ class DungeonGraph:
         # - escape: post-purge disaster/escape phase
         self.game_phase: Literal["exploration", "escape"] = "exploration"
         self.escape_trigger: Optional[dict[str, Any]] = None
+        self.world_event_state = WorldEventState()
+
 
         # Persistent kill tracking
         self.kill_log: list[dict[str, Any]] = []
         self.kills_total_by_entity_id: dict[str, int] = {}
         self.kills_by_player_id: dict[int, dict[str, int]] = {}
+        
+        # PvP / Arena statistics.
+        self.pvp_wins_by_player_id: dict[int, int] = {}
+        self.pvp_losses_by_player_id: dict[int, int] = {}
+        self.pvp_draws_by_player_id: dict[int, int] = {}
+        self.pvp_log: list[dict[str, Any]] = []
 
     # ---------- Core map ops ----------
     def apply_runtime_config(self, runtime_config: dict) -> dict:
@@ -1778,6 +1850,7 @@ class DungeonGraph:
             "game_result": self.game_result,
             "game_phase": self.game_phase,
             "escape_trigger": self.escape_trigger,
+            "world_event": self.world_event_state.to_dict(),
             "kill_stats": self.serialize_kill_stats(),
 
             # ----------------------------------------------------
@@ -1860,10 +1933,16 @@ class DungeonGraph:
         
         self.game_phase = "exploration"
         self.escape_trigger = None
+        self.world_event_state = WorldEventState()
 
         self.kill_log = []
         self.kills_total_by_entity_id = {}
         self.kills_by_player_id = {}
+        
+        self.pvp_wins_by_player_id = {}
+        self.pvp_losses_by_player_id = {}
+        self.pvp_draws_by_player_id = {}
+        self.pvp_log = []
         
         self.ensure_entrance()
 
@@ -4881,12 +4960,22 @@ class DungeonGraph:
 
         else:
             raise ValueError(f"Unexpected Arena PvP outcome: {outcome}")
+        
+        pvp_stat_row = self.record_arena_pvp_result(
+            outcome=outcome,
+            initiator_player_id=initiator.player_id,
+            challenged_player_id=challenged.player_id,
+            winner_player_id=winner_player_id,
+            loser_player_id=loser_player_id,
+            arena_coord=(arena_tile.x, arena_tile.y),
+        )
 
         arena_result = {
             "outcome": outcome,
             "winner_player_id": winner_player_id,
             "loser_player_id": loser_player_id,
             "both_players_remain_on_arena": True,
+            "pvp_stat_row": pvp_stat_row,
             "arena_loot": {
                 "implemented": False,
                 "deferred_to_step": 6,
@@ -7067,42 +7156,184 @@ class DungeonGraph:
             "kills_by_player_id": per_player,
             "kill_log": list(self.kill_log),
         }
+    
+    # ---------- PvP / Arena statistics ----------
+
+    def _inc_pvp_counter(
+            self,
+            bucket: dict[int, int],
+            player_id: Optional[int],
+            amount: int = 1,
+    ) -> None:
+        if player_id is None:
+            return
+
+        player_id = int(player_id)
+        bucket[player_id] = int(bucket.get(player_id, 0)) + amount
+
+    def record_arena_pvp_result(
+            self,
+            *,
+            outcome: str,
+            initiator_player_id: int,
+            challenged_player_id: int,
+            winner_player_id: Optional[int],
+            loser_player_id: Optional[int],
+            arena_coord: Optional[tuple[int, int]] = None,
+    ) -> dict[str, Any]:
+        """
+        Record one resolved Arena PvP result.
+
+        This records the fight outcome only.
+        It does not care whether Arena loot is later stolen or skipped.
+        """
+
+        if outcome == "draw":
+            self._inc_pvp_counter(self.pvp_draws_by_player_id, initiator_player_id)
+            self._inc_pvp_counter(self.pvp_draws_by_player_id, challenged_player_id)
+
+        else:
+            self._inc_pvp_counter(self.pvp_wins_by_player_id, winner_player_id)
+            self._inc_pvp_counter(self.pvp_losses_by_player_id, loser_player_id)
+
+        row = {
+            "turn_counter": self.turn_counter,
+            "outcome": outcome,
+            "initiator_player_id": int(initiator_player_id),
+            "challenged_player_id": int(challenged_player_id),
+            "winner_player_id": winner_player_id,
+            "loser_player_id": loser_player_id,
+            "arena_coord": (
+                {"x": arena_coord[0], "y": arena_coord[1]}
+                if arena_coord is not None
+                else None
+            ),
+        }
+
+        self.pvp_log.append(row)
+
+        return row
+
+    def serialize_pvp_stats(self) -> dict[str, Any]:
+        player_ids = {p.player_id for p in self.players}
+
+        by_player_id: dict[str, dict[str, int]] = {}
+
+        for player_id in sorted(player_ids):
+            wins = int(self.pvp_wins_by_player_id.get(player_id, 0))
+            losses = int(self.pvp_losses_by_player_id.get(player_id, 0))
+            draws = int(self.pvp_draws_by_player_id.get(player_id, 0))
+
+            by_player_id[str(player_id)] = {
+                "wins": wins,
+                "losses": losses,
+                "draws": draws,
+                "total": wins + losses + draws,
+            }
+
+        return {
+            "by_player_id": by_player_id,
+            "log": list(self.pvp_log),
+        }
+
+    def get_pvp_stats_for_player(self, player_id: int) -> dict[str, int]:
+        wins = int(self.pvp_wins_by_player_id.get(player_id, 0))
+        losses = int(self.pvp_losses_by_player_id.get(player_id, 0))
+        draws = int(self.pvp_draws_by_player_id.get(player_id, 0))
+
+        return {
+            "wins": wins,
+            "losses": losses,
+            "draws": draws,
+            "total": wins + losses + draws,
+        }
 
     def _evaluate_purge_end_condition_from_details(
             self,
             details: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
         """
-        Purge mode:
+        Purge-style trigger evaluator.
 
-        Game ends at the end of any player's turn when the configured
-        number of configured entity IDs has been killed.
+        Used by:
+        - purge
+        - cave_collapse
+        - firestorm
 
         Config shape:
         GENERAL["game_mode_details"] = {
             "entities": ["dragon"],
-            "number_of_entities": 1,
+            "number_of_entities": "all" | 0 | int,
             "allow_early_escape": True,
         }
 
         Semantics:
         - entities:
             list of entity IDs to count, case-insensitive
+
         - number_of_entities:
-            required total kill count across the selected entity IDs
+            "all" or 0:
+                each configured entity type must be killed as many times
+                as it existed in the initial entity pool.
+
+            int N > 0:
+                total kill count across the selected entity IDs must be at least N.
         """
         raw_entity_ids = details.get("entities", ["dragon"])
-        required_kill_count = int(details.get("number_of_entities", 1))
-
-        if required_kill_count <= 0:
-            return None
 
         normalized_targets = {
             self._normalize_entity_id(entity_id)
             for entity_id in raw_entity_ids
+            if str(entity_id or "").strip()
         }
 
         if not normalized_targets:
+            return None
+
+        raw_required = details.get("number_of_entities", 1)
+
+        # --------------------------------------------------
+        # "all" mode:
+        # Each selected entity type must be killed up to its
+        # initial pool count.
+        # --------------------------------------------------
+        if raw_required == "all" or raw_required == 0:
+            initial_counts = self._get_initial_entity_counts_by_normalized_id()
+
+            checks: list[dict[str, Any]] = []
+
+            for normalized_entity_id in sorted(normalized_targets):
+                required = int(initial_counts.get(normalized_entity_id, 0))
+                killed = int(self.kills_total_by_entity_id.get(normalized_entity_id, 0))
+
+                checks.append({
+                    "entity_id_normalized": normalized_entity_id,
+                    "killed": killed,
+                    "required": required,
+                    "met": killed >= required and required > 0,
+                    "requirement_mode": "all",
+                })
+
+            if not all(row["met"] for row in checks):
+                return None
+
+            return {
+                "met": True,
+                "mode": "purge",
+                "reason": "configured_entity_kill_goal_reached",
+                "targets": sorted(normalized_targets),
+                "requirement_mode": "all",
+                "checks": checks,
+                "details": copy.deepcopy(details),
+            }
+
+        # --------------------------------------------------
+        # Integer mode:
+        # Required total kill count across all selected IDs.
+        # --------------------------------------------------
+        required_kill_count = int(raw_required)
+
+        if required_kill_count <= 0:
             return None
 
         killed_count = 0
@@ -7123,6 +7354,7 @@ class DungeonGraph:
             "mode": "purge",
             "reason": "required_entities_killed",
             "targets": sorted(normalized_targets),
+            "requirement_mode": "at_least_total",
             "required_kill_count": required_kill_count,
             "killed_count": killed_count,
             "killed_by_target": killed_by_target,
@@ -7237,6 +7469,41 @@ class DungeonGraph:
             else "Firestorm"
         )
 
+        details = self.rules_general.get("game_mode_details", {}) or {}
+
+        ended_position = ended_player.get("position") or {}
+        epicenter = (
+            int(ended_position.get("x", 0)),
+            int(ended_position.get("y", 0)),
+        )
+
+        shape = str(
+            details.get(
+                "disaster_expansion_shape",
+                "path" if mode == "firestorm" else "square",
+            )
+        ).strip().lower()
+
+        if shape not in {"square", "radial", "path"}:
+            shape = "square"
+
+        rate = int(details.get("disaster_expansion_rate", 1) or 1)
+        rate = max(1, rate)
+
+        self.world_event_state = WorldEventState(
+            active=True,
+            mode=mode,
+            epicenter=epicenter,
+            dungeon_round=0,
+            destroyed_distance=-1,
+            expansion_shape=shape,  # square / radial / path
+            expansion_rate=rate,
+            collapsed_tile_image_path=COLLAPSED_TILE_IMAGE_PATH,
+            last_message=f"{gm.world_event_label} begins.",
+        )
+
+        self._refresh_next_disaster_warning()
+
         # Insert Dungeon into the parallel actor sequence.
         dungeon_insert_result = self.insert_dungeon_actor_after_active_player()
 
@@ -7258,6 +7525,7 @@ class DungeonGraph:
             "turn": self.serialize_turn_state(),
             "active_player": self.serialize_active_player(),
             "players": self.serialize_players(),
+            "world_event": self.world_event_state.to_dict()
         }
     
     def _evaluate_timed_end_condition_from_details(
@@ -7438,6 +7706,12 @@ class DungeonGraph:
         2. Runtime configured game-mode rules.
            These are selected through self.rules_general["game_mode"] and
            self.rules_general["game_mode_details"].
+
+        Important:
+        - During game_phase == "escape", the original purge/cave/fire trigger
+          must no longer be evaluated.
+        - Otherwise the already-met purge condition would repeatedly fire and
+          force the game into results.
         """
         if self.game_over:
             return self.game_result
@@ -7454,6 +7728,15 @@ class DungeonGraph:
 
         if no_active_players_condition is not None:
             return no_active_players_condition
+
+        # --------------------------------------------------
+        # Escape phase:
+        # The original purge goal has already served its purpose.
+        # From here on, the game should continue until all players
+        # have either escaped or died.
+        # --------------------------------------------------
+        if getattr(self, "game_phase", "exploration") == "escape":
+            return None
 
         # --------------------------------------------------
         # 2. Runtime game-mode dispatcher.
@@ -7564,20 +7847,115 @@ class DungeonGraph:
         """
         Phase-4 / RoomResults payload.
 
-        For now this intentionally exposes player names and full player snapshots.
-        Later we can add ranking, victory points, treasure totals, kill awards, etc.
+        Results semantics:
+        - Escaped / quit players are credited.
+        - Dead / collapse-removed players are uncredited.
+        - Players still somehow inside at finalization are treated as uncredited.
+        - Current treasure is used as score for credited players for now.
+        - Dead/uncredited players score 0 in final ranking.
         """
+
+        result_players: list[dict[str, Any]] = []
+
+        for p in self.players:
+            row = p.to_dict()
+            row["pvp_stats"] = self.get_pvp_stats_for_player(p.player_id)
+            has_quit_game = bool(getattr(p, "has_quit_game", False))
+            escaped_game = bool(getattr(p, "escaped_game", False))
+
+            # Current collapse-death implementation marks:
+            # has_quit_game = True
+            # escaped_game = False
+            # escape_object_id = "collapse"
+            escape_object_id = getattr(p, "escape_object_id", None)
+
+            is_dead = (
+                    has_quit_game
+                    and not escaped_game
+                    and escape_object_id == "collapse"
+            )
+
+            is_escaped = (
+                    has_quit_game
+                    and escaped_game
+                    and not is_dead
+            )
+
+            is_unresolved_inside = not has_quit_game and not escaped_game
+
+            is_credited = is_escaped
+            is_uncredited = is_dead or is_unresolved_inside
+
+            inventory_view = row.get("inventory_view") or row.get("inventory") or {}
+            raw_treasure = int(inventory_view.get("treasure") or 0)
+
+            credited_treasure = raw_treasure if is_credited else 0
+
+            if is_dead:
+                final_status = "dead"
+                final_status_label = "Dead"
+                uncredited_reason = "collapse"
+            elif is_escaped:
+                final_status = "escaped"
+                final_status_label = "Escaped"
+                uncredited_reason = None
+            elif is_unresolved_inside:
+                final_status = "inside_unresolved"
+                final_status_label = "Trapped / unresolved"
+                uncredited_reason = "not_escaped"
+            else:
+                final_status = "unknown"
+                final_status_label = "Unknown"
+                uncredited_reason = "unknown"
+
+            row["result_status"] = {
+                "final_status": final_status,
+                "final_status_label": final_status_label,
+                "is_credited": is_credited,
+                "is_uncredited": is_uncredited,
+                "uncredited_reason": uncredited_reason,
+                "raw_treasure": raw_treasure,
+                "credited_treasure": credited_treasure,
+                "escaped_game": escaped_game,
+                "has_quit_game": has_quit_game,
+                "escape_turn_nr": getattr(p, "escape_turn_nr", None),
+                "escape_position": getattr(p, "escape_position", None),
+                "escape_object_id": escape_object_id,
+            }
+
+            # Placeholder for now; later replace from real PvP stats/log.
+            row["pvp_stats"] = {
+                "wins": int(getattr(p, "pvp_wins", 0) or 0),
+                "losses": int(getattr(p, "pvp_losses", 0) or 0),
+            }
+
+            result_players.append(row)
+
+        # Rank credited players first by credited treasure descending.
+        # Uncredited/dead players always come after credited players.
+        result_players.sort(
+            key=lambda row: (
+                0 if row["result_status"]["is_credited"] else 1,
+                -int(row["result_status"]["credited_treasure"] or 0),
+                int(row.get("player_id") or 999999),
+            )
+        )
+
+        for idx, row in enumerate(result_players, start=1):
+            row["result_rank"] = idx
+
         return {
             "ok": True,
             "scope": self.game_scope,
             "game_over": self.game_over,
             "result": self.game_result,
-            "players": self.serialize_players(),
+            "players": result_players,
             "player_names": [
                 p.display_name
                 for p in self.players
             ],
             "kill_stats": self.serialize_kill_stats(),
+            "pvp_stats": self.serialize_pvp_stats(),
         }
 
     def _execute_curse_free_action(self, action: CurseFreeAction) -> dict:
@@ -9489,17 +9867,18 @@ class DungeonGraph:
             if self.turn_actors and 0 <= self.active_player_idx < len(self.turn_actors)
             else 0
         )
-
+    
     def ensure_dungeon_game_master(self) -> GameMaster:
-        """
-        Return the Dungeon GameMaster actor, creating it if needed.
-        """
-        gm = self.game_masters.get(DUNGEON_GAME_MASTER_ID)
-
+        """=== Managing off-player-turn events
+        Return the Dungeon GameMaster actor, creating it if needed."""
+        gm = self.game_masters.get("__dungeon__")
         if gm is None:
-            gm = make_dungeon_game_master()
-            self.game_masters[DUNGEON_GAME_MASTER_ID] = gm
-
+            gm = GameMaster(
+                actor_id=DUNGEON_GAME_MASTER_ID,
+                display_name=DUNGEON_GAME_MASTER_NAME,
+                icon_path=DUNGEON_GAME_MASTER_ICON_PATH,
+            )
+            self.game_masters[gm.actor_id] = gm
         return gm
 
     def insert_dungeon_actor_after_active_player(self) -> dict:
@@ -9593,7 +9972,7 @@ class DungeonGraph:
         if actor.kind == "game_master":
             gm = self.game_masters.get(actor.actor_id or "")
             row["display_name"] = gm.display_name if gm else actor.actor_id
-            row["active"] = False
+            row["active"] = bool(gm.active) if gm else False
             row["game_master"] = gm.to_dict() if gm else None
             return row
 
@@ -9642,7 +10021,7 @@ class DungeonGraph:
 
         for p in self.players:
             row = p.to_dict()
-
+            row["pvp_stats"] = self.get_pvp_stats_for_player(p.player_id)
             pos = (p.x, p.y)
             row["position_state"] = {
                 "is_on_committed_tile": pos in self.tiles,
@@ -9974,18 +10353,12 @@ class DungeonGraph:
             raise ValueError("Active player does not own the current turn.")
 
         return turn, active
-
-    def advance_to_next_player_turn(self) -> dict:
-        if not self.players:
-            raise ValueError("No players initialized.")
-
-        active_players = self._active_game_players()
-
-        if not active_players:
-            return self._enter_results_scope_all_players_inactive(
-                reason="all_players_quit_or_escaped",
-            )
-
+    
+    def _advance_to_next_real_player_legacy(self) -> dict:
+        """
+        Old real-player-only turn advancement.
+        Kept as helper so non-escape modes remain stable.
+        """
         start_idx = self.active_player_idx
 
         for step in range(1, len(self.players) + 1):
@@ -9996,7 +10369,6 @@ class DungeonGraph:
                 self.active_player_idx = candidate_idx
                 self._sync_compat_player_position()
 
-                # Keep parallel actor sequence aligned with the newly active player.
                 if self.turn_actors:
                     for actor_idx, actor in enumerate(self.turn_actors):
                         if actor.kind == "player" and actor.player_id == candidate.player_id:
@@ -10004,6 +10376,95 @@ class DungeonGraph:
                             break
 
                 return self.begin_turn_for_active_player()
+
+        return self._enter_results_scope_all_players_inactive(
+            reason="no_eligible_next_player_found",
+        )
+
+    def advance_to_next_player_turn(self) -> dict:
+        """
+        Advance runtime to the next real player turn.
+
+        During escape phase, the parallel turn_actors sequence may contain
+        a Dungeon/GameMaster actor. If encountered, it auto-resolves and
+        then advancement continues to the next real player.
+
+        Important:
+        The scan uses a local cursor. Do not calculate candidates from
+        self.active_actor_idx + step while also mutating self.active_actor_idx,
+        because that skips the actor immediately after Dungeon.
+        """
+        if not self.players:
+            raise ValueError("No players initialized.")
+
+        active_players = self._active_game_players()
+
+        if not active_players:
+            return self._enter_results_scope_all_players_inactive(
+                reason="all_players_quit_or_escaped",
+            )
+
+        if not self.turn_actors:
+            self.rebuild_player_turn_actors()
+
+        has_game_master_actor = any(
+            actor.kind == "game_master"
+            for actor in self.turn_actors
+        )
+
+        if not has_game_master_actor:
+            return self._advance_to_next_real_player_legacy()
+
+        actor_count = len(self.turn_actors)
+        dungeon_results: list[dict[str, Any]] = []
+
+        # Start scanning from the current active actor.
+        cursor_idx = self.active_actor_idx
+
+        # Safety limit:
+        # In one advancement we should need at most one full cycle.
+        # If something is malformed, this prevents an infinite loop.
+        for _ in range(actor_count):
+            cursor_idx = (cursor_idx + 1) % actor_count
+            actor = self.turn_actors[cursor_idx]
+
+            if actor.kind == "game_master":
+                self.active_actor_idx = cursor_idx
+
+                gm = self.game_masters.get(actor.actor_id or "")
+                if gm is not None:
+                    gm.active = True
+
+                dungeon_result = self.resolve_dungeon_turn()
+                dungeon_results.append(dungeon_result)
+
+                if gm is not None:
+                    gm.active = False
+
+                # Continue from Dungeon to the immediate next actor.
+                continue
+
+            if actor.kind == "player":
+                player = self.get_player_by_id(actor.player_id)
+
+                if player is None:
+                    continue
+
+                if not self._player_is_active_in_game(player):
+                    continue
+
+                self.active_actor_idx = cursor_idx
+                self.active_player_idx = self.players.index(player)
+                self._sync_compat_player_position()
+
+                result = self.begin_turn_for_active_player()
+                result["dungeon_results"] = dungeon_results
+                result["active_actor"] = self.serialize_active_actor()
+                result["turn_actors"] = self.serialize_turn_actors()
+                result["game_masters"] = self.serialize_game_masters()
+                result["world_event"] = self.world_event_state.to_dict()
+
+                return result
 
         return self._enter_results_scope_all_players_inactive(
             reason="no_eligible_next_player_found",
@@ -10580,13 +11041,310 @@ class DungeonGraph:
         """
         return action.execute(self)
 
-    def ensure_dungeon_game_master(self) -> GameMaster:
-        gm = self.game_masters.get("__dungeon__")
-        if gm is None:
-            gm = GameMaster(
-                actor_id="__dungeon__",
-                display_name="Dungeon",
-                icon_path="/static/media/ui/dungeon.png",
+    # ---------- Disaster / collapse geometry ----------
+
+    def _coord_distance_square(
+            self,
+            coord: tuple[int, int],
+            epicenter: tuple[int, int],
+    ) -> int:
+        x, y = coord
+        ex, ey = epicenter
+        return max(abs(x - ex), abs(y - ey))
+
+    def _coord_distance_radial(
+            self,
+            coord: tuple[int, int],
+            epicenter: tuple[int, int],
+    ) -> int:
+        """
+        Integer radial shell.
+
+        Uses Euclidean distance rounded down to an integer shell.
+        """
+        x, y = coord
+        ex, ey = epicenter
+        return int(((x - ex) ** 2 + (y - ey) ** 2) ** 0.5)
+
+    def _path_distances_from_epicenter(
+            self,
+            epicenter: tuple[int, int],
+    ) -> dict[tuple[int, int], int]:
+        """
+        BFS through currently existing, non-collapsed, passable tile graph.
+        """
+        if epicenter not in self.tiles:
+            return {}
+
+        start_tile = self.tiles[epicenter]
+
+        if getattr(start_tile, "collapse_state", "stable") == "collapsed":
+            return {}
+
+        distances: dict[tuple[int, int], int] = {epicenter: 0}
+        queue: list[tuple[int, int]] = [epicenter]
+
+        while queue:
+            coord = queue.pop(0)
+            tile = self.tiles.get(coord)
+
+            if tile is None:
+                continue
+
+            for dir_, is_passable in tile.passable_neighbors.items():
+                if not is_passable:
+                    continue
+
+                dx, dy = direction_to_delta(dir_)
+                neighbor_coord = (coord[0] + dx, coord[1] + dy)
+                neighbor = self.tiles.get(neighbor_coord)
+
+                if neighbor is None:
+                    continue
+
+                if getattr(neighbor, "collapse_state", "stable") == "collapsed":
+                    continue
+
+                if neighbor_coord in distances:
+                    continue
+
+                distances[neighbor_coord] = distances[coord] + 1
+                queue.append(neighbor_coord)
+
+        return distances
+
+    def get_disaster_coords_between_distances(
+            self,
+            *,
+            start_distance: int,
+            end_distance: int,
+    ) -> list[tuple[int, int]]:
+        state = self.world_event_state
+
+        if not state.active or state.epicenter is None:
+            return []
+
+        shape = state.expansion_shape
+
+        if shape == "path":
+            distances = self._path_distances_from_epicenter(state.epicenter)
+
+            return [
+                coord
+                for coord, dist in distances.items()
+                if start_distance <= dist <= end_distance
+            ]
+
+        coords: list[tuple[int, int]] = []
+
+        for coord, tile in self.tiles.items():
+            if getattr(tile, "collapse_state", "stable") == "collapsed":
+                continue
+
+            if shape == "radial":
+                dist = self._coord_distance_radial(coord, state.epicenter)
+            else:
+                dist = self._coord_distance_square(coord, state.epicenter)
+
+            if start_distance <= dist <= end_distance:
+                coords.append(coord)
+
+        return coords
+    
+    # ---------- Disaster / collapse execution ----------
+
+    def _players_on_coord(self, coord: tuple[int, int]) -> list[Player]:
+        return [
+            p for p in self.players
+            if self._player_is_active_in_game(p)
+            and (p.x, p.y) == coord
+        ]
+
+    def mark_player_dead_by_collapse(
+            self,
+            player: Player,
+            *,
+            coord: tuple[int, int],
+    ) -> None:
+        """
+        Collapse death is not KO.
+        It removes the player from active game participation.
+        """
+        player.hp = 0
+        player.has_quit_game = True
+        player.escaped_game = False
+        player.escape_turn_nr = self.turn_counter
+        player.escape_position = {"x": coord[0], "y": coord[1]}
+        player.escape_object_id = "collapse"
+
+    def collapse_tile(
+            self,
+            coord: tuple[int, int],
+            *,
+            dungeon_round: int,
+    ) -> Optional[dict[str, Any]]:
+        tile = self.tiles.get(coord)
+
+        if tile is None:
+            return None
+
+        if getattr(tile, "collapse_state", "stable") == "collapsed":
+            return None
+
+        killed_players = []
+
+        for player in self._players_on_coord(coord):
+            self.mark_player_dead_by_collapse(player, coord=coord)
+            killed_players.append(player.player_id)
+
+        # Tile deletion semantics:
+        # no entity death effects, no chest opening, no loot drops.
+        tile.entity_id = None
+        tile.entity_hp = None
+        tile.entity_injury_modes = []
+        tile.entity_sort = None
+        tile.entity_strength = None
+        tile.entity_loot_id = None
+
+        tile.object_id = None
+        tile.object_item = None
+        tile.tool = None
+        tile.feature = None
+
+        tile.doors = {"N": False, "E": False, "S": False, "W": False}
+        tile.passable_neighbors = {"N": False, "E": False, "S": False, "W": False}
+
+        tile.collapse_state = "collapsed"
+        tile.collapsed_by_round = dungeon_round
+        tile.will_collapse_next = False
+
+        # Also sever neighboring passability into this tile.
+        for dir_ in DIR_ORDER:
+            dx, dy = direction_to_delta(dir_)
+            neighbor_coord = (coord[0] + dx, coord[1] + dy)
+            neighbor = self.tiles.get(neighbor_coord)
+
+            if neighbor is None:
+                continue
+
+            opp = opposite(dir_)
+            neighbor.passable_neighbors[opp] = False
+
+        return {
+            "coord": {"x": coord[0], "y": coord[1]},
+            "killed_players": killed_players,
+        }
+    
+    def _clear_disaster_warnings(self) -> None:
+        for tile in self.tiles.values():
+            tile.will_collapse_next = False
+
+    def _refresh_next_disaster_warning(self) -> None:
+        """
+        Mark tiles that will collapse on the next Dungeon destruction round.
+        Round 0 is announcement-only, so the next destructive round is round 1.
+        """
+        self._clear_disaster_warnings()
+
+        state = self.world_event_state
+
+        if not state.active:
+            state.next_destroyed_coords = []
+            return
+
+        start_distance = state.destroyed_distance + 1
+        end_distance = state.destroyed_distance + state.expansion_rate
+
+        coords = self.get_disaster_coords_between_distances(
+            start_distance=start_distance,
+            end_distance=end_distance,
+        )
+
+        state.next_destroyed_coords = coords
+
+        for coord in coords:
+            tile = self.tiles.get(coord)
+            if tile is not None:
+                tile.will_collapse_next = True
+    
+    def resolve_dungeon_turn(self) -> dict:
+        """
+        Resolve one automatic Dungeon/GameMaster turn.
+
+        Round 0:
+            announcement only
+
+        Round >= 1:
+            collapse configured number of disaster layers
+        """
+        gm = self.ensure_dungeon_game_master()
+        state = self.world_event_state
+
+        gm.active = True
+
+        if not state.active:
+            gm.active = False
+            return {
+                "ok": True,
+                "status": "dungeon_no_world_event",
+                "world_event": state.to_dict(),
+            }
+
+        if state.dungeon_round == 0:
+            state.last_destroyed_coords = []
+            state.last_message = (
+                f"{gm.world_event_label or state.mode or 'World event'} announced."
             )
-            self.game_masters[gm.actor_id] = gm
-        return gm
+
+            state.dungeon_round += 1
+            gm.turn_nr = state.dungeon_round
+            gm.active = False
+
+            self._refresh_next_disaster_warning()
+
+            return {
+                "ok": True,
+                "status": "dungeon_announcement_resolved",
+                "world_event": state.to_dict(),
+                "game_masters": self.serialize_game_masters(),
+            }
+
+        start_distance = state.destroyed_distance + 1
+        end_distance = state.destroyed_distance + state.expansion_rate
+
+        coords = self.get_disaster_coords_between_distances(
+            start_distance=start_distance,
+            end_distance=end_distance,
+        )
+
+        destroyed = []
+
+        for coord in coords:
+            result = self.collapse_tile(
+                coord,
+                dungeon_round=state.dungeon_round,
+            )
+
+            if result is not None:
+                destroyed.append(result)
+
+        state.last_destroyed_coords = coords
+        state.destroyed_distance = end_distance
+        state.last_message = (
+            f"Dungeon round {state.dungeon_round}: "
+            f"collapsed distances {start_distance}..{end_distance}."
+        )
+
+        state.dungeon_round += 1
+        gm.turn_nr = state.dungeon_round
+        gm.active = False
+
+        self._refresh_next_disaster_warning()
+
+        return {
+            "ok": True,
+            "status": "dungeon_collapse_resolved",
+            "destroyed": destroyed,
+            "world_event": state.to_dict(),
+            "game_masters": self.serialize_game_masters(),
+        }

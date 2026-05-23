@@ -11,7 +11,9 @@ from typing import Any, Dict, Literal, Optional
 GameMasterKind = Literal["dungeon"]
 
 DUNGEON_GAME_MASTER_ID = "__dungeon__"
-
+DUNGEON_GAME_MASTER_NAME = "Dungeon"
+DUNGEON_GAME_MASTER_ICON_PATH = "static/media/tiles/tile_start-back.png"
+COLLAPSED_TILE_IMAGE_PATH = "/static/media/tiles/tile_start-back.png"
 
 # ============================================================
 # GameMaster / virtual runtime actor
@@ -36,7 +38,7 @@ class GameMaster:
     display_name: str = "Dungeon"
     kind: GameMasterKind = "dungeon"
 
-    icon_path: Optional[str] = None
+    icon_path: Optional[str] = DUNGEON_GAME_MASTER_ICON_PATH
     figurine_path: Optional[str] = None
 
     # =====================================================
@@ -68,8 +70,8 @@ class GameMaster:
 def make_dungeon_game_master() -> GameMaster:
     return GameMaster(
         actor_id=DUNGEON_GAME_MASTER_ID,
-        display_name="Dungeon",
+        display_name=DUNGEON_GAME_MASTER_NAME,
         kind="dungeon",
-        icon_path=None,
+        icon_path=DUNGEON_GAME_MASTER_ICON_PATH,
         figurine_path=None,
     )

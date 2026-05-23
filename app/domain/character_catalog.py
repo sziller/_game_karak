@@ -561,15 +561,3 @@ def get_character_class_resolved_by_profession(profession: str) -> CharacterClas
 def get_skill_ids_for_profession(profession: str) -> list[str]:
     char = get_character_class_by_profession(profession)
     return list(char["skills"])
-
-
-'''
-    1   2   3   4   5   6
-1   4   5   4   5   6   7
-2   5   6   7   6   7   8
-3   4   7   8   
-4
-5
-6
-
-'''

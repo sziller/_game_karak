@@ -363,7 +363,13 @@ function renderMapVisual() {
         tileBox.style.pointerEvents = "none";
 
         const baseImg = document.createElement("img");
-        if (tile.archetype_id === "entrance") {
+
+        if (tile.collapse_state === "collapsed") {
+            baseImg.src =
+                tile.collapsed_tile_image_path ||
+                latestMap?.world_event?.collapsed_tile_image_path ||
+                "/static/media/tiles/tile_start-back.png";
+        } else if (tile.archetype_id === "entrance") {
             baseImg.src = "/static/media/tiles/entrance.png";
         } else {
             const variant = getTileVariant(tile, x, y);
@@ -374,7 +380,15 @@ function renderMapVisual() {
         baseImg.style.transform = `rotate(${tile.rotation_q * 90}deg)`;
         tileBox.appendChild(baseImg);
 
-        if (tile.entity_id) {
+        if (tile.will_collapse_next && tile.collapse_state !== "collapsed") {
+            tileBox.classList.add("tile-collapse-warning");
+        }
+
+        if (tile.collapse_state === "collapsed") {
+            tileBox.classList.add("tile-collapsed");
+        }
+
+        if (tile.collapse_state !== "collapsed" && tile.entity_id) {
             const img = document.createElement("img");
             img.src = `/static/media/tile-content/${tile.entity_id}.png`;
             img.alt = tile.entity_id;
@@ -947,6 +961,48 @@ function isDungeonActor(actor) {
     return actor?.kind === "game_master" && actor?.actor_id === "__dungeon__";
 }
 
+function getTurnActorsInDisplayOrder() {
+    const actors = getTurnActors();
+
+    if (!Array.isArray(actors) || !actors.length) {
+        return [];
+    }
+
+    const activeIndex = actors.findIndex(actor => actor.active === true);
+
+    if (activeIndex < 0) {
+        return actors.map((actor, index) => ({
+            actor,
+            originalIdx: index,
+            displayIdx: index,
+            isActive: false,
+        }));
+    }
+
+    const ordered = [];
+
+    for (let offset = 0; offset < actors.length; offset += 1) {
+        const originalIdx = (activeIndex + offset) % actors.length;
+
+        ordered.push({
+            actor: actors[originalIdx],
+            originalIdx,
+            displayIdx: offset,
+            isActive: offset === 0,
+        });
+    }
+
+    return ordered;
+}
+
+function getPlayerActorPlayer(actor) {
+    if (!actor || actor.kind !== "player") {
+        return null;
+    }
+
+    return getPlayerById(actor.player_id);
+}
+
 function formatTurnActor(actor) {
     if (!actor) {
         return "?";
@@ -1077,31 +1133,134 @@ function renderTurnActorStrip() {
     return `
         <div class="turn-actor-strip">
             <div class="turn-actor-strip-title">Turn sequence</div>
-            <div class="turn-actor-strip-list">
-                ${actors.map(actor => {
-                    const isDungeon = isDungeonActor(actor);
-                    const isActive = !!actor.active;
+            <div class="turn-actor-track">
+                ${actors.map((actor, index) => {
+        const isDungeon = isDungeonActor(actor);
+        const isActive = !!actor.active;
+        const isNext = !isActive && index === 1;
 
-                    const label = isDungeon
-                        ? "Dungeon"
-                        : (actor.display_name || `P${actor.player_id}`);
+        const label = isDungeon
+            ? "Dungeon"
+            : (actor.display_name || `P${actor.player_id}`);
 
-                    const detail = isDungeon
-                        ? (actor.game_master?.world_event_label || actor.game_master?.world_event_mode || "")
-                        : `P${actor.player_id}`;
+        const detail = isDungeon
+            ? (actor.game_master?.world_event_label || actor.game_master?.world_event_mode || "")
+            : "";
 
-                    return `
-                        <div class="turn-actor-chip ${isActive ? "active" : ""} ${isDungeon ? "dungeon" : "player"}"
-                             title="${detail ? `${label} — ${detail}` : label}">
+        return `
+                        <div
+                            class="turn-actor-chip ${isActive ? "active" : ""} ${isNext ? "next" : ""} ${isDungeon ? "dungeon" : "player"}"
+                            title="${detail ? `${label} — ${detail}` : label}"
+                        >
                             <span class="turn-actor-chip-icon">${isDungeon ? "⛰" : "●"}</span>
                             <span class="turn-actor-chip-label">${label}</span>
                             ${detail ? `<span class="turn-actor-chip-detail">${detail}</span>` : ""}
                         </div>
                     `;
-                }).join("")}
+    }).join("")}
             </div>
         </div>
     `;
+}
+
+function renderGameMasterPlayerRow(actor, isActive) {
+    const gm = actor?.game_master || {};
+    const label = gm.display_name || actor.display_name || "Dungeon";
+    const modeLabel =
+        gm.world_event_label ||
+        gm.world_event_mode ||
+        "World event";
+
+    const row = document.createElement("div");
+
+    row.className =
+        "player-row virtual-player-row dungeon-player-row" +
+        (isActive ? " active" : "");
+
+    row.onclick = () => {
+        showMessage(
+            `${label}: ${modeLabel}`,
+            "waiting",
+            "Dungeon event"
+        );
+    };
+
+    const left = document.createElement("div");
+    left.className = "player-left";
+
+    const portraitWrap = document.createElement("div");
+    portraitWrap.className = "player-portrait-wrap";
+
+    const portrait = document.createElement("div");
+    portrait.className = "player-portrait virtual-player-portrait";
+
+    if (gm.icon_path) {
+        const img = document.createElement("img");
+        img.src = gm.icon_path;
+        img.alt = label;
+        portrait.appendChild(img);
+    } else {
+        const ph = document.createElement("div");
+        ph.className = "player-portrait-placeholder virtual-player-symbol";
+        ph.textContent = "⛰";
+        portrait.appendChild(ph);
+    }
+
+    const nameUnderPortrait = document.createElement("div");
+    nameUnderPortrait.className = "player-name-under-portrait";
+    nameUnderPortrait.textContent = label;
+
+    const hpUnderPortrait = document.createElement("div");
+    hpUnderPortrait.className = "player-hp-under-portrait virtual-player-state";
+    hpUnderPortrait.innerHTML = `
+        <span class="player-hp-value">EVT</span>
+    `;
+
+    const coordsUnderPortrait = document.createElement("div");
+    coordsUnderPortrait.className = "player-coordinates-under-portrait";
+    coordsUnderPortrait.textContent = "world";
+
+    portraitWrap.appendChild(portrait);
+    portraitWrap.appendChild(nameUnderPortrait);
+    portraitWrap.appendChild(hpUnderPortrait);
+    portraitWrap.appendChild(coordsUnderPortrait);
+
+    const textWrap = document.createElement("div");
+    textWrap.className = "player-text";
+
+    const skillsBlock = document.createElement("div");
+    skillsBlock.className = "player-skills-column virtual-player-text";
+    skillsBlock.innerHTML = `
+        <div class="virtual-event-title">${modeLabel}</div>
+        <div class="virtual-event-sub">
+            Dungeon world-event actor. This is not a player and cannot be targeted.
+        </div>
+    `;
+
+    textWrap.appendChild(skillsBlock);
+
+    left.appendChild(portraitWrap);
+    left.appendChild(textWrap);
+
+    const miniInventoryBlock = document.createElement("div");
+    miniInventoryBlock.className = "player-mini-inventory-wrap virtual-player-mini";
+    miniInventoryBlock.innerHTML = `
+        <div class="player-mini-inventory">
+            <div class="mini-inv-row">
+                <span class="mini-inv-label">R</span>
+                <span class="mini-inv-treasure-value">${gm.turn_nr ?? 0}</span>
+            </div>
+            <div class="mini-inv-row">
+                <span class="mini-inv-label">M</span>
+                <span class="mini-inv-treasure-value">EV</span>
+            </div>
+        </div>
+    `;
+
+    row.appendChild(left);
+    row.appendChild(miniInventoryBlock);
+
+    return row;
 }
 
 function renderPlayers(data) {
@@ -1132,9 +1291,34 @@ function renderPlayers(data) {
         return;
     }
 
-    const orderedPlayers = getPlayersInDisplayOrder(players, activeIdx);
+    const orderedActors = getTurnActorsInDisplayOrder();
 
-    orderedPlayers.forEach(({player: p, originalIdx: idx, displayIdx, isActive}) => {
+    const displayRows = orderedActors.length
+        ? orderedActors
+        : getPlayersInDisplayOrder(players, activeIdx).map(row => ({
+            actor: {
+                kind: "player",
+                player_id: row.player.player_id,
+                display_name: row.player.display_name,
+                active: row.isActive,
+            },
+            originalIdx: row.originalIdx,
+            displayIdx: row.displayIdx,
+            isActive: row.isActive,
+        }));
+
+    displayRows.forEach(({actor, originalIdx: idx, displayIdx, isActive}) => {
+        if (isDungeonActor(actor)) {
+            const dungeonRow = renderGameMasterPlayerRow(actor, isActive);
+            box.appendChild(dungeonRow);
+            return;
+        }
+
+        const p = getPlayerActorPlayer(actor);
+
+        if (!p) {
+            return;
+        }
         const isCursed = !!(p.status?.is_cursed || p.is_cursed || p.cursed);
         const isEvil = !!(p.status?.is_evil || p.is_evil);
         const hasQuitGame = !!(
