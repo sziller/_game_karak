@@ -188,13 +188,26 @@ function getTargetEntityKills(player) {
     }, 0);
 }
 
-function getPvpWins(player) {
-    return Number(
-        player?.pvp_stats?.wins ??
-        player?.pvp_wins ??
-        player?.stats?.pvp_wins ??
-        0
+function getPvpStatsForPlayer(player) {
+    const playerId = normalizePlayerId(player?.player_id);
+
+    return (
+        player?.pvp_stats ||
+        latestResults?.pvp_stats?.by_player_id?.[playerId] ||
+        {wins: 0, losses: 0, draws: 0, total: 0}
     );
+}
+
+function getPvpWins(player) {
+    return Number(getPvpStatsForPlayer(player).wins || 0);
+}
+
+function getPvpLosses(player) {
+    return Number(getPvpStatsForPlayer(player).losses || 0);
+}
+
+function getPvpDraws(player) {
+    return Number(getPvpStatsForPlayer(player).draws || 0);
 }
 
 function getPvpLosses(player) {

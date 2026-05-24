@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES, GAME_MECHANICS
 from domain.character_catalog import SKILL_CATALOG
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Literal, Tuple, Any, TypeAlias
+from typing import Dict, Optional, Literal, Any
 
 import copy
 import random
@@ -23,710 +22,55 @@ from domain.game_master import (DUNGEON_GAME_MASTER_ID,
                                 GameMaster,
                                 make_dungeon_game_master)
 
-from engine.fight_engine import (
-    resolve_fight_state,
-    resolve_arena_pvp_fight_state,
-    start_entity_fight_state,
-    start_arena_pvp_fight_state,
-    commit_fight_role,
-    reroll_die_for_player_side,
-    reroll_both_dice_for_player_side,
-    toggle_scroll_for_player_side,
-    toggle_skill_for_player_side,
-    toss_for_player_side,
-)
+from engine.constants import DIRECTION, DIR_ORDER, TeleportKind, ActionPrice, RevealKind, TileSource, TurnMode
+from engine.utils.directions import direction_to_delta, opposite, rotate_doors_clockwise, ensure_doors_typed
+from engine.fight_engine import (resolve_fight_state,
+                                 resolve_arena_pvp_fight_state,
+                                 start_entity_fight_state,
+                                 start_arena_pvp_fight_state,
+                                 commit_fight_role,
+                                 reroll_die_for_player_side,
+                                 reroll_both_dice_for_player_side,
+                                 toggle_scroll_for_player_side,
+                                 toggle_skill_for_player_side,
+                                 toss_for_player_side)
 from engine.fight_models import FightState
+from engine.systems.pvp_stats_system import (record_arena_pvp_result as pvp_record_arena_pvp_result,
+                                             serialize_pvp_stats as pvp_serialize_pvp_stats,
+                                             get_pvp_stats_for_player as pvp_get_pvp_stats_for_player)
+from engine.runtime import TileNode, WorldEventState, TurnActor, TurnState
+from engine.actions import (
+    RuntimeAction,
+    MoveAction,
+    TeleportAction,
+    StartFightFreeAction,
+    TossFightFreeAction,
+    ToggleFightScrollFreeAction,
+    ResolveFightFreeAction,
+    RerollFightDieFreeAction,
+    RerollFightBothFreeAction,
+    ToggleFightSkillFreeAction,
+    CommitFightRoleFreeAction,
+    CurseFreeAction,
+    PoisonSkillFreeAction,
+    CombatFreeAction,
+    HealingTurnEndingFreeAction,
+    RetreatTurnEndingFreeAction,
+    ItemPickUpTurnEndingFreeAction,
+    ConfirmTileFreeAction,
+    EndTurnTurnEndingFreeAction,
+    ToggleSkillUiFreeAction,
+    SetSkillValueUiFreeAction,
+    ContinueAfterItemPickupFreeAction,
+    ResolveKoReactionFreeAction,
+    UseInventoryItemAction,
+    ActivateGroundObjectFreeAction,
+    ScoutPullTileAction,
+    ConfirmEntityCandidateFreeAction,
+    RedrawEntityCandidateAction,
+    ChooseArenaOpponentFreeAction,
+    ChooseArenaLootFreeAction)
 
-# --------------------------
-# Helpers
-# --------------------------
-DIRECTION = Literal["N", "S", "E", "W"]
-DIR_ORDER: tuple[DIRECTION, DIRECTION, DIRECTION, DIRECTION] = ("N", "E", "S", "W")
-ROOM_X_KARAK_LIMIT = 5
-CURSE_ROOM_RELOCATE_CHANCE = 0.5
-TeleportKind: TypeAlias = Literal["portal", "skill_bea_02", "skill_wlk_02", "skill_bat_02"]
-ActionPrice: TypeAlias = int | Literal["all", "remaining"]
-RevealKind: TypeAlias = Literal["discover", "peek"]
-TileSource: TypeAlias = Literal["pile", "pocket"]
-TurnActorKind = Literal["player", "game_master"]
-
-
-def direction_to_delta(direction: DIRECTION) -> Tuple[int, int]:
-    return {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0)}[direction]
-
-
-def opposite(direction: DIRECTION) -> DIRECTION:
-    return {"N": "S", "S": "N", "E": "W", "W": "E"}[direction]
-
-
-def rotate_doors_clockwise(doors: Dict[str, bool], steps: int) -> Dict[str, bool]:
-    order = ["N", "E", "S", "W"]
-    result = {}
-    for i, d in enumerate(order):
-        result[order[(i + steps) % 4]] = doors[d]
-    return result
-
-
-def ensure_doors_typed(doors: Dict[str, bool]) -> Dict[DIRECTION, bool]:
-    """
-    Convert incoming (possibly str-typed keys) to the typed door dict.
-    """
-    return {
-        "N": bool(doors.get("N", False)),
-        "E": bool(doors.get("E", False)),
-        "S": bool(doors.get("S", False)),
-        "W": bool(doors.get("W", False)),
-    }
-
-
-# --------------------------
-# Domain models
-# --------------------------
-
-class TileNode:
-    def __init__(
-        self,
-        *,
-        x: int,
-        y: int,
-        archetype_id: str,
-        img_base: str,
-        tile_type: Literal["room", "corridor", "entrance", "room_x"],
-        doors_base: Dict[DIRECTION, bool],   # <-- NEW
-        rotation_q: int = 0,
-        entity_id: Optional[str] = None,
-        entity_hp: Optional[int] = None,
-        arena_pvp_used: bool = False,
-        tool: Optional[str] = None,
-        feature: Optional[str] = None,
-    ):
-        self.x = x
-        self.y = y
-
-        self.archetype_id = archetype_id
-        self.img_base = img_base
-        self.rotation_q = rotation_q
-        self.tile_type = tile_type
-
-        self.doors_base = doors_base          # <-- NEW
-        self.doors = rotate_doors_clockwise(doors_base, rotation_q)  # <-- DERIVED
-
-        self.entity_id = entity_id
-        self.entity_hp = entity_hp
-        self.arena_pvp_used = bool(arena_pvp_used)
-        self.object_id: Optional[str] = None
-        
-        self.tool = tool
-        self.feature = feature
-
-        self.passable_neighbors: Dict[DIRECTION, bool] = {}
-
-        self.collapse_state: Literal["stable", "collapsed"] = "stable"
-        self.collapsed_by_round: Optional[int] = None
-        self.will_collapse_next: bool = False
-
-    def to_dict(self) -> dict:
-        object_item = None
-
-        if self.object_id is not None:
-            object_item = serialize_item_ref(self.object_id)
-
-        entity_injury_modes: list[str] = []
-        entity_can_combat = False
-        entity_can_key = False
-        entity_sort = None
-        entity_strength = None
-        entity_loot_id = None
-
-        if self.entity_id is not None:
-            entity = get_entity_by_id(self.entity_id)
-
-            entity_injury_modes = list(entity.get("injury_modes") or [])
-            entity_injury_mode_set = set(entity_injury_modes)
-
-            entity_can_combat = "combat" in entity_injury_mode_set
-            entity_can_key = "key" in entity_injury_mode_set
-
-            entity_sort = entity.get("sort")
-            entity_strength = entity.get("strength")
-            entity_loot_id = entity.get("loot_id")
-
-        return {
-            "x": self.x,
-            "y": self.y,
-            "archetype_id": self.archetype_id,
-            "img_base": self.img_base,
-            "tile_type": self.tile_type,
-            "rotation_q": self.rotation_q,
-            "doors": self.doors,
-
-            # Entity runtime identity/state.
-            "entity_id": self.entity_id,
-            "entity_hp": self.entity_hp,
-
-            # Entity archetype-derived UI/rules metadata.
-            # Frontend should use these to decide whether combat UI is enabled.
-            "entity_injury_modes": entity_injury_modes,
-            "entity_can_combat": entity_can_combat,
-            "entity_can_key": entity_can_key,
-            "entity_sort": entity_sort,
-            "entity_strength": entity_strength,
-            "entity_loot_id": entity_loot_id,
-
-            # Runtime object identity.
-            # Use this for game logic, diagnostics, comparisons.
-            "object_id": self.object_id,
-
-            # Renderable frontend object.
-            # FE must use object_item["image_path"], never object_id-derived paths.
-            "object_item": object_item,
-
-            "tool": self.tool,
-            "feature": self.feature,
-            "arena_pvp_used": self.arena_pvp_used,
-            "collapse_state": self.collapse_state,
-            "collapsed_by_round": self.collapsed_by_round,
-            "will_collapse_next": self.will_collapse_next,
-            "collapsed_tile_image_path": COLLAPSED_TILE_IMAGE_PATH,
-        }
-
-
-DisasterExpansionShape = Literal["square", "radial", "path"]
-
-
-@dataclass
-class WorldEventState:
-    active: bool = False
-    mode: Optional[Literal["cave_collapse", "firestorm"]] = None
-
-    # Current implementation uses the purge-triggering player's position
-    # as epicenter fallback. Later, Dragon tile should be stored explicitly.
-    epicenter: Optional[tuple[int, int]] = None
-
-    # 0 = announcement-only
-    dungeon_round: int = 0
-
-    # Highest destroyed distance/layer so far.
-    # Starts at -1 so first destruction round starts at 0.
-    destroyed_distance: int = -1
-
-    expansion_shape: DisasterExpansionShape = "square"
-    expansion_rate: int = 1
-
-    collapsed_tile_image_path: str = COLLAPSED_TILE_IMAGE_PATH
-
-    last_destroyed_coords: list[tuple[int, int]] = field(default_factory=list)
-    next_destroyed_coords: list[tuple[int, int]] = field(default_factory=list)
-
-    last_message: Optional[str] = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "active": self.active,
-            "mode": self.mode,
-            "epicenter": (
-                {"x": self.epicenter[0], "y": self.epicenter[1]}
-                if self.epicenter is not None
-                else None
-            ),
-            "dungeon_round": self.dungeon_round,
-            "destroyed_distance": self.destroyed_distance,
-            "expansion_shape": self.expansion_shape,
-            "expansion_rate": self.expansion_rate,
-            "collapsed_tile_image_path": self.collapsed_tile_image_path,
-            "last_destroyed_coords": [
-                {"x": x, "y": y}
-                for x, y in self.last_destroyed_coords
-            ],
-            "next_destroyed_coords": [
-                {"x": x, "y": y}
-                for x, y in self.next_destroyed_coords
-            ],
-            "last_message": self.last_message,
-        }
-    
-
-@dataclass
-class TurnActor:
-    """=== dataclass ===================================================================================================
-    Lightweight turn-order actor reference.
-
-    A TurnActor is not necessarily a Player.
-    - kind == "player" points to self.players via player_id.
-    - kind == "game_master" points to self.game_masters via actor_id.
-
-    This is introduced before fully migrating the turn engine away from active_player_idx.
-    ============================================================================================== by Sziller ==="""
-
-    kind: TurnActorKind
-    player_id: Optional[int] = None
-    actor_id: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        return {
-            "kind": self.kind,
-            "player_id": self.player_id,
-            "actor_id": self.actor_id,
-        }
-
-
-TurnMode = Literal[
-    "idle",
-    "pending_tile",
-    "awaiting_entity_choice",
-    "awaiting_entity_encounter",
-    "awaiting_arena_target_choice",
-    "fight",
-    "awaiting_arena_loot_choice",
-    "awaiting_curse_choice",
-    "awaiting_poison_choice",
-    "item_pickup",
-    "retreat",
-    "awaiting_turn_end_commit",
-    "awaiting_heal_choice",
-    "awaiting_ko_reaction_choice",
-]
-
-@dataclass
-class TurnState:
-    """=== dataclass ===================================================================================================
-    Stores Turn related state data
-    ============================================================================================== by Sziller ==="""
-    owner_player_id: int
-    turn_nr: int
-    actions_total: int = 4
-    actions_left: int = 4
-    mode: TurnMode = "idle"
-
-    # Pre-first-Action declaration lock.
-    # Used by skill_acr_02 / Sprint.
-    action_setup_locked: bool = False
-
-    # True only if skill_acr_02 was selected when the first Action was spent.
-    sprint_active_this_turn: bool = False
-    pending_turn_end_cause: Optional[str] = None
-    pending_forced_fight: bool = False
-    pending_item_pickup: bool = False
-    pending_retreat: bool = False
-    pending_curse_choice: bool = False
-    pending_poison_choice: Optional[dict[str, Any]] = None
-    pending_ko_reaction: Optional[dict[str, Any]] = None
-
-    # Pending tile reveal/discovery pipeline.
-    # Used while mode == "pending_tile".
-    #
-    # Shape:
-    # {
-    #     "origin_x": int,
-    #     "origin_y": int,
-    #     "target_x": int,
-    #     "target_y": int,
-    #     "entry_direction": "N"|"S"|"E"|"W",
-    #     "required_entry_door": "N"|"S"|"E"|"W",
-    #     "reveal_kind": "discover"|"peek",
-    #     "tile_source": "pile"|"pocket",
-    #     "pocket_tile_index": int|None,
-    #     "will_enter_after_confirm": bool,
-    # }
-    pending_discovery: Optional[dict[str, Any]] = None
-    # Pending entity population pipeline.
-    # Used after a room tile has been confirmed/committed/rotated,
-    # but before Discover-entry or Peek-completion is resolved.
-    pending_entity_choice: Optional[dict[str, Any]] = None
-    # Pending mandatory entity encounter after active player enters a entity tile.
-    # Used while mode == "awaiting_entity_encounter".
-    #
-    # Shape:
-    # {
-    #     "tile_x": int,
-    #     "tile_y": int,
-    #     "entity_id": str,
-    #     "entered_by": str,
-    #     "can_skip": bool,
-    #     "skip_skill_id": str | None,
-    #     "skip_cost_hp": int,
-    #     "must_fight_reason": str | None,
-    # }
-    pending_entity_encounter: Optional[dict[str, Any]] = None
-    # Pending Arena PvP trigger.
-    # Used while mode == "awaiting_arena_target_choice".
-    #
-    # Shape:
-    # {
-    #     "tile_x": int,
-    #     "tile_y": int,
-    #     "triggered_by_player_id": int,
-    #     "requires_target": "player",
-    #     "reason": "first_arena_entry",
-    # }
-    pending_arena_pvp: Optional[dict[str, Any]] = None
-    # Pending Arena loot/steal choice.
-    # Used while mode == "awaiting_arena_loot_choice".
-    #
-    # Shape:
-    # {
-    #     "winner_player_id": int,
-    #     "loser_player_id": int,
-    #     "active_player_id": int,
-    #     "winner_is_active_player": bool,
-    #     "outcome": "initiator_win" | "challenged_win",
-    #     "arena_tile": {"x": int, "y": int},
-    #     "may_continue_by_swo_02": bool,
-    #     "stealable": dict,
-    # }
-    pending_arena_loot_choice: Optional[dict[str, Any]] = None
-    # Item-use lock:
-    # Once a fight is entered, active costless items are blocked for the rest of the turn,
-    # unless the turn explicitly continues after combat by a continuation rule
-    # such as skill_swo_02 or skill_bar_02.
-    item_use_locked_by_combat: bool = False
-
-    last_valid_safe_tile: Optional[tuple[int, int]] = None
-
-    # Ground-item snapshot for reversible idle inventory manipulation.
-    ground_snapshot_item_id: Optional[str] = None
-    item_pickup_origin: Optional[Literal["idle_ground_changed", "post_combat", "chest", "treasure_pickup"]] = None
-
-    # lightweight turn-local memory
-    used_skill_ids: set[str] = field(default_factory=set)
-    selected_skill_ids: set[str] = field(default_factory=set)
-    skill_values: dict[str, int] = field(default_factory=dict)
-
-    discovered_tile_coords_this_turn: set[tuple[int, int]] = field(default_factory=set)
-
-    # Post-fight continuation bridge.
-    # Used by skill_swo_02 after a won fight where loot/item-pickup must still be resolved.
-    fight_continue_after_item_pickup: bool = False
-    fight_continue_skill_id: Optional[str] = None
-    
-    def to_dict(self) -> dict:
-        """=== export method ===========================================================================================
-        returns dataclass as a dictionary
-        ========================================================================================== by Sziller ==="""
-        return {"owner_player_id": self.owner_player_id,
-                "turn_nr": self.turn_nr,
-                "actions_total": self.actions_total,
-                "actions_left": self.actions_left,
-                "mode": self.mode,
-                "action_setup_locked": self.action_setup_locked,
-                "sprint_active_this_turn": self.sprint_active_this_turn,
-                "pending_turn_end_cause": self.pending_turn_end_cause,
-                "pending_forced_fight": self.pending_forced_fight,
-                "pending_item_pickup": self.pending_item_pickup,
-                "pending_retreat": self.pending_retreat,
-                "pending_curse_choice": self.pending_curse_choice,
-                "pending_poison_choice": self.pending_poison_choice,
-                "pending_ko_reaction": self.pending_ko_reaction,
-                "pending_discovery": self.pending_discovery,
-                "pending_entity_choice": self.pending_entity_choice,
-                "pending_entity_encounter": self.pending_entity_encounter,
-                "pending_arena_pvp": self.pending_arena_pvp,
-                "pending_arena_loot_choice": self.pending_arena_loot_choice,
-                "item_use_locked_by_combat": self.item_use_locked_by_combat,
-                "last_valid_safe_tile": self.last_valid_safe_tile,
-                "ground_snapshot_item_id": self.ground_snapshot_item_id,
-                "item_pickup_origin": self.item_pickup_origin,
-                "used_skill_ids": sorted(self.used_skill_ids),
-                "discovered_tile_coords_this_turn": [
-                    {"x": x, "y": y}
-                    for x, y in sorted(self.discovered_tile_coords_this_turn)
-                ],
-                "fight_continue_after_item_pickup": self.fight_continue_after_item_pickup,
-                "fight_continue_skill_id": self.fight_continue_skill_id,
-                }
-    
-    
-# --------------------------
-# Action model
-# --------------------------
-class RuntimeAction:
-    """
-    Base runtime command object.
-    """
-    price: int = 0
-    does_end_turn: bool = False
-    kind: str = "runtime_action"
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        raise NotImplementedError
-
-
-class Action(RuntimeAction):
-    """
-    Costs 1 Action point by default.
-    """
-    price: int = 1
-    does_end_turn: bool = False
-    kind: str = "action"
-
-
-class FreeAction(RuntimeAction):
-    """
-    Does not consume an Action point.
-    """
-    price: int = 0
-    does_end_turn: bool = False
-    kind: str = "free_action"
-
-
-class TurnEndingFreeAction(FreeAction):
-    """
-    FreeAction that canonically ends the turn after resolution.
-    """
-    price: int = 0
-    does_end_turn: bool = True
-    kind: str = "turn_ending_free_action"
-
-
-@dataclass
-class MoveAction(Action):
-    direction: DIRECTION
-    is_mage: bool = False
-
-    # Used only when target space is hidden.
-    reveal_kind: RevealKind = "discover"
-    tile_source: TileSource = "pile"
-    pocket_tile_index: Optional[int] = None
-
-    def execute(self, graph: "DungeonGraph") -> dict:
-        return graph._execute_move_action(self)
-
-
-@dataclass
-class TeleportAction(Action):
-    teleport_kind: TeleportKind
-    tx: Optional[int] = None
-    ty: Optional[int] = None
-    target_player_id: Optional[int] = None
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_teleport_action(self)
-
-    
-@dataclass
-class StartFightFreeAction(FreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_start_fight_free_action(self)
-
-
-@dataclass
-class TossFightFreeAction(FreeAction):
-    role: Literal["initiator", "challenged"] = "challenged"
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_toss_fight_free_action(self)
-
-
-@dataclass
-class ToggleFightScrollFreeAction(FreeAction):
-    slot_id: str
-    role: Literal["initiator", "challenged"] = "challenged"
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_toggle_fight_scroll_free_action(self)
-
-
-@dataclass
-class ResolveFightFreeAction(FreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_resolve_fight_free_action(self)
-
-@dataclass
-class RerollFightDieFreeAction(FreeAction):
-    die_index: int
-    skill_id: str
-    role: Literal["initiator", "challenged"] = "challenged"
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_reroll_fight_die_free_action(self)
-
-
-@dataclass
-class RerollFightBothFreeAction(FreeAction):
-    skill_id: str
-    role: Literal["initiator", "challenged"] = "challenged"
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_reroll_fight_both_free_action(self)
-
-
-@dataclass
-class ToggleFightSkillFreeAction(FreeAction):
-    skill_id: str
-    role: Literal["initiator", "challenged"] = "challenged"
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_toggle_fight_skill_free_action(self)
-
-@dataclass
-class CommitFightRoleFreeAction(FreeAction):
-    role: Literal["initiator", "challenged"]
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_commit_fight_role_free_action(self)
-    
-@dataclass
-class CurseFreeAction(FreeAction):
-    target_player_id: int
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_curse_free_action(self)
-    
-    
-@dataclass
-class PoisonSkillFreeAction(FreeAction):
-    target_player_id: int
-    target_skill_id: str
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_poison_skill_free_action(self)
-    
-    
-@dataclass
-class CombatFreeAction(FreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_combat_free_action(self)
-
-
-@dataclass
-class HealingTurnEndingFreeAction(TurnEndingFreeAction):
-    target_hp: Optional[int] = None
-    
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_healing_turn_ending_free_action(self)
-
-
-@dataclass
-class RetreatTurnEndingFreeAction(TurnEndingFreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_retreat_turn_ending_free_action(self)
-
-
-@dataclass
-class ItemPickUpTurnEndingFreeAction(TurnEndingFreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_itempickup_turn_ending_free_action(self)
-
-
-@dataclass
-class ConfirmTileFreeAction(FreeAction):
-    x: int
-    y: int
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_confirm_tile_free_action(self)
-
-
-@dataclass
-class EndTurnTurnEndingFreeAction(TurnEndingFreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_end_turn_turn_ending_free_action(self)
-
-@dataclass
-class ToggleSkillUiFreeAction(FreeAction):
-    skill_id: str
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_toggle_skill_ui_free_action(self)
-
-
-@dataclass
-class SetSkillValueUiFreeAction(FreeAction):
-    skill_id: str
-    value: int
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_set_skill_value_ui_free_action(self)
-
-
-@dataclass
-class ContinueAfterItemPickupFreeAction(FreeAction):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_continue_after_itempickup_free_action(self)
-    
-    
-@dataclass
-class ResolveKoReactionFreeAction(FreeAction):
-    target_x: int
-    target_y: int
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_resolve_ko_reaction_free_action(self)
-
-
-@dataclass
-class UseInventoryItemAction(FreeAction):
-    slot_group: SlotGroup
-    slot_index: int
-    target_player_id: Optional[int] = None
-    target_x: Optional[int] = None
-    target_y: Optional[int] = None
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_use_inventory_item_action(self)
-    
-    
-@dataclass
-class ActivateGroundObjectFreeAction(FreeAction):
-    """
-    Activates a non-mobile active ground object on the active player's tile.
-
-    Example:
-    - object_id == "exit"
-    - ITEM_FEATURES["exit"]["mobile"] == False
-    - ITEM_FEATURES["exit"]["active"] == True
-    - ITEM_FEATURES["exit"]["effect"] == "PLAYER_QUIT"
-    """
-    kind: str = "activate_ground_object"
-
-    def execute(self, graph: "DungeonGraph") -> dict:
-        return graph._execute_activate_ground_object_free_action(self)
-    
-    
-@dataclass
-class ScoutPullTileAction(Action):
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_scout_pull_tile_action(self)
-    
-    
-@dataclass
-class ConfirmEntityCandidateFreeAction(FreeAction):
-    candidate_index: int
-
-    def execute(self, graph: "DungeonGraph") -> dict:
-        return graph._execute_confirm_entity_candidate_free_action(self)
-
-
-@dataclass
-class RedrawEntityCandidateAction(FreeAction):
-    """
-    skill_alc_02 entity redraw.
-
-    Important:
-    - costs HP, not Actions
-    - does not lock pre-first-Action declarations
-    - does not reduce actions_left
-    - may be repeated while the player has HP left
-    """
-    def execute(self, graph: "DungeonGraph") -> dict:
-        return graph._execute_redraw_entity_candidate_action(self)
-    
-@dataclass
-class ChooseArenaOpponentFreeAction(FreeAction):
-    target_player_id: int
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_choose_arena_opponent_free_action(self)
-
-
-@dataclass
-class ChooseArenaLootFreeAction(FreeAction):
-    steal_kind: Literal["slot_item", "treasure_value", "skip"]
-    source_slot_group: Optional[Literal["weapon", "scroll", "key"]] = None
-    source_slot_index: Optional[int] = None
-
-    def execute(self, graph: DungeonGraph) -> dict:
-        return graph._execute_choose_arena_loot_free_action(self)
 
 # --------------------------
 # Engine
@@ -7181,72 +6525,36 @@ class DungeonGraph:
             loser_player_id: Optional[int],
             arena_coord: Optional[tuple[int, int]] = None,
     ) -> dict[str, Any]:
-        """
-        Record one resolved Arena PvP result.
-
-        This records the fight outcome only.
-        It does not care whether Arena loot is later stolen or skipped.
-        """
-
-        if outcome == "draw":
-            self._inc_pvp_counter(self.pvp_draws_by_player_id, initiator_player_id)
-            self._inc_pvp_counter(self.pvp_draws_by_player_id, challenged_player_id)
-
-        else:
-            self._inc_pvp_counter(self.pvp_wins_by_player_id, winner_player_id)
-            self._inc_pvp_counter(self.pvp_losses_by_player_id, loser_player_id)
-
-        row = {
-            "turn_counter": self.turn_counter,
-            "outcome": outcome,
-            "initiator_player_id": int(initiator_player_id),
-            "challenged_player_id": int(challenged_player_id),
-            "winner_player_id": winner_player_id,
-            "loser_player_id": loser_player_id,
-            "arena_coord": (
-                {"x": arena_coord[0], "y": arena_coord[1]}
-                if arena_coord is not None
-                else None
-            ),
-        }
-
-        self.pvp_log.append(row)
-
-        return row
+        return pvp_record_arena_pvp_result(
+            pvp_wins_by_player_id=self.pvp_wins_by_player_id,
+            pvp_losses_by_player_id=self.pvp_losses_by_player_id,
+            pvp_draws_by_player_id=self.pvp_draws_by_player_id,
+            pvp_log=self.pvp_log,
+            turn_counter=self.turn_counter,
+            outcome=outcome,
+            initiator_player_id=initiator_player_id,
+            challenged_player_id=challenged_player_id,
+            winner_player_id=winner_player_id,
+            loser_player_id=loser_player_id,
+            arena_coord=arena_coord,
+        )
 
     def serialize_pvp_stats(self) -> dict[str, Any]:
-        player_ids = {p.player_id for p in self.players}
-
-        by_player_id: dict[str, dict[str, int]] = {}
-
-        for player_id in sorted(player_ids):
-            wins = int(self.pvp_wins_by_player_id.get(player_id, 0))
-            losses = int(self.pvp_losses_by_player_id.get(player_id, 0))
-            draws = int(self.pvp_draws_by_player_id.get(player_id, 0))
-
-            by_player_id[str(player_id)] = {
-                "wins": wins,
-                "losses": losses,
-                "draws": draws,
-                "total": wins + losses + draws,
-            }
-
-        return {
-            "by_player_id": by_player_id,
-            "log": list(self.pvp_log),
-        }
+        return pvp_serialize_pvp_stats(
+            player_ids=[p.player_id for p in self.players],
+            pvp_wins_by_player_id=self.pvp_wins_by_player_id,
+            pvp_losses_by_player_id=self.pvp_losses_by_player_id,
+            pvp_draws_by_player_id=self.pvp_draws_by_player_id,
+            pvp_log=self.pvp_log,
+        )
 
     def get_pvp_stats_for_player(self, player_id: int) -> dict[str, int]:
-        wins = int(self.pvp_wins_by_player_id.get(player_id, 0))
-        losses = int(self.pvp_losses_by_player_id.get(player_id, 0))
-        draws = int(self.pvp_draws_by_player_id.get(player_id, 0))
-
-        return {
-            "wins": wins,
-            "losses": losses,
-            "draws": draws,
-            "total": wins + losses + draws,
-        }
+        return pvp_get_pvp_stats_for_player(
+            player_id=player_id,
+            pvp_wins_by_player_id=self.pvp_wins_by_player_id,
+            pvp_losses_by_player_id=self.pvp_losses_by_player_id,
+            pvp_draws_by_player_id=self.pvp_draws_by_player_id,
+        )
 
     def _evaluate_purge_end_condition_from_details(
             self,
@@ -7923,11 +7231,7 @@ class DungeonGraph:
                 "escape_object_id": escape_object_id,
             }
 
-            # Placeholder for now; later replace from real PvP stats/log.
-            row["pvp_stats"] = {
-                "wins": int(getattr(p, "pvp_wins", 0) or 0),
-                "losses": int(getattr(p, "pvp_losses", 0) or 0),
-            }
+            row["pvp_stats"] = self.get_pvp_stats_for_player(p.player_id)
 
             result_players.append(row)
 
