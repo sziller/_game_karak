@@ -337,6 +337,55 @@ class DungeonGraph:
 
         raise ValueError(f"Unsupported tile_source: {tile_source}")
 
+    def _return_player_scout_pocket_to_tile_pool(
+            self,
+            *,
+            player: Player,
+            source: str,
+    ) -> dict[str, Any]:
+        """
+        Return all Scout-pocketed tiles of one player to the draw pile.
+
+        Used when a player turns Evil/Karak.
+
+        Important:
+        - The pocket is runtime state.
+        - Returning tiles must be based on actual pocket contents, not on whether
+          the player still has skill_sco_02 after transformation.
+        - The draw pile is shuffled after return.
+        """
+        returned_tiles = list(getattr(player, "scout_pocket_tiles", []) or [])
+
+        if not returned_tiles:
+            return {
+                "source": source,
+                "player_id": player.player_id,
+                "returned": False,
+                "count": 0,
+                "tiles": [],
+            }
+
+        player.scout_pocket_tiles.clear()
+
+        self.tile_pool.extend(returned_tiles)
+        random.shuffle(self.tile_pool)
+
+        return {
+            "source": source,
+            "player_id": player.player_id,
+            "returned": True,
+            "count": len(returned_tiles),
+            "tiles": [
+                {
+                    "archetype_id": t.get("archetype_id"),
+                    "tile_type": t.get("tile_type"),
+                    "img_base": t.get("img_base"),
+                    "feature": t.get("feature"),
+                }
+                for t in returned_tiles
+            ],
+        }
+    
     def serialize_entity_archetype_for_ui(
             self,
             entity_data: dict[str, Any],
@@ -3134,7 +3183,13 @@ class DungeonGraph:
         # --------------------------------------------------
         # Runtime transformation
         # --------------------------------------------------
+        scout_pocket_return = self._return_player_scout_pocket_to_tile_pool(
+            player=target,
+            source="karak_transformation",
+        )
+        
         target.turn_evil()
+        target.set_hp(self._get_player_max_hp(target))
         target.skills = inherited_skills
 
         # --------------------------------------------------
@@ -3179,6 +3234,7 @@ class DungeonGraph:
 
             # Runtime skill result
             "inherited_skills": sorted(inherited_skills),
+            "scout_pocket_return": scout_pocket_return,
         }
     
     def _execute_end_turn_turn_ending_free_action(self, action: EndTurnTurnEndingFreeAction) -> dict:
