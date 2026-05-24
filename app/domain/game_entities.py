@@ -1,14 +1,29 @@
 from __future__ import annotations
 
-from typing import TypedDict, Literal, Optional, List, Any
-from typing import NamedTuple
 from collections import Counter
+from pathlib import Path
+from typing import Any, Literal, NamedTuple, Optional, TypedDict
+
+from domain.content_loader import expand_entity_pool, load_entity_specs
+from engine.constants import Direction
+
 
 # ============================================================
-# Tile archetypes (static, pooled content)
+# Content paths
 # ============================================================
 
-Direction = Literal["N", "E", "S", "W"]
+CONTENT_ROOT = Path(__file__).resolve().parents[1] / "content"
+
+ENTITY_CONTENT_FILES = [
+    CONTENT_ROOT / "base" / "entities.yaml",
+    CONTENT_ROOT / "dragonfall_escape" / "entities.extra.yaml",
+]
+
+
+# ============================================================
+# Tile archetypes static, pooled content
+# ============================================================
+
 TileType = Literal["room", "room_x", "corridor"]
 
 
@@ -16,16 +31,18 @@ class TileArchetype(TypedDict):
     archetype_id: str
     tile_type: TileType
     img_base: str                 # PNG basename, no rotation baked in
-    doors: dict[Direction, bool]  # canonical orientation (rotation = 0)
+    doors: dict[Direction, bool]  # canonical orientation rotation = 0
     feature: Optional[str]
 
 
-def tile(*,
-         archetype_id: str,
-         tile_type: TileType,
-         img_base: str,
-         doors: dict[Direction, bool],
-         feature: Optional[str] = None) -> TileArchetype:
+def tile(
+        *,
+        archetype_id: str,
+        tile_type: TileType,
+        img_base: str,
+        doors: dict[Direction, bool],
+        feature: Optional[str] = None,
+) -> TileArchetype:
     """
     Factory for tile archetypes.
 
@@ -40,6 +57,11 @@ def tile(*,
         "doors": doors,
         "feature": feature,
     }
+
+
+# ============================================================
+# Item / frontend asset helpers
+# ============================================================
 
 ITEM_ASSET_BASE_PATH = "/static/media/tile-content"
 
@@ -91,7 +113,7 @@ def serialize_item_ref(item_id: Optional[str]) -> Optional[dict[str, Any]]:
         "image_path": get_item_image_path(item_id),
     }
 
-TILE_POOL: List[TileArchetype] = (
+TILE_POOL: list[TileArchetype] = (
 
     # --------------------------------------------------------
     # ROOMS
@@ -244,33 +266,79 @@ class EntityArchetype(TypedDict):
     img_file: str
     sort: str
 
+# ============================================================
+# Entity archetypes
+# ============================================================
 
-ENTITY_POOL: List[EntityArchetype] = (
-    [entity(entity_id="GiantRat",         hp=1,  injury_modes=["combat"],   strength=5,     loot_id="dagger",   sort="LIV", img_file="GiantRat.png")] * 8 +
-    [entity(entity_id="GiantSpider",      hp=1,  injury_modes=["combat"],   strength=6,     loot_id="heal",     sort="LIV", img_file="GiantSpider.png")] * 4 +  # 4
-    [entity(entity_id="GiantBat",         hp=1,  injury_modes=["combat"],   strength=6,     loot_id="thorn",    sort="LIV", img_file="GiantBat.png")] * 6 +    # 6
-    [entity(entity_id="SkeletonTurnkey",  hp=1,  injury_modes=["combat"],   strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 12 +
-    [entity(entity_id="SkeletonWarrior",  hp=1,  injury_modes=["combat"],   strength=9,     loot_id="sword",    sort="UND", img_file="SkeletonWarrior.png")] * 5 +
-    [entity(entity_id="SkeletonKing",     hp=1,  injury_modes=["combat"],   strength=10,    loot_id="axe",      sort="UND", img_file="SkeletonKing.png")] * 3 +
-    [entity(entity_id="SkeletalMage",     hp=1,  injury_modes=["combat"],   strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 2 +  # 2
-    [entity(entity_id="Mummy",            hp=1,  injury_modes=["combat"],   strength=7,     loot_id="fireball", sort="UND", img_file="Mummy.png")] * 8 +
-    [entity(entity_id="Fallen",           hp=1,  injury_modes=["combat"],   strength=12,    loot_id="treasure", sort="UND", img_file="Fallen.png")] * 2 +
-    [entity(entity_id="Dragon",           hp=1,  injury_modes=["combat"],   strength=15,    loot_id="ruby",     sort="LIV", img_file="Dragon.png")] * 1 +
-    [entity(entity_id="Chest",            hp=1,  injury_modes=["key"],   strength=0,     loot_id="treasure", sort="ITM", img_file="Chest.png")] * 10
-    
 
+class EntityArchetype(TypedDict):
+    """=== Entity basics ==="""
+    entity_id: str
+    hp: int
+    injury_modes: list[str]
+    strength: int
+    loot_id: str
+    img_file: str
+    sort: str
+
+
+def entity(
+        *,
+        entity_id: str,
+        hp: int,
+        injury_modes: list[str],
+        strength: int,
+        loot_id: str,
+        img_file: str,
+        sort: str,
+) -> EntityArchetype:
+    """
+    Factory for entity archetypes.
+
+    Entities are immutable archetypes.
+    Instances are created elsewhere.
+    """
+    return {
+        "entity_id": entity_id,
+        "hp": hp,
+        "injury_modes": injury_modes,
+        "strength": strength,
+        "loot_id": loot_id,
+        "img_file": img_file,
+        "sort": sort,
+    }
+
+
+_ENTITY_SPECS = load_entity_specs(ENTITY_CONTENT_FILES)
+
+ENTITY_POOL: list[EntityArchetype] = expand_entity_pool(_ENTITY_SPECS)  # type: ignore[assignment]
+
+# ENTITY_POOL: list[EntityArchetype] = (
+#     [entity(entity_id="GiantRat",         hp=1,  injury_modes=["combat"],   strength=5,     loot_id="dagger",   sort="LIV", img_file="GiantRat.png")] * 8 +
+#     [entity(entity_id="GiantSpider",      hp=1,  injury_modes=["combat"],   strength=6,     loot_id="heal",     sort="LIV", img_file="GiantSpider.png")] * 4 +  # 4
+#     [entity(entity_id="GiantBat",         hp=1,  injury_modes=["combat"],   strength=6,     loot_id="thorn",    sort="LIV", img_file="GiantBat.png")] * 6 +    # 6
+#     [entity(entity_id="SkeletonTurnkey",  hp=1,  injury_modes=["combat"],   strength=8,     loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 12 +
+#     [entity(entity_id="SkeletonWarrior",  hp=1,  injury_modes=["combat"],   strength=9,     loot_id="sword",    sort="UND", img_file="SkeletonWarrior.png")] * 5 +
+#     [entity(entity_id="SkeletonKing",     hp=1,  injury_modes=["combat"],   strength=10,    loot_id="axe",      sort="UND", img_file="SkeletonKing.png")] * 3 +
+#     [entity(entity_id="SkeletalMage",     hp=1,  injury_modes=["combat"],   strength=11,    loot_id="fist",     sort="UND", img_file="SkeletalMage.png")] * 2 +  # 2
+#     [entity(entity_id="Mummy",            hp=1,  injury_modes=["combat"],   strength=7,     loot_id="fireball", sort="UND", img_file="Mummy.png")] * 8 +
+#     [entity(entity_id="Fallen",           hp=1,  injury_modes=["combat"],   strength=12,    loot_id="treasure", sort="UND", img_file="Fallen.png")] * 2 +
+#     [entity(entity_id="Dragon",           hp=1,  injury_modes=["combat"],   strength=15,    loot_id="ruby",     sort="LIV", img_file="Dragon.png")] * 1 +
+#     [entity(entity_id="Chest",            hp=1,  injury_modes=["key"],   strength=0,     loot_id="treasure", sort="ITM", img_file="Chest.png")] * 10
+#     
+# 
+# # )
+# # ENTITY_POOL_EXT: List[EntityArchetype] = (
+# 
+#     + [entity(entity_id="GiantSnake",     hp=1,  injury_modes=["combat"], strength=7, loot_id="p_bomb",   sort="LIV", img_file="GiantSnake.png")] * 4 +
+#     [entity(entity_id="Tuneller",         hp=1,  injury_modes=["combat"], strength=9, loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 2 +
+#     [entity(entity_id="ShadeGreen",       hp=1,  injury_modes=["combat"], strength=7, loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 3 +
+#     [entity(entity_id="ShadeOrange",      hp=1,  injury_modes=["combat"], strength=8, loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 1 +
+#     [entity(entity_id="SkeletalStealer",  hp=1,  injury_modes=["combat"], strength=6, loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 4 +
+#     [entity(entity_id="Chest",            hp=1,  injury_modes=["key"],    strength=0, loot_id="treasure", sort="ITM", img_file="Chest.png")] * 3 +
+#     [entity(entity_id="SkeletonTurnkey",  hp=1,  injury_modes=["combat"], strength=8, loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 5 +
+#     [entity(entity_id="ExitHatch",        hp=3,  injury_modes=["combat", "key"],   strength=14,     loot_id="exit",      sort="ITM", img_file="ExitHatch.png")] * 1
 # )
-# ENTITY_POOL_EXT: List[EntityArchetype] = (
-
-    + [entity(entity_id="GiantSnake",     hp=1,  injury_modes=["combat"], strength=7, loot_id="p_bomb",   sort="LIV", img_file="GiantSnake.png")] * 4 +
-    [entity(entity_id="Tuneller",         hp=1,  injury_modes=["combat"], strength=9, loot_id="hammer",   sort="LIV", img_file="Tuneller.png")] * 2 +
-    [entity(entity_id="ShadeGreen",       hp=1,  injury_modes=["combat"], strength=7, loot_id="amulet_g", sort="LIV", img_file="ShadeGreen.png")] * 3 +
-    [entity(entity_id="ShadeOrange",      hp=1,  injury_modes=["combat"], strength=8, loot_id="amulet_o", sort="LIV", img_file="ShadeOrange.png")] * 1 +
-    [entity(entity_id="SkeletalStealer",  hp=1,  injury_modes=["combat"], strength=6, loot_id="kris",     sort="UND", img_file="SkeletalStealer.png")] * 4 +
-    [entity(entity_id="Chest",            hp=1,  injury_modes=["key"],    strength=0, loot_id="treasure", sort="ITM", img_file="Chest.png")] * 3 +
-    [entity(entity_id="SkeletonTurnkey",  hp=1,  injury_modes=["combat"], strength=8, loot_id="key",      sort="UND", img_file="SkeletonTurnkey.png")] * 5 +
-    [entity(entity_id="ExitHatch",        hp=3,  injury_modes=["combat", "key"],   strength=14,     loot_id="exit",      sort="ITM", img_file="ExitHatch.png")] * 1
-)
 
 # ============================================================
 # Item / loot archetypes

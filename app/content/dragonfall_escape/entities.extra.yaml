@@ -1,0 +1,72 @@
+entities:
+  GiantSnake:
+    count: 4
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 7
+    loot_id: p_bomb
+    sort: LIV
+    img_file: GiantSnake.png
+
+  Tuneller:
+    count: 2
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 9
+    loot_id: hammer
+    sort: LIV
+    img_file: Tuneller.png
+
+  ShadeGreen:
+    count: 3
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 7
+    loot_id: amulet_g
+    sort: LIV
+    img_file: ShadeGreen.png
+
+  ShadeOrange:
+    count: 1
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 8
+    loot_id: amulet_o
+    sort: LIV
+    img_file: ShadeOrange.png
+
+  SkeletalStealer:
+    count: 4
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 6
+    loot_id: kris
+    sort: UND
+    img_file: SkeletalStealer.png
+
+  Chest:
+    count: 3
+    hp: 1
+    injury_modes: ["key"]
+    strength: 0
+    loot_id: treasure
+    sort: ITM
+    img_file: Chest.png
+
+  SkeletonTurnkey:
+    count: 5
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 8
+    loot_id: key
+    sort: UND
+    img_file: SkeletonTurnkey.png
+
+  ExitHatch:
+    count: 1
+    hp: 3
+    injury_modes: ["combat", "key"]
+    strength: 14
+    loot_id: exit
+    sort: ITM
+    img_file: ExitHatch.png

@@ -1,0 +1,99 @@
+entities:
+  GiantRat:
+    count: 8
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 5
+    loot_id: dagger
+    sort: LIV
+    img_file: GiantRat.png
+
+  GiantSpider:
+    count: 4
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 6
+    loot_id: heal
+    sort: LIV
+    img_file: GiantSpider.png
+
+  GiantBat:
+    count: 6
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 6
+    loot_id: thorn
+    sort: LIV
+    img_file: GiantBat.png
+
+  SkeletonTurnkey:
+    count: 12
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 8
+    loot_id: key
+    sort: UND
+    img_file: SkeletonTurnkey.png
+
+  SkeletonWarrior:
+    count: 5
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 9
+    loot_id: sword
+    sort: UND
+    img_file: SkeletonWarrior.png
+
+  SkeletonKing:
+    count: 3
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 10
+    loot_id: axe
+    sort: UND
+    img_file: SkeletonKing.png
+
+  SkeletalMage:
+    count: 2
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 11
+    loot_id: fist
+    sort: UND
+    img_file: SkeletalMage.png
+
+  Mummy:
+    count: 8
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 7
+    loot_id: fireball
+    sort: UND
+    img_file: Mummy.png
+
+  Fallen:
+    count: 2
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 12
+    loot_id: treasure
+    sort: UND
+    img_file: Fallen.png
+
+  Dragon:
+    count: 1
+    hp: 1
+    injury_modes: ["combat"]
+    strength: 15
+    loot_id: ruby
+    sort: LIV
+    img_file: Dragon.png
+
+  Chest:
+    count: 10
+    hp: 1
+    injury_modes: ["key"]
+    strength: 0
+    loot_id: treasure
+    sort: ITM
+    img_file: Chest.png
