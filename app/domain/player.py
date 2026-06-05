@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.config import PLAYER_FEATURES
+from app.core.config import PLAYER_FEATURES
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Literal
 

@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from engine.fight_models import FightContext, FightParticipantRef, FightRole, FightState
-from engine.fight_sheet_builder import (
+from app.engine.fight_models import FightContext, FightParticipantRef, FightRole, FightState
+from app.engine.fight_sheet_builder import (
     apply_reroll_both_dice_to_player_side,
     apply_reroll_one_die_to_player_side,
     apply_toss_to_player_side,
     build_entity_side_state,
     build_player_side_state,
     toggle_manual_fight_skill_for_player_side)
-from domain.game_entities import get_entity_by_id
-from domain.player import Player
+from app.domain.game_entities import get_entity_by_id
+from app.domain.player import Player
 
 # ============================================================
 # Type aliases

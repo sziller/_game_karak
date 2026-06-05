@@ -5,6 +5,42 @@ let selectedLobbyPlayerId = null;
 // Arrow-step class selector state.
 let selectedClassIndexByPlayerId = {};
 
+const KARAK_BASE_URL = window.KARAK_BASE_URL || "";
+
+function karakPath(path) {
+    if (!path) {
+        return KARAK_BASE_URL || "/";
+    }
+    if (/^(https?:)?\/\//.test(path)) {
+        return path;
+    }
+    if (KARAK_BASE_URL && path.startsWith(`${KARAK_BASE_URL}/`)) {
+        return path;
+    }
+    return `${KARAK_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function karakStaticAsset(path) {
+    if (!path) {
+        return "";
+    }
+    if (/^(https?:)?\/\//.test(path)) {
+        return path;
+    }
+
+    const staticBase = window.KARAK_STATIC_URL || `${KARAK_BASE_URL}/static`;
+    const normalized = String(path).replace(/^\/+/, "");
+
+    if (normalized.startsWith("static/")) {
+        return `${staticBase}/${normalized.slice("static/".length)}`;
+    }
+    if (normalized.startsWith("media/")) {
+        return `${staticBase}/${normalized}`;
+    }
+
+    return karakPath(path);
+}
+
 function showMessage(kind, title, content) {
     const box = document.getElementById("message-box");
     const titleEl = document.getElementById("message-title");
@@ -46,8 +82,8 @@ async function apiJson(url, options = {}) {
 
 async function loadLobby() {
     const [stateRes, catalogRes] = await Promise.all([
-        apiJson("/api/lobby/state"),
-        apiJson("/api/lobby/character_catalog"),
+        apiJson(karakPath("/api/lobby/state")),
+        apiJson(karakPath("/api/lobby/character_catalog")),
     ]);
 
     latestLobbyState = stateRes.lobby_state;
@@ -144,7 +180,7 @@ function renderPlayers() {
             const removedPlayerName = player.display_name;
 
             try {
-                const res = await apiJson(`/api/lobby/remove_player/${encodeURIComponent(removedPlayerId)}`, {
+                const res = await apiJson(karakPath(`/api/lobby/remove_player/${encodeURIComponent(removedPlayerId)}`), {
                     method: "POST",
                 });
 
@@ -228,11 +264,12 @@ function renderClassCard() {
 }
     const selectedProfession = selectedClass.profession;
 
-    const imgPath =
+    const imgPath = karakStaticAsset(
         selectedClass?.image_path ||
         selectedClass?.portrait_path ||
         selectedClass?.tableau_path ||
-        "";
+        ""
+    );
 
     const displayName =
         selectedClass?.character_name ||
@@ -298,7 +335,7 @@ function renderClassCard() {
 
         assignBtn.onclick = async () => {
             try {
-                const res = await apiJson("/api/lobby/assign_profession", {
+                const res = await apiJson(karakPath("/api/lobby/assign_profession"), {
                     method: "POST",
                     body: JSON.stringify({
                         player_id: player.player_id,
@@ -593,7 +630,7 @@ async function addPlayerFromInput() {
     }
 
     try {
-        const res = await apiJson("/api/lobby/add_hotseat_player", {
+        const res = await apiJson(karakPath("/api/lobby/add_hotseat_player"), {
             method: "POST",
             body: JSON.stringify({
                 display_name: name,
@@ -633,7 +670,7 @@ async function startGameFromLobby() {
     try {
         const runtimeConfig = collectRuntimeConfigFromEditor();
 
-        const res = await apiJson("/api/lobby/start_game", {
+        const res = await apiJson(karakPath("/api/lobby/start_game"), {
             method: "POST",
             body: JSON.stringify({
                 runtime_config: runtimeConfig,
@@ -641,7 +678,7 @@ async function startGameFromLobby() {
         });
 
         if (res.redirect_to) {
-            window.location.href = res.redirect_to;
+            window.location.href = karakPath(res.redirect_to);
             return;
         }
 
@@ -653,12 +690,12 @@ async function startGameFromLobby() {
 
 async function resetToPhase1() {
     try {
-        const res = await apiJson("/api/lobby/reset_to_phase1", {
+        const res = await apiJson(karakPath("/api/lobby/reset_to_phase1"), {
             method: "POST",
         });
 
         if (res.redirect_to) {
-            window.location.href = res.redirect_to;
+            window.location.href = karakPath(res.redirect_to);
             return;
         }
 

@@ -4,8 +4,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, Optional, TypedDict
 
-from domain.content_loader import expand_entity_pool, load_entity_specs
-from engine.constants import Direction
+from app.domain.content_loader import expand_entity_pool, load_entity_specs
+from app.engine.constants import Direction
 
 
 # ============================================================
@@ -63,7 +63,7 @@ def tile(
 # Item / frontend asset helpers
 # ============================================================
 
-ITEM_ASSET_BASE_PATH = "/static/media/tile-content"
+ITEM_ASSET_BASE_PATH = "media/tile-content"
 
 
 def get_item_feature(item_id: Optional[str]) -> Optional[dict[str, Any]]:

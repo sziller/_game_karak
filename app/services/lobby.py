@@ -4,8 +4,8 @@ import copy
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
-from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES
-from domain.character_catalog import (
+from app.core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES
+from app.domain.character_catalog import (
     CHARACTER_CLASSES,
     build_character_classes_resolved,
     get_skill_ids_for_profession,

@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>Karak - Arena</title>
-    <link href="/static/favicon.ico" rel="icon">
-    <link href="/static/css/phase3_game.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/favicon.ico" rel="icon">
+    <link href="{{ karak_static_url }}/css/phase3_game.css" rel="stylesheet">
 </head>
 <body class="karak-page layout-1920">
 
@@ -232,7 +232,11 @@
 </div>
 
 
-<script src="/static/js/phase3_game.js"></script>
+<script>
+    window.KARAK_BASE_URL = "{{ karak_base_url }}";
+    window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+</script>
+<script src="{{ karak_static_url }}/js/phase3_game.js"></script>
 
 </body>
 </html>

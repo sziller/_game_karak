@@ -18,10 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
-from domain.game_entities import get_entity_by_id, serialize_item_ref
-from domain.game_master import COLLAPSED_TILE_IMAGE_PATH
-from engine.utils.directions import rotate_doors_clockwise
-from engine.constants import DIRECTION, DisasterExpansionShape, TurnActorKind, TurnMode
+from app.domain.game_entities import get_entity_by_id, serialize_item_ref
+from app.domain.game_master import COLLAPSED_TILE_IMAGE_PATH
+from app.engine.utils.directions import rotate_doors_clockwise
+from app.engine.constants import DIRECTION, DisasterExpansionShape, TurnActorKind, TurnMode
 
 
 class TileNode:

@@ -1,7 +1,10 @@
 
 # Extended version: Also returns list of dictionaries
 
+from pathlib import Path
 from typing import Union, List
+
+from app.core.paths import KARAK_DATA_DIR
 
 class Tech:
     def __init__(self, name: str, id: Union[str, int], leads_to: List[Union[str, int]]):
@@ -125,27 +128,24 @@ for row in full_raw_data[1:]:
 
 asciidoc_lines.append("|===")
 
-# Save .adoc
-asciidoc_output = "\n".join(asciidoc_lines)
-output_path = "docs/smac_tech_tree.adoc"
-with open(output_path, "w") as f:
-    f.write(asciidoc_output)
+def export_smac_tech_tree(output_path: Path | None = None) -> dict[str, Tech]:
+    asciidoc_output = "\n".join(asciidoc_lines)
+    output_path = output_path or KARAK_DATA_DIR / "smac_tech_tree.adoc"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(asciidoc_output, encoding="utf-8")
 
-# Return both outputs
-for k, v in tech_by_name.items():
-    print(f"{k:>20}: {v}")
+    tech_objects = {}
+    for tech_id, data in tech_by_name.items():
+        leads_to = data["Leads to"].split()
+        tech_objects[tech_id] = Tech(
+            name=data["Technology"],
+            id=tech_id,
+            leads_to=leads_to,
+        )
+
+    return tech_objects
 
 
-# Convert each entry to a Tech object
-tech_objects = {}
-
-for tech_id, data in tech_by_name.items():
-    leads_to = data["Leads to"].split()  # basic split on space
-    tech_objects[tech_id] = Tech(
-        name=data["Technology"],
-        id=tech_id,
-        leads_to=leads_to
-    )
-
-for k, v in tech_objects.items():
-    print(f"{k:>20}: {v}")
+if __name__ == "__main__":
+    for key, value in export_smac_tech_tree().items():
+        print(f"{key:>20}: {value}")

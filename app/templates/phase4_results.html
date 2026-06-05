@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <title>Karak - Results</title>
-    <link href="/static/favicon.ico" rel="icon">
+    <link href="{{ karak_static_url }}/favicon.ico" rel="icon">
 
     <!-- Reuse Phase 3 base visual language -->
-    <link href="/static/css/phase3_game.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phase3_game.css" rel="stylesheet">
 
     <!-- Phase 4 extension -->
-    <link href="/static/css/phase4_results.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phase4_results.css" rel="stylesheet">
 </head>
 
 <body class="karak-page">
@@ -45,6 +45,10 @@
 
 </div>
 
-<script src="/static/js/phase4_results.js"></script>
+<script>
+    window.KARAK_BASE_URL = "{{ karak_base_url }}";
+    window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+</script>
+<script src="{{ karak_static_url }}/js/phase4_results.js"></script>
 </body>
 </html>

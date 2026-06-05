@@ -1,5 +1,41 @@
-const gameApi = (p) => "/api" + (p.startsWith("/") ? p : "/" + p);
-const lobbyApi = (p) => "/api/lobby" + (p.startsWith("/") ? p : "/" + p);
+const KARAK_BASE_URL = window.KARAK_BASE_URL || "";
+const KARAK_STATIC_URL = window.KARAK_STATIC_URL || `${KARAK_BASE_URL}/static`;
+
+function karakPath(path) {
+    if (!path) {
+        return KARAK_BASE_URL || "/";
+    }
+    if (/^(https?:)?\/\//.test(path)) {
+        return path;
+    }
+    if (KARAK_BASE_URL && path.startsWith(`${KARAK_BASE_URL}/`)) {
+        return path;
+    }
+    return `${KARAK_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function karakStaticAsset(path) {
+    if (!path) {
+        return "";
+    }
+    if (/^(https?:)?\/\//.test(path)) {
+        return path;
+    }
+
+    const normalized = String(path).replace(/^\/+/, "");
+
+    if (normalized.startsWith("static/")) {
+        return `${KARAK_STATIC_URL}/${normalized.slice("static/".length)}`;
+    }
+    if (normalized.startsWith("media/")) {
+        return `${KARAK_STATIC_URL}/${normalized}`;
+    }
+
+    return karakPath(path);
+}
+
+const gameApi = (p) => karakPath("/api" + (p.startsWith("/") ? p : "/" + p));
+const lobbyApi = (p) => karakPath("/api/lobby" + (p.startsWith("/") ? p : "/" + p));
 
 let latestPlayers = null;
 let latestMap = null;
@@ -110,10 +146,10 @@ function tileMiniImagePathFromBase(imgBase) {
 
     // Entrance is not expected in Scout pocket, but this keeps the helper safe.
     if (imgBase === "entrance") {
-        return "/static/media/tiles/entrance.png";
+        return `${KARAK_STATIC_URL}/media/tiles/entrance.png`;
     }
 
-    return `/static/media/tiles/${imgBase}-${variant}.png`;
+    return `${KARAK_STATIC_URL}/media/tiles/${imgBase}-${variant}.png`;
 }
 
 function getPlayerById(playerId) {
@@ -366,14 +402,14 @@ function renderMapVisual() {
 
         if (tile.collapse_state === "collapsed") {
             baseImg.src =
-                tile.collapsed_tile_image_path ||
-                latestMap?.world_event?.collapsed_tile_image_path ||
-                "/static/media/tiles/tile_start-back.png";
+                karakStaticAsset(tile.collapsed_tile_image_path) ||
+                karakStaticAsset(latestMap?.world_event?.collapsed_tile_image_path) ||
+                `${KARAK_STATIC_URL}/media/tiles/tile_start-back.png`;
         } else if (tile.archetype_id === "entrance") {
-            baseImg.src = "/static/media/tiles/entrance.png";
+            baseImg.src = `${KARAK_STATIC_URL}/media/tiles/entrance.png`;
         } else {
             const variant = getTileVariant(tile, x, y);
-            baseImg.src = `/static/media/tiles/${tile.img_base}-${variant}.png`;
+            baseImg.src = `${KARAK_STATIC_URL}/media/tiles/${tile.img_base}-${variant}.png`;
         }
 
         baseImg.className = "tile-base-img";
@@ -390,7 +426,7 @@ function renderMapVisual() {
 
         if (tile.collapse_state !== "collapsed" && tile.entity_id) {
             const img = document.createElement("img");
-            img.src = `/static/media/tile-content/${tile.entity_id}.png`;
+            img.src = `${KARAK_STATIC_URL}/media/tile-content/${tile.entity_id}.png`;
             img.alt = tile.entity_id;
             img.className = "map-content-icon";
             tileBox.appendChild(img);
@@ -436,7 +472,7 @@ function renderMapVisual() {
 
         if (p.figurine_path) {
             const img = document.createElement("img");
-            img.src = p.figurine_path;
+            img.src = karakStaticAsset(p.figurine_path);
             img.alt = p.display_name || "player";
             img.title = p.display_name || "player";
             marker.appendChild(img);
@@ -1196,7 +1232,7 @@ function renderGameMasterPlayerRow(actor, isActive) {
 
     if (gm.icon_path) {
         const img = document.createElement("img");
-        img.src = gm.icon_path;
+        img.src = karakStaticAsset(gm.icon_path);
         img.alt = label;
         portrait.appendChild(img);
     } else {
@@ -1604,7 +1640,7 @@ function renderPlayers(data) {
 
         if (p.icon_path) {
             const img = document.createElement("img");
-            img.src = p.icon_path;
+            img.src = karakStaticAsset(p.icon_path);
             img.alt = p.display_name || "Player";
             portrait.appendChild(img);
         } else {
@@ -1988,7 +2024,7 @@ function entityImagePath(entityId) {
         return null;
     }
 
-    return `/static/media/tile-content/${entityId}.png`;
+    return `${KARAK_STATIC_URL}/media/tile-content/${entityId}.png`;
 }
 
 async function loadPlayers() {
@@ -2332,11 +2368,12 @@ function renderEncounterPanel() {
     const currentTile = getActivePlayerCurrentTile();
     const pendingChoice = getPendingEntityChoice();
 
-    const tableauPath =
+    const tableauPath = karakStaticAsset(
         activePlayer?.tableau_path ||
         activePlayer?.image_path ||
         activePlayer?.icon_path ||
-        null;
+        null
+    );
 
     // --------------------------------------------------------
     // Pending Oracle / Alchemist entity choice
@@ -2375,7 +2412,7 @@ function renderEncounterPanel() {
                 ? candidates.map((m, i) => {
                     const isConfirmable = confirmable.has(i);
                     const entityId = m.entity_id || "?";
-                    const imgPath = m.image_path || entityImagePath(entityId);
+                    const imgPath = karakStaticAsset(m.image_path) || entityImagePath(entityId);
 
                     return `
                                     <button
@@ -3066,7 +3103,7 @@ function itemImagePath(item) {
         throw new Error("Missing item.image_path in API response.");
     }
 
-    return item.image_path;
+    return karakStaticAsset(item.image_path);
 }
 
 function renderGround(data) {
@@ -3328,7 +3365,7 @@ function renderFightRows(rows, role, editableRole) {
                             title="${btn.label || slotId || ""}"
                         >
                             ${btn.image_path
-                        ? `<img class="item-icon" src="${btn.image_path}" alt="${btn.label || slotId || ""}">`
+                        ? `<img class="item-icon" src="${karakStaticAsset(btn.image_path)}" alt="${btn.label || slotId || ""}">`
                         : (btn.label || slotId || "scroll")}
                         </button>
                     `;
@@ -3407,7 +3444,7 @@ function renderFightRows(rows, role, editableRole) {
                         title="Unsupported fight button action: ${btn.action || "-"}"
                     >
                         ${btn.image_path
-                    ? `<img class="item-icon" src="${btn.image_path}" alt="${btn.label || btn.button_id || ""}">`
+                    ? `<img class="item-icon" src="${karakStaticAsset(btn.image_path)}" alt="${btn.label || btn.button_id || ""}">`
                     : (btn.label || btn.button_id || "action")}
                     </button>
                 `;
@@ -4470,7 +4507,7 @@ function handleGameOverRedirect(data) {
 
     if (directGameOver) {
         const target = data.redirect_to || "/phase4";
-        window.location.href = target;
+        window.location.href = karakPath(target);
         return true;
     }
 
@@ -5141,7 +5178,7 @@ async function leaveGame() {
     selectedCurseTargetPlayerId = null;
     latestFight = null;
 
-    window.location.href = "/phase1";
+    window.location.href = karakPath("/phase1");
 }
 
 function showMessage(msg, level = "info", title = null) {

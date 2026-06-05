@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from dto import (
+from app.dto import (
     BootstrapHotseatRequest,
     BootstrapHostRequest,
     BootstrapJoinRequest,

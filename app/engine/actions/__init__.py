@@ -3,12 +3,12 @@ Runtime action exports for the Karak engine.
 === by Sziller & ChatGPT GPT-5.5 Thinking ===
 """
 
-from engine.actions.base import (RuntimeAction,
+from app.engine.actions.base import (RuntimeAction,
                                  Action,
                                  FreeAction,
                                  TurnEndingFreeAction)
 
-from engine.actions.runtime_actions import (
+from app.engine.actions.runtime_actions import (
     MoveAction,
     TeleportAction,
     StartFightFreeAction,

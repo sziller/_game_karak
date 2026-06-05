@@ -1,8 +1,8 @@
 <head>
     <meta charset="UTF-8">
     <title>Karak - Lobby</title>
-    <link href="/static/favicon.ico" rel="icon">
-    <link href="/static/css/phase2_lobby.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/favicon.ico" rel="icon">
+    <link href="{{ karak_static_url }}/css/phase2_lobby.css" rel="stylesheet">
 </head>
 <body class="karak-page lobby-page">
 <div class="lobby-shell">
@@ -52,5 +52,9 @@
 
 </div>
 
-<script src="/static/js/phase2_lobby.js"></script>
+<script>
+    window.KARAK_BASE_URL = "{{ karak_base_url }}";
+    window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+</script>
+<script src="{{ karak_static_url }}/js/phase2_lobby.js"></script>
 </body>

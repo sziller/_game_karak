@@ -16,10 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from domain.player import SlotGroup
+from app.domain.player import SlotGroup
 
-from engine.actions.base import Action, FreeAction, TurnEndingFreeAction
-from engine.constants import DIRECTION, TeleportKind, RevealKind, TileSource
+from app.engine.actions.base import Action, FreeAction, TurnEndingFreeAction
+from app.engine.constants import DIRECTION, TeleportKind, RevealKind, TileSource
 
 
 @dataclass

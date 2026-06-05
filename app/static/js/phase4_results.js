@@ -1,4 +1,40 @@
-const API_BASE = "/api";
+const KARAK_BASE_URL = window.KARAK_BASE_URL || "";
+const KARAK_STATIC_URL = window.KARAK_STATIC_URL || `${KARAK_BASE_URL}/static`;
+
+function karakPath(path) {
+    if (!path) {
+        return KARAK_BASE_URL || "/";
+    }
+    if (/^(https?:)?\/\//.test(path)) {
+        return path;
+    }
+    if (KARAK_BASE_URL && path.startsWith(`${KARAK_BASE_URL}/`)) {
+        return path;
+    }
+    return `${KARAK_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function karakStaticAsset(path) {
+    if (!path) {
+        return "";
+    }
+    if (/^(https?:)?\/\//.test(path)) {
+        return path;
+    }
+
+    const normalized = String(path).replace(/^\/+/, "");
+
+    if (normalized.startsWith("static/")) {
+        return `${KARAK_STATIC_URL}/${normalized.slice("static/".length)}`;
+    }
+    if (normalized.startsWith("media/")) {
+        return `${KARAK_STATIC_URL}/${normalized}`;
+    }
+
+    return karakPath(path);
+}
+
+const API_BASE = karakPath("/api");
 
 let latestResults = null;
 
@@ -94,7 +130,7 @@ function itemImagePath(itemId) {
         return null;
     }
 
-    return `/static/media/tile-content/${imgFile}`;
+    return `${KARAK_STATIC_URL}/media/tile-content/${imgFile}`;
 }
 
 function escapeHtml(value) {
@@ -358,7 +394,7 @@ function renderPlayerIcon(player) {
         return `<div class="results-player-icon-placeholder">?</div>`;
     }
 
-    const normalizedSrc = src.startsWith("/") ? src : `/${src}`;
+    const normalizedSrc = karakStaticAsset(src);
 
     return `
         <img
@@ -623,7 +659,7 @@ async function restartToBootstrap() {
         throw new Error(data?.detail || "Failed to restart.");
     }
 
-    window.location.href = data?.redirect_to || "/phase1";
+    window.location.href = karakPath(data?.redirect_to || "/phase1");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {

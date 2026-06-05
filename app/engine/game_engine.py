@@ -1,30 +1,30 @@
 from __future__ import annotations
 
-from core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES, GAME_MECHANICS
-from domain.character_catalog import SKILL_CATALOG
+from app.core.config import GENERAL, PLAYER_FEATURES, TURN_RULES, SKILL_RULES, GAME_MECHANICS
+from app.domain.character_catalog import SKILL_CATALOG
 from typing import Dict, Optional, Literal, Any
 
 import copy
 import random
 
 # --- External pools (new canonical module) ---
-from domain.game_entities import (TILE_POOL as _TILE_POOL,
+from app.domain.game_entities import (TILE_POOL as _TILE_POOL,
                                   ENTITY_POOL as _ENTITY_POOL,
                                   ITEM_FEATURES,
                                   get_entity_by_id,
                                   serialize_item_ref)
-from domain.player import Player, SlotGroup
-from domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
-from domain.game_master import (DUNGEON_GAME_MASTER_ID,
+from app.domain.player import Player, SlotGroup
+from app.domain.character_catalog import CHARACTER_CLASSES, get_character_class_resolved_by_profession
+from app.domain.game_master import (DUNGEON_GAME_MASTER_ID,
                                 DUNGEON_GAME_MASTER_NAME,
                                 DUNGEON_GAME_MASTER_ICON_PATH,
                                 COLLAPSED_TILE_IMAGE_PATH,
                                 GameMaster,
                                 make_dungeon_game_master)
 
-from engine.constants import DIRECTION, DIR_ORDER, TeleportKind, ActionPrice, RevealKind, TileSource, TurnMode
-from engine.utils.directions import direction_to_delta, opposite, rotate_doors_clockwise, ensure_doors_typed
-from engine.fight_engine import (resolve_fight_state,
+from app.engine.constants import DIRECTION, DIR_ORDER, TeleportKind, ActionPrice, RevealKind, TileSource, TurnMode
+from app.engine.utils.directions import direction_to_delta, opposite, rotate_doors_clockwise, ensure_doors_typed
+from app.engine.fight_engine import (resolve_fight_state,
                                  resolve_arena_pvp_fight_state,
                                  start_entity_fight_state,
                                  start_arena_pvp_fight_state,
@@ -34,12 +34,12 @@ from engine.fight_engine import (resolve_fight_state,
                                  toggle_scroll_for_player_side,
                                  toggle_skill_for_player_side,
                                  toss_for_player_side)
-from engine.fight_models import FightState
-from engine.systems.pvp_stats_system import (record_arena_pvp_result as pvp_record_arena_pvp_result,
+from app.engine.fight_models import FightState
+from app.engine.systems.pvp_stats_system import (record_arena_pvp_result as pvp_record_arena_pvp_result,
                                              serialize_pvp_stats as pvp_serialize_pvp_stats,
                                              get_pvp_stats_for_player as pvp_get_pvp_stats_for_player)
-from engine.runtime import TileNode, WorldEventState, TurnActor, TurnState
-from engine.actions import (
+from app.engine.runtime import TileNode, WorldEventState, TurnActor, TurnState
+from app.engine.actions import (
     RuntimeAction,
     MoveAction,
     TeleportAction,
@@ -405,7 +405,7 @@ class DungeonGraph:
             "img_file": entity_data.get("img_file"),
             "sort": entity_data.get("sort"),
             "confirmable": confirmable,
-            "image_path": f"/static/media/tile-content/{entity_data.get('entity_id')}.png",
+            "image_path": f"media/tile-content/{entity_data.get('entity_id')}.png",
         }
 
         if index is not None:

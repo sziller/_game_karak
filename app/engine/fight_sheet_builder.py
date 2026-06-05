@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import random
 from typing import Optional
-from core.config import SKILL_RULES, PVP_COMBAT_RULES
+from app.core.config import SKILL_RULES, PVP_COMBAT_RULES
 
-from engine.fight_models import DiceState, FightParticipantRef, FightRow, FightRowButton, FightSideState, PlayerFightChoices
-from domain.game_entities import ITEM_FEATURES, get_entity_by_id
-from domain.player import Player
+from app.engine.fight_models import DiceState, FightParticipantRef, FightRow, FightRowButton, FightSideState, PlayerFightChoices
+from app.domain.game_entities import ITEM_FEATURES, get_entity_by_id
+from app.domain.player import Player
 
 # ============================================================
 # Public builders
@@ -932,7 +932,7 @@ def _build_scroll_manual_row(player: Player, choices: PlayerFightChoices) -> Fig
                 action="fight_toggle_scroll",
                 enabled=True,
                 is_active=is_active,
-                image_path=f"/static/media/tile-content/{item_id}.png",
+                image_path=f"media/tile-content/{item_id}.png",
                 payload={
                     "slot_id": slot_id,
                     "slot_index": idx,

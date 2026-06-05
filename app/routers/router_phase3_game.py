@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 
-from dto import (
+from app.dto import (
     MoveRequest,
     TeleportRequest,
     RotateTileRequest,
@@ -111,7 +111,7 @@ class ArenaLootChoiceRequest(BaseModel):
 def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Labirintus"])
 
-    ITEM_ASSET_BASE_PATH = "/static/media/tile-content"
+    ITEM_ASSET_BASE_PATH = "media/tile-content"
 
     def serialize_item_ref(item_id: str | None) -> dict | None:
         """
@@ -757,4 +757,3 @@ def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> AP
     #     return fight_start()
 
     return router
-

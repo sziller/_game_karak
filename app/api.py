@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -60,6 +61,9 @@ Ezen az API-on a CÉH homokozójában futó és tesztelt felhasználások érhet
 - OpenAPI JSON: `GET /api/openapi.json`
 """.strip()
 
+PACKAGE_ROOT = Path(__file__).resolve().parent
+STATIC_DIR = PACKAGE_ROOT / "static"
+
 
 app = FastAPI(
     title="Karak / Sandbox – API",
@@ -76,7 +80,7 @@ app = FastAPI(
     openapi_tags=OPENAPI_TAGS,
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 graph = DungeonGraph()
 bootstrap = BootstrapService()

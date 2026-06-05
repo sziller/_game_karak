@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Karak local runtime data
+.karak_data/
+
 # C extensions
 *.so
 

@@ -12,8 +12,8 @@ GameMasterKind = Literal["dungeon"]
 
 DUNGEON_GAME_MASTER_ID = "__dungeon__"
 DUNGEON_GAME_MASTER_NAME = "Dungeon"
-DUNGEON_GAME_MASTER_ICON_PATH = "static/media/tiles/tile_start-back.png"
-COLLAPSED_TILE_IMAGE_PATH = "/static/media/tiles/tile_start-back.png"
+DUNGEON_GAME_MASTER_ICON_PATH = "media/tiles/tile_start-back.png"
+COLLAPSED_TILE_IMAGE_PATH = "media/tiles/tile_start-back.png"
 
 # ============================================================
 # GameMaster / virtual runtime actor

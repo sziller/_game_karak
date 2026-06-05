@@ -12,7 +12,7 @@ It must not depend on runtime game state.
 
 from __future__ import annotations
 from typing import Mapping
-from engine.constants import Direction, DIR_ORDER
+from app.engine.constants import Direction, DIR_ORDER
 
 DIRECTION_TO_DELTA: dict[Direction, tuple[int, int]] = {"N": (0, 1),
                                                         "E": (1, 0),
