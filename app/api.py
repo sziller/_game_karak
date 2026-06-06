@@ -6,18 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.bootstrap import BootstrapService
-from app.engine.game_engine import DungeonGraph
-from app.domain.game_entities import ASCII_TILES, ITEM_FEATURES, get_entity_by_id
-
-from app.routers.router_frontend import build_frontend_router
-from app.routers.router_phase1_bootstrap import build_bootstrap_router
-from app.routers.router_phase2_lobby import build_lobby_router
-from app.routers.router_phase3_game import build_game_router
-from app.routers.router_phase4_results import build_results_router
-from app.routers.router_ops import build_ops_router
-
-from app.services.lobby import LobbyService
+from app.karak_router_bundle import build_karak_router_bundle, create_karak_service_container
 
 OPENAPI_TAGS = [
     {
@@ -82,28 +71,14 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-graph = DungeonGraph()
-bootstrap = BootstrapService()
-lobby = LobbyService()
+services = create_karak_service_container()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    graph.ensure_entrance()
+    services.graph.ensure_entrance()
     yield
 
 
 app.router.lifespan_context = lifespan
-app.include_router(build_frontend_router())
-app.include_router(build_bootstrap_router(bootstrap))
-app.include_router(build_lobby_router(bootstrap, lobby, graph))
-app.include_router(build_game_router(graph=graph,
-                                     ascii_tiles=ASCII_TILES,
-                                     item_features=ITEM_FEATURES,
-                                     get_entity_by_id=get_entity_by_id))
-app.include_router(build_results_router(
-    bootstrap_service=bootstrap,
-    lobby_service=lobby,
-    graph=graph,
-))
-app.include_router(build_ops_router(app))
+app.include_router(build_karak_router_bundle(services=services, ops_app=app))

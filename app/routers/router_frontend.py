@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
-def build_frontend_router() -> APIRouter:
+def build_frontend_router(*, base_path: str = "") -> APIRouter:
     router = APIRouter(tags=["Frontend"])
 
     templates_dir = Path(__file__).resolve().parents[1] / "templates"
@@ -18,13 +18,14 @@ def build_frontend_router() -> APIRouter:
         if not page.exists():
             return HTMLResponse(f"<h1>{filename} not found</h1>", status_code=404)
         root_path = request.scope.get("root_path", "")
+        karak_base_url = f"{root_path}{base_path}".rstrip("/")
         return templates.TemplateResponse(
             request,
             filename,
             {
                 "request": request,
-                "karak_base_url": root_path,
-                "karak_static_url": f"{root_path}/static",
+                "karak_base_url": karak_base_url,
+                "karak_static_url": f"{karak_base_url}/static",
             },
         )
 
@@ -35,7 +36,8 @@ def build_frontend_router() -> APIRouter:
     )
     def root(request: Request):
         root_path = request.scope.get("root_path", "")
-        return RedirectResponse(url=f"{root_path}/phase1", status_code=302)
+        karak_base_url = f"{root_path}{base_path}".rstrip("/")
+        return RedirectResponse(url=f"{karak_base_url}/phase1", status_code=302)
 
     @router.get(
         "/phase1",
