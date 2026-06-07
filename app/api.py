@@ -22,7 +22,7 @@ OPENAPI_TAGS = [
         "description": "Lobby and pre-game setup endpoints. Placeholder for now.",
     },
     {
-        "name": "Labirintus",
+        "name": "Phase-1 Game",
         "description": "Phase 3 gameplay endpoints.",
     },
     {

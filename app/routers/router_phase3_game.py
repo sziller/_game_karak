@@ -109,7 +109,7 @@ class ArenaLootChoiceRequest(BaseModel):
 
 
 def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> APIRouter:
-    router = APIRouter(prefix="/api/game", tags=["Labirintus"])
+    router = APIRouter(prefix="/api/game", tags=["Phase-1 Game"])
 
     ITEM_ASSET_BASE_PATH = "media/tile-content"
 
@@ -542,23 +542,6 @@ def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> AP
             return graph.insert_dungeon_actor_after_active_player()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
-    
-    @router.post(
-        "/debug/insert_dungeon_actor",
-        summary="Insert Dungeon virtual actor after active player",
-        description=(
-            "Development helper. Inserts the Dungeon GameMaster actor into the "
-            "parallel turn actor sequence after the current active player. "
-            "Does not execute collapse."
-        ),
-    )
-    def debug_insert_dungeon_actor():
-        try:
-            return graph.insert_dungeon_actor_after_active_player()
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    
     @router.post(
         "/move",
         summary="Move player",
