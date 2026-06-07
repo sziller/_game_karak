@@ -96,9 +96,9 @@ const TILE_VARIANTS = {
 
 const api = (p) => {
   if (p.startsWith("/")) {
-    return "/api" + p;
+    return "/api/game" + p;
   }
-  return "/api/" + p;
+  return "/api/game/" + p;
 };
 
 

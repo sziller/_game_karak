@@ -322,7 +322,7 @@ function getTileVariant(tile, x, y) {
     // -----------------------------
     const api = (p) => {
     const path = p.startsWith("/") ? p : "/" + p;
-    return "/api" + path;
+    return "/api/game" + path;
 };
 
     let ASCII_TILES = null;
@@ -987,4 +987,3 @@ function clearError() {
 
 </body>
 </html>
-

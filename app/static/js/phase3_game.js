@@ -34,7 +34,7 @@ function karakStaticAsset(path) {
     return karakPath(path);
 }
 
-const gameApi = (p) => karakPath("/api" + (p.startsWith("/") ? p : "/" + p));
+const gameApi = (p) => karakPath("/api/game" + (p.startsWith("/") ? p : "/" + p));
 const lobbyApi = (p) => karakPath("/api/lobby" + (p.startsWith("/") ? p : "/" + p));
 
 let latestPlayers = null;
@@ -4437,7 +4437,7 @@ async function endTurn() {
             // In that state /turn/end correctly returns:
             // "No active turn."
             //
-            // So reload /api/map and redirect if phase4 is active.
+            // So reload /api/game/map and redirect if phase4 is active.
             // ----------------------------------------------------
             if (String(detail).includes("No active turn")) {
                 await loadMap();

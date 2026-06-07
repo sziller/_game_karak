@@ -69,7 +69,7 @@ def build_karak_router_bundle(
     Existing Karak router prefixes are intentionally preserved:
     - /api/bootstrap
     - /api/lobby
-    - /api
+    - /api/game
     - /api/results
     - /api/admin
     """
