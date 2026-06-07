@@ -7,18 +7,27 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
-def build_frontend_router(*, base_path: str = "") -> APIRouter:
+def normalize_public_base_path(path: str) -> str:
+    if not path:
+        return ""
+    normalized = path.strip()
+    if not normalized or normalized == "/":
+        return ""
+    return "/" + normalized.strip("/")
+
+
+def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
     router = APIRouter(tags=["Frontend"])
 
     templates_dir = Path(__file__).resolve().parents[1] / "templates"
     templates = Jinja2Templates(directory=templates_dir)
+    karak_base_url = normalize_public_base_path(public_base_path)
+    karak_static_url = f"{karak_base_url}/static" if karak_base_url else "/static"
 
     def _serve_template(request: Request, filename: str) -> HTMLResponse:
         page = templates_dir / filename
         if not page.exists():
             return HTMLResponse(f"<h1>{filename} not found</h1>", status_code=404)
-        root_path = request.scope.get("root_path", "")
-        karak_base_url = f"{root_path}{base_path}".rstrip("/")
         return templates.TemplateResponse(
             request,
             filename,
@@ -34,9 +43,7 @@ def build_frontend_router(*, base_path: str = "") -> APIRouter:
         summary="Root entrypoint",
         description="Redirects to Phase 1 bootstrap page.",
     )
-    def root(request: Request):
-        root_path = request.scope.get("root_path", "")
-        karak_base_url = f"{root_path}{base_path}".rstrip("/")
+    def root():
         return RedirectResponse(url=f"{karak_base_url}/phase1", status_code=302)
 
     @router.get(

@@ -61,25 +61,31 @@ def build_karak_router_bundle(
     *,
     services: KarakServiceContainer | None = None,
     ops_app: Any | None = None,
-    frontend_base_path: str = "",
+    frontend_public_base_path: str = "",
+    frontend_base_path: str | None = None,
 ) -> APIRouter:
     """
     Build the Karak local-router bundle for SHMC-style integration.
 
+    frontend_public_base_path controls browser-visible URLs emitted by templates.
+    It is intentionally independent from the internal SHMC router prefix.
+
     Existing Karak router prefixes are intentionally preserved:
     - /api/bootstrap
     - /api/lobby
-    - /api
+    - /api/game
     - /api/results
     - /api/admin
     """
     services = services or create_karak_service_container()
     ops_app = ops_app or SimpleNamespace(version="0.0.1")
+    if frontend_base_path is not None:
+        frontend_public_base_path = frontend_base_path
     services.graph.ensure_entrance()
 
     router = APIRouter()
     router.include_router(build_static_router())
-    router.include_router(build_frontend_router(base_path=frontend_base_path))
+    router.include_router(build_frontend_router(public_base_path=frontend_public_base_path))
     router.include_router(build_bootstrap_router(services.bootstrap))
     router.include_router(build_lobby_router(services.bootstrap, services.lobby, services.graph))
     router.include_router(build_game_router(
