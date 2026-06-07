@@ -6,18 +6,26 @@ from app.karak_router_bundle import build_karak_router_bundle, create_karak_serv
 
 
 class KarakRouter:
-    def __init__(self, name: str, alias: str, db_fullname: str | None, db_style: str | None) -> None:
+    def __init__(
+        self,
+        name: str,
+        alias: str,
+        db_fullname: str | None,
+        db_style: str | None,
+        frontend_base_path: str = "",
+    ) -> None:
         self.name = name
         self.alias = alias
         self.db_fullname = db_fullname
         self.db_style = db_style
+        self.frontend_base_path = frontend_base_path
         self.version = "0.1.0"
         self.services = create_karak_service_container()
         self.router = APIRouter()
         self.router.include_router(build_karak_router_bundle(
             services=self.services,
             ops_app=self,
-            frontend_base_path="/karak",
+            frontend_public_base_path=frontend_base_path,
         ))
 
     def reinit(self) -> None:

@@ -19,6 +19,9 @@ APP_ROUTER_INFO_KARAK_EXAMPLE = {
             "alias": "Karak",
             "db_fullname": os.getenv("DB_FULLNAME_KARAK"),
             "db_style": os.getenv("DB_STYLE_KARAK"),
+            # Clean player domain: https://karak.play.sziller.eu/
+            # Use "/app/karak" only if browser-visible URLs must target api.sziller.eu/app/karak.
+            "frontend_base_path": "",
         },
     }
 }
