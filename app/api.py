@@ -14,24 +14,24 @@ OPENAPI_TAGS = [
         "description": "HTML pages for phase-based frontend entry points.",
     },
     {
-        "name": "Phase-1 Bootstrap",
+        "name": "Karak - bootstrap",
         "description": "Startup/session bootstrap before lobby and gameplay.",
     },
     {
-        "name": "Phase-2 Lobby",
+        "name": "Karak - lobby",
         "description": "Lobby and pre-game setup endpoints. Placeholder for now.",
     },
     {
-        "name": "Phase-1 Game",
+        "name": "Karak - game",
         "description": "Phase 3 gameplay endpoints.",
     },
     {
-        "name": "Phase-4 Results",
+        "name": "Karak - results",
         "description": "Final game results and restart endpoints.",
     },
     {
-        "name": "Ops & Diagnostics",
-        "description": "Operatív eszközök.",
+        "name": "Karak - ops & diagnostics",
+        "description": "Operative tools.",
     },
 ]
 

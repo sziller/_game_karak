@@ -24,7 +24,7 @@ class StartGameRequest(BaseModel):
 
 
 def build_lobby_router(bootstrap_service, lobby_service, graph) -> APIRouter:
-    router = APIRouter(prefix="/api/lobby", tags=["Phase-2 Lobby"])
+    router = APIRouter(prefix="/api/lobby", tags=["Karak - lobby"])
 
     @router.get(
         "/state",

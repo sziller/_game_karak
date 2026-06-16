@@ -109,7 +109,7 @@ class ArenaLootChoiceRequest(BaseModel):
 
 
 def build_game_router(graph, ascii_tiles, item_features, get_entity_by_id) -> APIRouter:
-    router = APIRouter(prefix="/api/game", tags=["Phase-1 Game"])
+    router = APIRouter(prefix="/api/game", tags=["Karak - game"])
 
     ITEM_ASSET_BASE_PATH = "media/tile-content"
 
