@@ -10,6 +10,7 @@
 
 <h1>Karak - Game style selection</h1>
 <p>Bootstrap / session start</p>
+<p><a href="{{ karak_base_url }}/login">Local auth token helper</a></p>
 
 <div class="panel">
     <h2>Local</h2>
@@ -40,6 +41,7 @@
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
 </script>
+<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
 <script src="{{ karak_static_url }}/js/phase1_bootstrap.js"></script>
 
 </body>

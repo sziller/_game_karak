@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "karak-game"
-version = "0.1.0"
+version = "0.0.1"
 description = "Karak browser game and game engine"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi",
+    "python-jose",
     "uvicorn",
     "pydantic",
     "PyYAML",
@@ -18,7 +19,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "karak_shmc*", "shmc_routers*"]
+include = ["app*", "karak_shmc*", "shmc_routers*", "shmc_auth_client*"]
 
 [tool.setuptools.package-data]
 "app" = [
@@ -26,3 +27,6 @@ include = ["app*", "karak_shmc*", "shmc_routers*"]
     "static/**/*",
     "content/**/*",
 ]
+
+# python -m pip install --upgrade build
+# python -m build
