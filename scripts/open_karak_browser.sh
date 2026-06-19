@@ -3,7 +3,11 @@ set -euo pipefail
 
 HOST="${KARAK_HOST:-127.0.0.1}"
 PORT="${KARAK_PORT:-8001}"
-URL="http://$HOST:$PORT/"
+OPEN_PATH="${KARAK_OPEN_PATH:-/phase1}"
+if [[ "$OPEN_PATH" != /* ]]; then
+    OPEN_PATH="/$OPEN_PATH"
+fi
+URL="http://$HOST:$PORT$OPEN_PATH"
 
 if command -v firefox >/dev/null 2>&1; then
     firefox --new-tab "$URL" >/dev/null 2>&1 &

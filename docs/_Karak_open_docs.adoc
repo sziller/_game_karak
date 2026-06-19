@@ -29,3 +29,5 @@ include::game_mechanics.adoc[]
 include::concepts.adoc[]
 
 include::skills.adoc[]
+
+include::shmc_local_ui_auth_pattern.adoc[]

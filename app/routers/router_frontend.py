@@ -7,6 +7,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from app.core.local_dev_auth import ensure_local_dev_jwt
+
 
 def normalize_public_base_path(path: str) -> str:
     if not path:
@@ -18,7 +20,7 @@ def normalize_public_base_path(path: str) -> str:
 
 
 def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
-    router = APIRouter(tags=["Frontend"])
+    router = APIRouter(tags=["Karak - frontend"])
 
     templates_dir = Path(__file__).resolve().parents[1] / "templates"
     templates = Jinja2Templates(directory=templates_dir)
@@ -41,6 +43,7 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
                 "karak_base_url": karak_base_url,
                 "karak_static_url": f"{karak_base_url}/static",
                 "karak_auth_login_url": karak_auth_login_url,
+                "karak_local_dev_jwt": ensure_local_dev_jwt(),
             },
         )
 

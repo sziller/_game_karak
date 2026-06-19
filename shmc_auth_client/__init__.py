@@ -10,6 +10,7 @@ endpoints with central SHMC JWT authentication and authorization policies.
   - jwt_service: public-key JWT verification service
   - security: FastAPI JWT bearer dependency
   - policies: reusable authorization dependency factories
+  - local_jwt: local-development JWT generator for subproject tests
 
 === Does Not Contain ===
   - AuthRouter
