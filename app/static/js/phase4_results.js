@@ -633,7 +633,7 @@ function updateSubtitle() {
 }
 
 async function loadResults() {
-    const r = await fetch(`${API_BASE}/results/state`);
+    const r = await karakFetch(`${API_BASE}/results/state`);
     const data = await r.json();
 
     if (!r.ok) {
@@ -649,7 +649,7 @@ async function loadResults() {
 }
 
 async function restartToBootstrap() {
-    const r = await fetch(`${API_BASE}/results/restart_to_bootstrap`, {
+    const r = await karakFetch(`${API_BASE}/results/restart_to_bootstrap`, {
         method: "POST",
     });
 

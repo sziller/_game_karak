@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Karak - Local auth token</title>
+    <link rel="icon" href="{{ karak_static_url }}/favicon.ico">
+    <link href="{{ karak_static_url }}/css/phases12.css" rel="stylesheet">
+</head>
+<body>
+
+<h1>Karak - Login</h1>
+<p>Use SHMC credentials to fetch and store a JWT for Karak API requests.</p>
+
+<div class="panel">
+    <h2>SHMC login</h2>
+    <p>Endpoint: <code id="auth-login-url-label"></code></p>
+    <input
+            autocomplete="username"
+            id="login-username"
+            placeholder="Username or email"
+            type="text"
+    >
+    <input
+            autocomplete="current-password"
+            id="login-password"
+            placeholder="Password"
+            type="password"
+    >
+    <button id="login-btn" type="button">Login and save token</button>
+</div>
+
+<div class="panel">
+    <h2>Token status</h2>
+    <p id="token-status">(checking)</p>
+    <button id="show-token-btn" type="button">Show stored token</button>
+    <button id="clear-token-btn" type="button">Clear token</button>
+</div>
+
+<div class="panel">
+    <h2>Manual token fallback</h2>
+    <textarea
+            id="token-input"
+            placeholder="Paste JWT here. Both raw JWT and Bearer &lt;JWT&gt; are accepted."
+            rows="8"
+            style="width: 100%; box-sizing: border-box;"
+    ></textarea>
+    <button id="save-token-btn" type="button">Save token</button>
+</div>
+
+<div class="panel">
+    <h2>Continue</h2>
+    <p>Protected API calls require a valid SHMC or local-development JWT.</p>
+    <button id="continue-btn" type="button">Continue to Phase 1</button>
+</div>
+
+<div class="message-box message-info" id="message-box">
+    <b id="message-title">Info</b>
+    <pre id="message-content">(ready)</pre>
+</div>
+
+<script>
+    window.KARAK_BASE_URL = "{{ karak_base_url }}";
+    window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    window.KARAK_AUTH_LOGIN_URL = "{{ karak_auth_login_url }}";
+    window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
+</script>
+<script src="/js/shmc_auth.js"></script>
+<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
+<script src="{{ karak_static_url }}/js/phase0_login.js"></script>
+
+</body>
+</html>

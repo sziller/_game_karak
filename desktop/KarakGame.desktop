@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Karak
-Comment=Start the Karak local server and open the bootstrap page
+Comment=Start the Karak local API and open the Phase 1 UI
 Icon=/home/sziller/Projects/503_GameKarak/_game_karak/app/static/media/hero-boards/Valduk-fig.png
 Exec=bash -c "/home/sziller/Projects/503_GameKarak/_game_karak/scripts/start_karak_server.sh --foreground & sleep 2; /home/sziller/Projects/503_GameKarak/_game_karak/scripts/open_karak_browser.sh; wait"
 Path=/home/sziller/Projects/503_GameKarak/_game_karak

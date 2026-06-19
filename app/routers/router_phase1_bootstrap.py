@@ -10,7 +10,7 @@ from app.dto import (
 
 
 def build_bootstrap_router(bootstrap_service) -> APIRouter:
-    router = APIRouter(prefix="/api/bootstrap", tags=["Phase-1 Bootstrap"])
+    router = APIRouter(prefix="/api/bootstrap", tags=["Karak - bootstrap"])
 
     @router.get(
         "/state",

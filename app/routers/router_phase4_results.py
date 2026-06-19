@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 
 def build_results_router(bootstrap_service, lobby_service, graph) -> APIRouter:
-    router = APIRouter(prefix="/api/results", tags=["Phase-4 Results"])
+    router = APIRouter(prefix="/api/results", tags=["Karak - results"])
 
     @router.get(
         "/state",

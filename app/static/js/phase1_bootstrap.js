@@ -70,7 +70,7 @@ async function refreshState() {
     clearError();
 
     try {
-        const r = await fetch(bootstrapApi("/state"));
+        const r = await karakFetch(bootstrapApi("/state"));
         const data = await r.json();
 
         setStatus(data);
@@ -93,7 +93,7 @@ async function startHotseat() {
     clearError();
 
     try {
-        const r = await fetch(bootstrapApi("/hotseat"), {
+        const r = await karakFetch(bootstrapApi("/hotseat"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ player_name: "Local Admin" })
@@ -121,7 +121,7 @@ async function startHost() {
     const bind_url = document.getElementById("host-url").value.trim() || null;
 
     try {
-        const r = await fetch(bootstrapApi("/host"), {
+        const r = await karakFetch(bootstrapApi("/host"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ player_name, bind_url })
@@ -155,7 +155,7 @@ async function joinHost() {
     }
 
     try {
-        const r = await fetch(bootstrapApi("/join"), {
+        const r = await karakFetch(bootstrapApi("/join"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ player_name, server_url, room_code })

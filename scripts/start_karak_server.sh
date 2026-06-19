@@ -39,10 +39,10 @@ cd "$PROJECT_ROOT"
 if [[ "$MODE" == "--foreground" ]]; then
     echo "Starting Karak server at $URL"
     echo "Press Ctrl+C to stop."
-    exec "$PYTHON_BIN" "$PROJECT_ROOT/app/main.py"
+    exec "$PYTHON_BIN" "$PROJECT_ROOT/RUN_API_karak.py"
 fi
 
-nohup "$PYTHON_BIN" "$PROJECT_ROOT/app/main.py" >"$LOG_FILE" 2>&1 &
+nohup "$PYTHON_BIN" "$PROJECT_ROOT/RUN_API_karak.py" >"$LOG_FILE" 2>&1 &
 echo "$!" > "$PID_FILE"
 
 for _ in {1..30}; do

@@ -56,7 +56,7 @@ function showMessage(kind, title, content) {
 }
 
 async function apiJson(url, options = {}) {
-    const response = await fetch(url, {
+    const response = await karakFetch(url, {
         headers: {
             "Content-Type": "application/json",
             ...(options.headers || {}),

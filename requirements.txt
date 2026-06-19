@@ -1,5 +1,6 @@
 pydantic
 fastapi
+python-jose
 uvicorn
 PyYAML
 jinja2

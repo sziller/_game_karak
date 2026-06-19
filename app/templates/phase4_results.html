@@ -48,7 +48,10 @@
 <script>
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
 </script>
+<script src="/js/shmc_auth.js"></script>
+<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
 <script src="{{ karak_static_url }}/js/phase4_results.js"></script>
 </body>
 </html>

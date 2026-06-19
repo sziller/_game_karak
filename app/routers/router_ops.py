@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 
 def build_ops_router(app) -> APIRouter:
-    router = APIRouter(prefix="/api/admin", tags=["Ops & Diagnostics"])
+    router = APIRouter(prefix="/api/admin", tags=["Karak - ops & diagnostics"])
 
     @router.get(
         "/ping",

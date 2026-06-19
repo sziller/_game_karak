@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.bootstrap import BootstrapService
@@ -18,9 +18,11 @@ from app.routers.router_phase2_lobby import build_lobby_router
 from app.routers.router_phase3_game import build_game_router
 from app.routers.router_phase4_results import build_results_router
 from app.services.lobby import LobbyService
+from shmc_auth_client.policies import require_project_admin_claims, require_registered_project_access
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_ROOT / "static"
+KARAK_PROJECT_CODE = "KARAK"
 
 
 @dataclass
@@ -38,8 +40,16 @@ def create_karak_service_container() -> KarakServiceContainer:
     )
 
 
+def get_karak_api_auth_dependencies() -> list[Any]:
+    return [Depends(require_registered_project_access(KARAK_PROJECT_CODE))]
+
+
+def get_karak_admin_auth_dependencies() -> list[Any]:
+    return [Depends(require_project_admin_claims(KARAK_PROJECT_CODE))]
+
+
 def build_static_router() -> APIRouter:
-    router = APIRouter(tags=["Frontend"])
+    router = APIRouter(tags=["Karak - frontend"])
 
     @router.get("/static/{path:path}", include_in_schema=False)
     def serve_static(path: str):
@@ -84,21 +94,35 @@ def build_karak_router_bundle(
     services.graph.ensure_entrance()
 
     router = APIRouter()
+    api_auth_dependencies = get_karak_api_auth_dependencies()
+    admin_auth_dependencies = get_karak_admin_auth_dependencies()
     router.include_router(build_static_router())
     router.include_router(build_frontend_router(public_base_path=frontend_public_base_path))
-    router.include_router(build_bootstrap_router(services.bootstrap))
-    router.include_router(build_lobby_router(services.bootstrap, services.lobby, services.graph))
-    router.include_router(build_game_router(
-        graph=services.graph,
-        ascii_tiles=ASCII_TILES,
-        item_features=ITEM_FEATURES,
-        get_entity_by_id=get_entity_by_id,
-    ))
-    router.include_router(build_results_router(
-        bootstrap_service=services.bootstrap,
-        lobby_service=services.lobby,
-        graph=services.graph,
-    ))
-    router.include_router(build_ops_router(ops_app))
+    router.include_router(
+        build_bootstrap_router(services.bootstrap),
+        dependencies=api_auth_dependencies,
+    )
+    router.include_router(
+        build_lobby_router(services.bootstrap, services.lobby, services.graph),
+        dependencies=api_auth_dependencies,
+    )
+    router.include_router(
+        build_game_router(
+            graph=services.graph,
+            ascii_tiles=ASCII_TILES,
+            item_features=ITEM_FEATURES,
+            get_entity_by_id=get_entity_by_id,
+        ),
+        dependencies=api_auth_dependencies,
+    )
+    router.include_router(
+        build_results_router(
+            bootstrap_service=services.bootstrap,
+            lobby_service=services.lobby,
+            graph=services.graph,
+        ),
+        dependencies=api_auth_dependencies,
+    )
+    router.include_router(build_ops_router(ops_app), dependencies=admin_auth_dependencies)
 
     return router

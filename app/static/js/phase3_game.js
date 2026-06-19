@@ -1706,7 +1706,7 @@ function renderPlayers(data) {
 async function debugInsertDungeonActor() {
     clearError();
 
-    const r = await fetch(gameApi("/debug/insert_dungeon_actor"), {
+    const r = await karakFetch(gameApi("/debug/insert_dungeon_actor"), {
         method: "POST"
     });
 
@@ -1725,7 +1725,7 @@ async function debugInsertDungeonActor() {
 async function debugInsertDungeonActor() {
     clearError();
 
-    const r = await fetch(gameApi("/debug/insert_dungeon_actor"), {
+    const r = await karakFetch(gameApi("/debug/insert_dungeon_actor"), {
         method: "POST"
     });
 
@@ -1796,7 +1796,7 @@ async function move(direction) {
         pocket_tile_index: usePocketTile ? selectedScoutPocketTileIndex : null
     };
 
-    const r = await fetch(gameApi("/move"), {
+    const r = await karakFetch(gameApi("/move"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
@@ -2028,7 +2028,7 @@ function entityImagePath(entityId) {
 }
 
 async function loadPlayers() {
-    const r = await fetch(gameApi("/players"));
+    const r = await karakFetch(gameApi("/players"));
     const data = await r.json();
 
     if (!r.ok) {
@@ -2043,7 +2043,7 @@ async function loadPlayers() {
 }
 
 async function loadMap() {
-    const r = await fetch(gameApi("/map"));
+    const r = await karakFetch(gameApi("/map"));
     const data = await r.json();
     if (!r.ok) {
         throw new Error(data.detail || "Failed to load map.");
@@ -2272,7 +2272,7 @@ function getPendingEntityChoice() {
 async function confirmEntityCandidate(candidateIndex) {
     clearError();
 
-    const r = await fetch(gameApi("/entity/confirm_candidate"), {
+    const r = await karakFetch(gameApi("/entity/confirm_candidate"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({candidate_index: candidateIndex})
@@ -2291,7 +2291,7 @@ async function confirmEntityCandidate(candidateIndex) {
 async function redrawEntityCandidate() {
     clearError();
 
-    const r = await fetch(gameApi("/entity/redraw_candidate"), {
+    const r = await karakFetch(gameApi("/entity/redraw_candidate"), {
         method: "POST"
     });
 
@@ -2725,7 +2725,7 @@ async function refreshAll() {
 
         if (turn?.mode === "fight") {
             try {
-                const r = await fetch(gameApi("/fight/state"));
+                const r = await karakFetch(gameApi("/fight/state"));
                 const data = await r.json();
 
                 if (handleGameOverRedirect(data)) {
@@ -2825,7 +2825,7 @@ async function confirmHealingChoice() {
         return;
     }
 
-    const r = await fetch(gameApi("/healing/choose_target"), {
+    const r = await karakFetch(gameApi("/healing/choose_target"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({target_hp: targetHp})
@@ -2861,7 +2861,7 @@ async function confirmTeleport() {
     // It resolves a pending forced fountain teleport.
     // --------------------------------------------------------
     if (isAwaitingKoReactionChoice()) {
-        const r = await fetch(gameApi("/ko_reaction/choose_fountain"), {
+        const r = await karakFetch(gameApi("/ko_reaction/choose_fountain"), {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({x, y})
@@ -2967,7 +2967,7 @@ async function confirmTeleport() {
 
     const usedSkill = pendingTeleportSkillId;
 
-    const r = await fetch(gameApi(endpoint), {
+    const r = await karakFetch(gameApi(endpoint), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
@@ -3037,7 +3037,7 @@ async function confirmPlayerTargetTeleport() {
     const usedSkill = pendingTeleportSkillId;
     const targetPlayerId = selectedTeleportTargetPlayerId;
 
-    const r = await fetch(gameApi(endpoint), {
+    const r = await karakFetch(gameApi(endpoint), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -3079,7 +3079,7 @@ async function rotateTile(direction) {
         return;
     }
 
-    const r = await fetch(gameApi("/rotate_tile"), {
+    const r = await karakFetch(gameApi("/rotate_tile"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -3693,7 +3693,7 @@ function renderFight(data) {
 async function chooseArenaOpponent(targetPlayerId) {
     clearError();
 
-    const r = await fetch(gameApi("/arena/choose_opponent"), {
+    const r = await karakFetch(gameApi("/arena/choose_opponent"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -3740,7 +3740,7 @@ async function chooseArenaLootSlot(sourceSlotGroup, sourceSlotIndex) {
 async function chooseArenaLoot(payload) {
     clearError();
 
-    const r = await fetch(gameApi("/arena/choose_loot"), {
+    const r = await karakFetch(gameApi("/arena/choose_loot"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
@@ -3773,7 +3773,7 @@ async function toggleSkillUiSelection(playerId, skillId) {
         return;
     }
 
-    const r = await fetch(gameApi("/skills/toggle"), {
+    const r = await karakFetch(gameApi("/skills/toggle"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({skill_id: skillId})
@@ -3815,7 +3815,7 @@ async function stepSkillUiValue(playerId, skillId, delta) {
     const currentValue = currentSkill?.value ?? currentHp;
     const nextValue = Math.max(1, Math.min(maxHp, currentValue + delta));
 
-    const r = await fetch(gameApi("/skills/set_value"), {
+    const r = await karakFetch(gameApi("/skills/set_value"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -4141,7 +4141,7 @@ async function scoutPullTile(playerId) {
         return;
     }
 
-    const r = await fetch(gameApi("/skills/sco_02/pull_tile"), {
+    const r = await karakFetch(gameApi("/skills/sco_02/pull_tile"), {
         method: "POST"
     });
 
@@ -4227,7 +4227,7 @@ async function loadInventory() {
     ) {
         return;
     }
-    const r = await fetch(gameApi("/inventory"));
+    const r = await karakFetch(gameApi("/inventory"));
     const data = await r.json();
 
     console.log("INVENTORY STATUS:", r.status);
@@ -4246,7 +4246,7 @@ async function loadInventory() {
 async function inventorySlotAction(slotGroup, slotIndex) {
     clearError();
 
-    const r = await fetch(gameApi("/inventory/slot_action"), {
+    const r = await karakFetch(gameApi("/inventory/slot_action"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -4267,7 +4267,7 @@ async function inventorySlotAction(slotGroup, slotIndex) {
 async function activateGroundObject() {
     clearError();
 
-    const r = await fetch(gameApi("/ground/activate"), {
+    const r = await karakFetch(gameApi("/ground/activate"), {
         method: "POST"
     });
 
@@ -4329,7 +4329,7 @@ async function useInventoryItem({
                                 }) {
     clearError();
 
-    const r = await fetch(gameApi("/inventory/use_item"), {
+    const r = await karakFetch(gameApi("/inventory/use_item"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -4381,7 +4381,7 @@ async function useInventoryItem({
 async function continueAfterItemPickup() {
     clearError();
 
-    const r = await fetch(gameApi("/itempickup/continue"), {
+    const r = await karakFetch(gameApi("/itempickup/continue"), {
         method: "POST"
     });
 
@@ -4419,7 +4419,7 @@ async function endTurn() {
     try {
         clearError();
 
-        const r = await fetch(gameApi("/turn/end"), {
+        const r = await karakFetch(gameApi("/turn/end"), {
             method: "POST",
         });
 
@@ -4566,7 +4566,7 @@ function handleSkillChipClick(event, playerId, skillId) {
 async function pickupTreasure() {
     clearError();
 
-    const r = await fetch(gameApi("/inventory/pickup_treasure"), {
+    const r = await karakFetch(gameApi("/inventory/pickup_treasure"), {
         method: "POST"
     });
 
@@ -4814,7 +4814,7 @@ async function confirmTile() {
     const x = target.x;
     const y = target.y;
 
-    const r = await fetch(gameApi("/confirm_tile"), {
+    const r = await karakFetch(gameApi("/confirm_tile"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({x, y})
@@ -4861,7 +4861,7 @@ async function confirmPoisonSelection() {
 
     clearError();
 
-    const r = await fetch(gameApi("/poison/choose_target"), {
+    const r = await karakFetch(gameApi("/poison/choose_target"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -4900,7 +4900,7 @@ async function confirmCurseSelection() {
 
     clearError();
 
-    const r = await fetch(gameApi("/curse/choose_target"), {
+    const r = await karakFetch(gameApi("/curse/choose_target"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({target_player_id: selectedCurseTargetPlayerId})
@@ -4928,7 +4928,7 @@ function isAwaitingKoReactionChoice() {
 async function fightStart() {
     clearError();
 
-    const r = await fetch(gameApi("/fight/start"), {
+    const r = await karakFetch(gameApi("/fight/start"), {
         method: "POST"
     });
 
@@ -4951,7 +4951,7 @@ async function fightStart() {
 async function fightRefresh() {
     clearError();
 
-    const r = await fetch(gameApi("/fight/state"));
+    const r = await karakFetch(gameApi("/fight/state"));
     const data = await r.json();
 
     if (!r.ok) {
@@ -4966,7 +4966,7 @@ async function fightRefresh() {
 async function fightToss(role = "challenged") {
     clearError();
 
-    const r = await fetch(gameApi("/fight/toss"), {
+    const r = await karakFetch(gameApi("/fight/toss"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({role})
@@ -4985,7 +4985,7 @@ async function fightToss(role = "challenged") {
 async function fightRerollDie(dieIndex, skillId, role = "challenged") {
     clearError();
 
-    const r = await fetch(gameApi("/fight/reroll_die"), {
+    const r = await karakFetch(gameApi("/fight/reroll_die"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -5008,7 +5008,7 @@ async function fightRerollDie(dieIndex, skillId, role = "challenged") {
 async function fightRerollBoth(skillId, role = "challenged") {
     clearError();
 
-    const r = await fetch(gameApi("/fight/reroll_both"), {
+    const r = await karakFetch(gameApi("/fight/reroll_both"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -5030,7 +5030,7 @@ async function fightRerollBoth(skillId, role = "challenged") {
 async function fightResolve() {
     clearError();
 
-    const r = await fetch(gameApi("/fight/resolve"), {
+    const r = await karakFetch(gameApi("/fight/resolve"), {
         method: "POST"
     });
 
@@ -5067,7 +5067,7 @@ async function fightResolve() {
 async function fightToggleSkill(skillId, role = "challenged") {
     clearError();
 
-    const r = await fetch(gameApi("/fight/toggle_skill"), {
+    const r = await karakFetch(gameApi("/fight/toggle_skill"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -5089,7 +5089,7 @@ async function fightToggleSkill(skillId, role = "challenged") {
 async function fightToggleScroll(slotId, role = "challenged") {
     clearError();
 
-    const r = await fetch(gameApi("/fight/toggle_scroll"), {
+    const r = await karakFetch(gameApi("/fight/toggle_scroll"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -5111,7 +5111,7 @@ async function fightToggleScroll(slotId, role = "challenged") {
 async function fightCommitRole(role) {
     clearError();
 
-    const r = await fetch(gameApi("/fight/commit_role"), {
+    const r = await karakFetch(gameApi("/fight/commit_role"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({role})
@@ -5146,7 +5146,7 @@ async function postGameAction(path, payload = null) {
         options.body = JSON.stringify(payload);
     }
 
-    const r = await fetch(gameApi(path), options);
+    const r = await karakFetch(gameApi(path), options);
     const data = await r.json();
 
     if (!r.ok) {
@@ -5169,7 +5169,7 @@ async function postGameAction(path, payload = null) {
 
 async function leaveGame() {
     try {
-        await fetch(lobbyApi("/reset_to_phase1"), {method: "POST"});
+        await karakFetch(lobbyApi("/reset_to_phase1"), {method: "POST"});
     } catch (e) {
         console.error(e);
     }
