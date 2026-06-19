@@ -62,88 +62,107 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_ROOT / "static"
 
 
-app = FastAPI(
-    title="Karak / Sandbox – API",
-    version="0.0.1",
-    description=APP_DESCRIPTION,
-    docs_url=None,
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
-    swagger_ui_parameters={
-        "docExpansion": "list",
-        "defaultModelsExpandDepth": -1,
-        "displayRequestDuration": True,
-    },
-    openapi_tags=OPENAPI_TAGS,
-)
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-services = create_karak_service_container()
+def normalize_public_base_path(path: str) -> str:
+    if not path:
+        return ""
+    normalized = path.strip()
+    if not normalized or normalized == "/":
+        return ""
+    return "/" + normalized.strip("/")
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    services.graph.ensure_entrance()
-    yield
+def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
+    services = create_karak_service_container()
+    public_base_path = normalize_public_base_path(frontend_public_base_path)
 
-
-app.router.lifespan_context = lifespan
-
-
-@app.get("/api/docs", include_in_schema=False)
-def swagger_ui_html() -> HTMLResponse:
-    local_dev_jwt = ensure_local_dev_jwt()
-    local_dev_jwt_json = json.dumps(local_dev_jwt)
-    openapi_url_json = json.dumps(app.openapi_url)
-    title_json = json.dumps(f"{app.title} - Swagger UI")
-    oauth2_redirect_url_json = json.dumps("/api/docs/oauth2-redirect")
-
-    return HTMLResponse(
-        f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
-            <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
-            <title>{app.title} - Swagger UI</title>
-        </head>
-        <body>
-            <div id="swagger-ui"></div>
-            <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-            <script>
-                const karakLocalDevJwt = {local_dev_jwt_json};
-                const ui = SwaggerUIBundle({{
-                    url: {openapi_url_json},
-                    dom_id: "#swagger-ui",
-                    layout: "BaseLayout",
-                    deepLinking: true,
-                    showExtensions: true,
-                    showCommonExtensions: true,
-                    docExpansion: "list",
-                    defaultModelsExpandDepth: -1,
-                    displayRequestDuration: true,
-                    oauth2RedirectUrl: window.location.origin + {oauth2_redirect_url_json},
-                    requestInterceptor: function(request) {{
-                        request.headers = request.headers || {{}};
-                        if (karakLocalDevJwt && !request.headers.Authorization) {{
-                            request.headers.Authorization = "Bearer " + karakLocalDevJwt;
-                        }}
-                        return request;
-                    }},
-                }});
-                window.ui = ui;
-                document.title = {title_json};
-            </script>
-        </body>
-        </html>
-        """
+    karak_app = FastAPI(
+        title="Karak / Sandbox - API",
+        version="0.0.1",
+        description=APP_DESCRIPTION,
+        docs_url=None,
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+        swagger_ui_parameters={
+            "docExpansion": "list",
+            "defaultModelsExpandDepth": -1,
+            "displayRequestDuration": True,
+        },
+        openapi_tags=OPENAPI_TAGS,
     )
 
+    karak_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-@app.get("/api/docs/oauth2-redirect", include_in_schema=False)
-def swagger_ui_redirect() -> HTMLResponse:
-    return get_swagger_ui_oauth2_redirect_html()
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        services.graph.ensure_entrance()
+        yield
+
+    karak_app.router.lifespan_context = lifespan
+
+    @karak_app.get("/api/docs", include_in_schema=False)
+    def swagger_ui_html() -> HTMLResponse:
+        local_dev_jwt = ensure_local_dev_jwt()
+        local_dev_jwt_json = json.dumps(local_dev_jwt)
+        openapi_url = f"{public_base_path}{karak_app.openapi_url}" if public_base_path else karak_app.openapi_url
+        openapi_url_json = json.dumps(openapi_url)
+        title_json = json.dumps(f"{karak_app.title} - Swagger UI")
+        oauth2_redirect_url = f"{public_base_path}/api/docs/oauth2-redirect" if public_base_path else "/api/docs/oauth2-redirect"
+        oauth2_redirect_url_json = json.dumps(oauth2_redirect_url)
+
+        return HTMLResponse(
+            f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+                <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
+                <title>{karak_app.title} - Swagger UI</title>
+            </head>
+            <body>
+                <div id="swagger-ui"></div>
+                <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+                <script>
+                    const karakLocalDevJwt = {local_dev_jwt_json};
+                    const ui = SwaggerUIBundle({{
+                        url: {openapi_url_json},
+                        dom_id: "#swagger-ui",
+                        layout: "BaseLayout",
+                        deepLinking: true,
+                        showExtensions: true,
+                        showCommonExtensions: true,
+                        docExpansion: "list",
+                        defaultModelsExpandDepth: -1,
+                        displayRequestDuration: true,
+                        oauth2RedirectUrl: window.location.origin + {oauth2_redirect_url_json},
+                        requestInterceptor: function(request) {{
+                            request.headers = request.headers || {{}};
+                            if (karakLocalDevJwt && !request.headers.Authorization) {{
+                                request.headers.Authorization = "Bearer " + karakLocalDevJwt;
+                            }}
+                            return request;
+                        }},
+                    }});
+                    window.ui = ui;
+                    document.title = {title_json};
+                </script>
+            </body>
+            </html>
+            """
+        )
+
+    @karak_app.get("/api/docs/oauth2-redirect", include_in_schema=False)
+    def swagger_ui_redirect() -> HTMLResponse:
+        return get_swagger_ui_oauth2_redirect_html()
+
+    karak_app.include_router(
+        build_karak_router_bundle(
+            services=services,
+            ops_app=karak_app,
+            frontend_public_base_path=public_base_path,
+        )
+    )
+
+    return karak_app
 
 
-app.include_router(build_karak_router_bundle(services=services, ops_app=app))
+app = create_karak_app()

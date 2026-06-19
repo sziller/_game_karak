@@ -7,21 +7,29 @@ from fastapi import FastAPI
 
 class KarakMountedApp:
     """
-    Adapter class used by the SHMC server.
+    Mounted-app adapter used by the SHMC server.
 
-    This class does not implement game logic.
-    It exposes the existing Karak FastAPI application as a mounted sub-application.
+    SHMC imports this class through ``karak_shmc.module`` and mounts the
+    returned FastAPI app. Karak-specific app construction stays inside this
+    package.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        frontend_public_base_path: str = "/app/karak",
+        **kwargs: Any,
+    ) -> None:
+        self.frontend_public_base_path = frontend_public_base_path
         self.kwargs = kwargs
         self.app: FastAPI | None = None
         self.reinit()
 
     def reinit(self) -> None:
-        from app.main import app as karak_app
+        from app.api import create_karak_app
 
-        self.app = karak_app
+        self.app = create_karak_app(
+            frontend_public_base_path=self.frontend_public_base_path,
+        )
 
     def get_app(self) -> FastAPI:
         if self.app is None:
