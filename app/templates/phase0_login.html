@@ -62,7 +62,9 @@
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
     window.KARAK_AUTH_LOGIN_URL = "{{ karak_auth_login_url }}";
+    {% if karak_local_dev_jwt %}
     window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
+    {% endif %}
 </script>
 <script src="/js/shmc_auth.js"></script>
 <script src="{{ karak_static_url }}/js/karak_auth.js"></script>

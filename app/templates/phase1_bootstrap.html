@@ -10,7 +10,9 @@
 
 <h1>Karak - Game style selection</h1>
 <p>Bootstrap / session start</p>
-<p><a href="{{ karak_base_url }}/login">Sign in with SHMC</a></p>
+{% if karak_dev_auth_helper_enabled %}
+<p><a href="{{ karak_base_url }}/login">Developer auth helper</a></p>
+{% endif %}
 
 <div class="panel">
     <h2>Local</h2>
@@ -40,7 +42,9 @@
 <script>
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    {% if karak_local_dev_jwt %}
     window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
+    {% endif %}
 </script>
 <script src="/js/shmc_auth.js"></script>
 <script src="{{ karak_static_url }}/js/karak_auth.js"></script>

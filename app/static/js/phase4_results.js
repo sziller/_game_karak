@@ -663,6 +663,10 @@ async function restartToBootstrap() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+    if (!karakRequireShmcLogin()) {
+        return;
+    }
+
     const restartBtn = document.getElementById("restart-btn");
 
     if (restartBtn) {

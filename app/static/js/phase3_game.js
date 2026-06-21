@@ -5477,4 +5477,6 @@ function clearError() {
     showMessage("(ready)", "info", "Info");
 }
 
-refreshAll();
+if (karakRequireShmcLogin()) {
+    refreshAll();
+}

@@ -715,6 +715,10 @@ function escapeHtml(value) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+    if (!karakRequireShmcLogin()) {
+        return;
+    }
+
     document.getElementById("add-player-btn")?.addEventListener("click", addPlayerFromInput);
 
     document.getElementById("player-name-input")?.addEventListener("keydown", (ev) => {

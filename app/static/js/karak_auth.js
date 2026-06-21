@@ -108,6 +108,31 @@
         return Boolean(getStoredKarakJwt());
     }
 
+    function buildShmcLoginUrl() {
+        const currentPath = `${window.location.pathname}${window.location.search}`;
+        const next = currentPath || "/app/karak/";
+        return `/auth/login.html?next=${encodeURIComponent(next)}`;
+    }
+
+    function requireShmcLogin() {
+        const shmcAuth = getSHMCAuth();
+
+        if (shmcAuth && typeof shmcAuth.isAuthenticated === "function") {
+            if (shmcAuth.isAuthenticated()) {
+                return true;
+            }
+            window.location.href = buildShmcLoginUrl();
+            return false;
+        }
+
+        if (hasStoredKarakJwt()) {
+            return true;
+        }
+
+        window.location.href = buildShmcLoginUrl();
+        return false;
+    }
+
     function karakFetch(input, init) {
         const shmcAuth = getSHMCAuth();
         if (shmcAuth && typeof shmcAuth.fetch === "function") {
@@ -139,6 +164,8 @@
         setToken: setStoredKarakJwt,
         clearToken: clearStoredKarakJwt,
         hasToken: hasStoredKarakJwt,
+        requireLogin: requireShmcLogin,
+        buildLoginUrl: buildShmcLoginUrl,
         fetch: karakFetch,
     };
 
@@ -146,5 +173,7 @@
     window.karakSetJwtToken = setStoredKarakJwt;
     window.karakClearJwtToken = clearStoredKarakJwt;
     window.karakHasJwtToken = hasStoredKarakJwt;
+    window.karakRequireShmcLogin = requireShmcLogin;
+    window.karakBuildShmcLoginUrl = buildShmcLoginUrl;
     window.karakFetch = karakFetch;
 }());

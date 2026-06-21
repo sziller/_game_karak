@@ -181,4 +181,6 @@ async function joinHost() {
 // Initial load
 // ============================================================
 
-refreshState();
+if (karakRequireShmcLogin()) {
+    refreshState();
+}

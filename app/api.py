@@ -49,7 +49,6 @@ Karak is a sziller.eu hosted browser game and API integration package.
 **Useful links**
 - Start page: `GET /`
 - Phase 1 bootstrap: `GET /phase1`
-- Sign in: `GET /login`
 - Phase 2 lobby: `GET /phase2`
 - Phase 3 game: `GET /phase3`
 - Phase 4 results: `GET /phase4`

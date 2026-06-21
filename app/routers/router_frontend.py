@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -27,6 +27,10 @@ def get_optional_local_dev_jwt() -> str:
     return ensure_local_dev_jwt()
 
 
+def dev_auth_helper_enabled() -> bool:
+    return os.getenv("KARAK_DEV_AUTH_HELPER_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
     router = APIRouter(tags=["Karak - frontend"])
 
@@ -38,6 +42,7 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
         "KARAK_AUTH_LOGIN_URL",
         "/app/auth/api/login",
     )
+    show_dev_auth_helper = dev_auth_helper_enabled()
 
     def _serve_template(request: Request, filename: str) -> HTMLResponse:
         page = templates_dir / filename
@@ -52,16 +57,18 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
                 "karak_static_url": f"{karak_base_url}/static",
                 "karak_auth_login_url": karak_auth_login_url,
                 "karak_local_dev_jwt": get_optional_local_dev_jwt(),
+                "karak_dev_auth_helper_enabled": show_dev_auth_helper,
             },
         )
 
     @router.get(
         "/",
+        response_class=HTMLResponse,
         summary="Root entrypoint",
-        description="Redirects to Phase 1 bootstrap page.",
+        description="Serves the Phase 1 bootstrap shell.",
     )
-    def root():
-        return RedirectResponse(url=f"{karak_base_url}/phase1", status_code=302)
+    def root(request: Request):
+        return _serve_template(request, "phase1_bootstrap.html")
 
     @router.get(
         "/phase1",
@@ -77,14 +84,18 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
         response_class=HTMLResponse,
         summary="SHMC sign-in page",
         description="Serves the Karak sign-in page backed by SHMC browser auth.",
+        include_in_schema=show_dev_auth_helper,
     )
     @router.get(
         "/phase0",
         response_class=HTMLResponse,
         summary="Phase 0 SHMC sign-in page",
         description="Alias for the Karak sign-in page.",
+        include_in_schema=show_dev_auth_helper,
     )
     def serve_login(request: Request):
+        if not dev_auth_helper_enabled():
+            raise HTTPException(status_code=404, detail="Karak local auth helper is disabled.")
         return _serve_template(request, "phase0_login.html")
 
     @router.get(

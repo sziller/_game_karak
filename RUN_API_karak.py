@@ -56,6 +56,7 @@ os.environ.setdefault("AUTH_JWT_SECRET", "shmc-local-dev-jwt-secret-not-for-prod
 os.environ.setdefault("AUTH_ISSUER", "shmc-local-dev")
 os.environ.setdefault("AUTH_AUDIENCE", "shmc-api")
 os.environ.setdefault("KARAK_AUTH_LOGIN_URL", "https://api.sziller.eu/app/auth/api/login")
+os.environ.setdefault("KARAK_DEV_AUTH_HELPER_ENABLED", "1")
 
 from app.core.local_dev_auth import ensure_local_dev_jwt  # noqa: E402
 
