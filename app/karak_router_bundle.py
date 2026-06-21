@@ -18,7 +18,7 @@ from app.routers.router_phase2_lobby import build_lobby_router
 from app.routers.router_phase3_game import build_game_router
 from app.routers.router_phase4_results import build_results_router
 from app.services.lobby import LobbyService
-from shmc_auth_client.policies import require_project_admin_claims, require_registered_project_access
+from shmc_auth_client import require_project_admin_claims, require_registered_project_or_api_key_access
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_ROOT / "static"
@@ -41,7 +41,7 @@ def create_karak_service_container() -> KarakServiceContainer:
 
 
 def get_karak_api_auth_dependencies() -> list[Any]:
-    return [Depends(require_registered_project_access(KARAK_PROJECT_CODE))]
+    return [Depends(require_registered_project_or_api_key_access(KARAK_PROJECT_CODE))]
 
 
 def get_karak_admin_auth_dependencies() -> list[Any]:

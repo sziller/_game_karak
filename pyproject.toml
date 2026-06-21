@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "python-jose",
+    "shmc-auth-client==0.1.0",
     "uvicorn",
     "pydantic",
     "PyYAML",
@@ -19,7 +20,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "karak_shmc*", "shmc_routers*", "shmc_auth_client*"]
+include = ["app*", "karak_shmc*", "shmc_routers*"]
 
 [tool.setuptools]
 py-modules = ["RUN_API_karak"]

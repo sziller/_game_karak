@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,7 +10,6 @@ from fastapi.openapi.docs import get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.core.local_dev_auth import ensure_local_dev_jwt
 from app.karak_router_bundle import build_karak_router_bundle, create_karak_service_container
 
 OPENAPI_TAGS = [
@@ -71,6 +71,16 @@ def normalize_public_base_path(path: str) -> str:
     return "/" + normalized.strip("/")
 
 
+def get_optional_local_dev_jwt() -> str:
+    if (os.getenv("AUTH_JWT_ALGORITHM") or "").strip().upper() != "HS256":
+        return ""
+    try:
+        from app.core.local_dev_auth import ensure_local_dev_jwt
+    except ImportError:
+        return ""
+    return ensure_local_dev_jwt()
+
+
 def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
     services = create_karak_service_container()
     public_base_path = normalize_public_base_path(frontend_public_base_path)
@@ -101,7 +111,7 @@ def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
 
     @karak_app.get("/api/docs", include_in_schema=False)
     def swagger_ui_html() -> HTMLResponse:
-        local_dev_jwt = ensure_local_dev_jwt()
+        local_dev_jwt = get_optional_local_dev_jwt()
         local_dev_jwt_json = json.dumps(local_dev_jwt)
         openapi_url = f"{public_base_path}{karak_app.openapi_url}" if public_base_path else karak_app.openapi_url
         openapi_url_json = json.dumps(openapi_url)

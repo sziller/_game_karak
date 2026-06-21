@@ -7,8 +7,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.core.local_dev_auth import ensure_local_dev_jwt
-
 
 def normalize_public_base_path(path: str) -> str:
     if not path:
@@ -17,6 +15,16 @@ def normalize_public_base_path(path: str) -> str:
     if not normalized or normalized == "/":
         return ""
     return "/" + normalized.strip("/")
+
+
+def get_optional_local_dev_jwt() -> str:
+    if (os.getenv("AUTH_JWT_ALGORITHM") or "").strip().upper() != "HS256":
+        return ""
+    try:
+        from app.core.local_dev_auth import ensure_local_dev_jwt
+    except ImportError:
+        return ""
+    return ensure_local_dev_jwt()
 
 
 def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
@@ -43,7 +51,7 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
                 "karak_base_url": karak_base_url,
                 "karak_static_url": f"{karak_base_url}/static",
                 "karak_auth_login_url": karak_auth_login_url,
-                "karak_local_dev_jwt": ensure_local_dev_jwt(),
+                "karak_local_dev_jwt": get_optional_local_dev_jwt(),
             },
         )
 
