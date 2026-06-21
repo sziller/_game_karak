@@ -21,8 +21,19 @@
         return value.replace(/^Bearer\s+/i, "").trim();
     }
 
+    function removeLocalFallbackToken() {
+        try {
+            window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+        } catch (_) {
+            // Storage may be disabled.
+        }
+    }
+
     function getStoredKarakJwt() {
         const shmcAuth = getSHMCAuth();
+        if (shmcAuth && typeof shmcAuth.getAccessToken === "function") {
+            return normalizeJwtToken(shmcAuth.getAccessToken());
+        }
         if (shmcAuth && typeof shmcAuth.getToken === "function") {
             return normalizeJwtToken(shmcAuth.getToken());
         }
@@ -46,8 +57,15 @@
         const normalized = normalizeJwtToken(token);
         const shmcAuth = getSHMCAuth();
 
+        if (shmcAuth && typeof shmcAuth.setAccessToken === "function") {
+            shmcAuth.setAccessToken(normalized);
+            removeLocalFallbackToken();
+            window.KARAK_JWT = normalized;
+            return;
+        }
         if (shmcAuth && typeof shmcAuth.setToken === "function") {
             shmcAuth.setToken(normalized);
+            removeLocalFallbackToken();
             window.KARAK_JWT = normalized;
             return;
         }
@@ -67,8 +85,16 @@
 
     function clearStoredKarakJwt() {
         const shmcAuth = getSHMCAuth();
+        if (shmcAuth && typeof shmcAuth.clearAccessToken === "function") {
+            shmcAuth.clearAccessToken();
+            removeLocalFallbackToken();
+            window.KARAK_JWT = "";
+            window.KARAK_LOCAL_DEV_JWT = "";
+            return;
+        }
         if (shmcAuth && typeof shmcAuth.clearToken === "function") {
             shmcAuth.clearToken();
+            removeLocalFallbackToken();
             window.KARAK_JWT = "";
             window.KARAK_LOCAL_DEV_JWT = "";
             return;

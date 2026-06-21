@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Karak - Local auth token</title>
+    <title>Karak - Sign in</title>
     <link rel="icon" href="{{ karak_static_url }}/favicon.ico">
     <link href="{{ karak_static_url }}/css/phases12.css" rel="stylesheet">
 </head>
 <body>
 
-<h1>Karak - Login</h1>
-<p>Use SHMC credentials to fetch and store a JWT for Karak API requests.</p>
+<h1>Karak - Sign in</h1>
+<p>Use your SHMC credentials to access protected Karak API requests.</p>
 
 <div class="panel">
     <h2>SHMC login</h2>
@@ -26,18 +26,18 @@
             placeholder="Password"
             type="password"
     >
-    <button id="login-btn" type="button">Login and save token</button>
+    <button id="login-btn" type="button">Sign in</button>
 </div>
 
 <div class="panel">
-    <h2>Token status</h2>
+    <h2>Session status</h2>
     <p id="token-status">(checking)</p>
-    <button id="show-token-btn" type="button">Show stored token</button>
-    <button id="clear-token-btn" type="button">Clear token</button>
+    <button id="show-token-btn" type="button">Show token</button>
+    <button id="clear-token-btn" type="button">Sign out</button>
 </div>
 
 <div class="panel">
-    <h2>Manual token fallback</h2>
+    <h2>Developer token fallback</h2>
     <textarea
             id="token-input"
             placeholder="Paste JWT here. Both raw JWT and Bearer &lt;JWT&gt; are accepted."
@@ -49,7 +49,7 @@
 
 <div class="panel">
     <h2>Continue</h2>
-    <p>Protected API calls require a valid SHMC or local-development JWT.</p>
+    <p>Protected API calls require a valid SHMC session token.</p>
     <button id="continue-btn" type="button">Continue to Phase 1</button>
 </div>
 

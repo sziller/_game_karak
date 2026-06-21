@@ -36,7 +36,7 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
     karak_static_url = f"{karak_base_url}/static" if karak_base_url else "/static"
     karak_auth_login_url = os.getenv(
         "KARAK_AUTH_LOGIN_URL",
-        "https://api.sziller.eu/app/auth/api/login",
+        "/app/auth/api/login",
     )
 
     def _serve_template(request: Request, filename: str) -> HTMLResponse:
@@ -75,14 +75,14 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
     @router.get(
         "/login",
         response_class=HTMLResponse,
-        summary="Local dev JWT token entry",
-        description="Serves a local-development helper page for storing a JWT in the browser.",
+        summary="SHMC sign-in page",
+        description="Serves the Karak sign-in page backed by SHMC browser auth.",
     )
     @router.get(
         "/phase0",
         response_class=HTMLResponse,
-        summary="Phase 0 local dev JWT token entry",
-        description="Alias for the local-development JWT token entry page.",
+        summary="Phase 0 SHMC sign-in page",
+        description="Alias for the Karak sign-in page.",
     )
     def serve_login(request: Request):
         return _serve_template(request, "phase0_login.html")

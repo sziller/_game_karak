@@ -1,10 +1,10 @@
 // ============================================================
-// Phase 0 / local token-entry helper
+// Karak sign-in page backed by SHMC browser auth.
 // ============================================================
 
 const KARAK_BASE_URL = window.KARAK_BASE_URL || "";
 const KARAK_AUTH_LOGIN_URL =
-    window.KARAK_AUTH_LOGIN_URL || "https://api.sziller.eu/app/auth/api/login";
+    window.KARAK_AUTH_LOGIN_URL || "/app/auth/api/login";
 
 function karakPath(path) {
     if (!path) {
@@ -52,11 +52,11 @@ function refreshTokenStatus() {
 
     const token = karakGetJwtToken();
     if (!token) {
-        status.textContent = "No JWT stored. API requests will be sent without Authorization.";
+        status.textContent = "Not signed in. API requests will be sent without Authorization.";
         return;
     }
 
-    status.textContent = `JWT stored. Preview: ${getTokenPreview(token)}`;
+    status.textContent = `Signed in. Token preview: ${getTokenPreview(token)}`;
 }
 
 function getAuthErrorMessage(response, data) {
@@ -82,38 +82,49 @@ async function loginWithPassword() {
 
     showMessage("Logging in...", "info");
 
-    let response = null;
     let data = null;
 
     try {
-        response = await window.fetch(KARAK_AUTH_LOGIN_URL, {
-            method: "POST",
-            headers: {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                username_or_email: usernameOrEmail,
-                password,
-            }),
-        });
+        if (window.SHMCAuth && typeof window.SHMCAuth.login === "function") {
+            data = await window.SHMCAuth.login(usernameOrEmail, password, {
+                loginUrl: KARAK_AUTH_LOGIN_URL,
+            });
+        } else {
+            const response = await window.fetch(KARAK_AUTH_LOGIN_URL, {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    username_or_email: usernameOrEmail,
+                    password,
+                }),
+            });
 
-        try {
-            data = await response.json();
-        } catch (_) {
-            data = null;
+            try {
+                data = await response.json();
+            } catch (_) {
+                data = null;
+            }
+
+            if (!response.ok) {
+                showMessage(getAuthErrorMessage(response, data), "error", "Login failed");
+                return;
+            }
         }
     } catch (error) {
+        const response = error && error.response ? error.response : null;
+        const payload = error && error.payload ? error.payload : null;
+        if (response) {
+            showMessage(getAuthErrorMessage(response, payload), "error", "Login failed");
+            return;
+        }
         showMessage(
             `Could not reach auth endpoint. ${error.message || error}`,
             "error",
             "Login failed",
         );
-        return;
-    }
-
-    if (!response.ok) {
-        showMessage(getAuthErrorMessage(response, data), "error", "Login failed");
         return;
     }
 
@@ -139,7 +150,7 @@ function saveToken() {
     const token = input ? input.value.trim() : "";
 
     if (!token) {
-        showMessage("Paste a JWT before saving, or continue without a token.", "error");
+        showMessage("Paste a JWT before saving.", "error");
         return;
     }
 
@@ -148,7 +159,7 @@ function saveToken() {
         input.value = "";
     }
     refreshTokenStatus();
-    showMessage("JWT saved locally. Future API requests will include Authorization: Bearer <JWT>.");
+    showMessage("Token saved. Future API requests will include Authorization: Bearer <JWT>.");
 }
 
 function showStoredToken() {
@@ -168,7 +179,7 @@ function clearToken() {
         input.value = "";
     }
     refreshTokenStatus();
-    showMessage("JWT cleared. API requests will be sent without Authorization.");
+    showMessage("Token cleared. API requests will be sent without Authorization.");
 }
 
 function continueToPhase1() {
