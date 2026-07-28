@@ -2,7 +2,7 @@
     <meta charset="UTF-8">
     <title>Karak - Lobby</title>
     <link href="{{ karak_static_url }}/favicon.ico" rel="icon">
-    <link href="{{ karak_static_url }}/css/phase2_lobby.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phase2_lobby.css?v={{ karak_asset_version }}" rel="stylesheet">
 </head>
 <body class="karak-page lobby-page">
 <div class="lobby-shell">
@@ -11,6 +11,8 @@
         <div class="lobby-title">Karak - Lobby</div>
         <div class="lobby-session" id="lobby-session-label"></div>
     </div>
+
+    <div class="lobby-participation-bar" id="lobby-participation-bar"></div>
 
     <div class="lobby-main">
 
@@ -27,6 +29,7 @@
             </div>
 
             <div class="lobby-class-column">
+                <div class="participant-list" id="participant-list"></div>
                 <div class="lobby-class-card" id="lobby-class-card">
                     <div class="muted">Select a player, then assign a profession.</div>
                 </div>
@@ -55,11 +58,16 @@
 <script>
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    window.KARAK_ADVERTISED_ORIGIN = "{{ karak_advertised_origin }}";
+    window.KARAK_DEPLOYMENT_MODE = "{{ karak_deployment_mode }}";
     {% if karak_local_dev_jwt %}
     window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
     {% endif %}
 </script>
+{% if karak_include_shmc_auth_script %}
 <script src="/js/shmc_auth.js"></script>
-<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
-<script src="{{ karak_static_url }}/js/phase2_lobby.js"></script>
+{% endif %}
+<script src="{{ karak_static_url }}/js/karak_game_context.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/karak_auth.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/phase2_lobby.js?v={{ karak_asset_version }}"></script>
 </body>

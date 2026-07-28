@@ -7,10 +7,13 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.openapi.docs import get_swagger_ui_oauth2_redirect_html
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.core.deployment_config import load_deployment_config_from_env
 from app.karak_router_bundle import build_karak_router_bundle, create_karak_service_container
+from app.runtime import RevisionConflict
+from app.version import get_package_version
 
 OPENAPI_TAGS = [
     {
@@ -24,6 +27,10 @@ OPENAPI_TAGS = [
     {
         "name": "Karak - lobby",
         "description": "Lobby and pre-game setup endpoints. Placeholder for now.",
+    },
+    {
+        "name": "Karak - game sessions",
+        "description": "Runtime creation, joining, and safe participant projections.",
     },
     {
         "name": "Karak - game",
@@ -40,11 +47,11 @@ OPENAPI_TAGS = [
 ]
 
 APP_DESCRIPTION = """
-Karak is a sziller.eu hosted browser game and API integration package.
+Karak is a browser game and API integration package.
 
 - Browser pages are served by the same FastAPI app as the game API.
 - Game, lobby, bootstrap, results, and diagnostics endpoints are grouped under separate routers.
-- Authentication is handled through the sziller.eu auth flow where deployment requires it.
+- Authentication is handled through the configured application auth flow where deployment requires it.
 
 **Useful links**
 - Start page: `GET /`
@@ -81,12 +88,13 @@ def get_optional_local_dev_jwt() -> str:
 
 
 def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
+    deployment_config = load_deployment_config_from_env()
     services = create_karak_service_container()
-    public_base_path = normalize_public_base_path(frontend_public_base_path)
+    public_base_path = normalize_public_base_path(frontend_public_base_path or deployment_config.public_base_path)
 
     karak_app = FastAPI(
         title="Karak / Sandbox - API",
-        version="0.0.1",
+        version=get_package_version(),
         description=APP_DESCRIPTION,
         docs_url=None,
         redoc_url="/api/redoc",
@@ -101,9 +109,18 @@ def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
 
     karak_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    @karak_app.exception_handler(RevisionConflict)
+    async def revision_conflict_handler(_, exc: RevisionConflict) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": exc.detail["message"],
+                "current_revision": exc.current_revision,
+            },
+        )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        services.graph.ensure_entrance()
         yield
 
     karak_app.router.lifespan_context = lifespan
@@ -168,6 +185,9 @@ def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
             services=services,
             ops_app=karak_app,
             frontend_public_base_path=public_base_path,
+            frontend_advertised_origin=deployment_config.advertised_origin,
+            frontend_deployment_mode=deployment_config.mode.value,
+            frontend_include_shmc_auth=deployment_config.shmc_browser_auth_enabled,
         )
     )
 

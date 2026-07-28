@@ -94,8 +94,8 @@ class BootstrapState:
 def _normalize_server_url(raw: str) -> str:
     """
     Accepts:
-      - '127.0.0.1:8000'
-      - 'http://127.0.0.1:8000'
+      - '127.0.0.1:8001'
+      - 'http://127.0.0.1:8001'
       - 'https://example.com'
     Returns normalized URL.
 

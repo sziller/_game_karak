@@ -7,6 +7,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from app.core.deployment_config import KarakDeploymentMode, normalize_deployment_mode
+from app.core.lan_config import normalize_advertised_origin
+
 
 def normalize_public_base_path(path: str) -> str:
     if not path:
@@ -31,7 +34,21 @@ def dev_auth_helper_enabled() -> bool:
     return os.getenv("KARAK_DEV_AUTH_HELPER_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
+def shmc_browser_auth_enabled() -> bool:
+    return os.getenv("KARAK_SHMC_BROWSER_AUTH_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def current_deployment_mode() -> str:
+    return normalize_deployment_mode(os.getenv("KARAK_DEPLOYMENT_MODE")).value
+
+
+def build_frontend_router(
+    *,
+    public_base_path: str = "",
+    advertised_origin: str | None = None,
+    deployment_mode: str | None = None,
+    include_shmc_auth: bool | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["Karak - frontend"])
 
     templates_dir = Path(__file__).resolve().parents[1] / "templates"
@@ -42,7 +59,17 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
         "KARAK_AUTH_LOGIN_URL",
         "/app/auth/api/login",
     )
+    karak_asset_version = os.getenv("KARAK_ASSET_VERSION", "stage3a2")
     show_dev_auth_helper = dev_auth_helper_enabled()
+    karak_advertised_origin = advertised_origin
+    if karak_advertised_origin is None:
+        karak_advertised_origin = normalize_advertised_origin(os.getenv("KARAK_ADVERTISED_ORIGIN"))
+    resolved_deployment_mode = deployment_mode or current_deployment_mode()
+    include_shmc_auth_script = (
+        (shmc_browser_auth_enabled() if include_shmc_auth is None else include_shmc_auth)
+        or bool(karak_base_url)
+        or resolved_deployment_mode == KarakDeploymentMode.CENTRAL_HOSTED.value
+    )
 
     def _serve_template(request: Request, filename: str) -> HTMLResponse:
         page = templates_dir / filename
@@ -58,6 +85,10 @@ def build_frontend_router(*, public_base_path: str = "") -> APIRouter:
                 "karak_auth_login_url": karak_auth_login_url,
                 "karak_local_dev_jwt": get_optional_local_dev_jwt(),
                 "karak_dev_auth_helper_enabled": show_dev_auth_helper,
+                "karak_advertised_origin": karak_advertised_origin or "",
+                "karak_deployment_mode": resolved_deployment_mode,
+                "karak_include_shmc_auth_script": include_shmc_auth_script,
+                "karak_asset_version": karak_asset_version,
             },
         )
 

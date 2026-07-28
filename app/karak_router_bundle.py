@@ -10,15 +10,16 @@ from fastapi.responses import FileResponse
 
 from app.bootstrap import BootstrapService
 from app.domain.game_entities import ASCII_TILES, ITEM_FEATURES, get_entity_by_id
-from app.engine.game_engine import DungeonGraph
 from app.routers.router_frontend import build_frontend_router
-from app.routers.router_ops import build_ops_router
+from app.routers.router_game_sessions import build_game_sessions_router
+from app.routers.router_ops import build_health_router, build_ops_router
 from app.routers.router_phase1_bootstrap import build_bootstrap_router
 from app.routers.router_phase2_lobby import build_lobby_router
 from app.routers.router_phase3_game import build_game_router
 from app.routers.router_phase4_results import build_results_router
-from app.services.lobby import LobbyService
-from shmc_auth_client import require_project_admin_claims, require_registered_project_or_api_key_access
+from app.runtime.registry import InMemoryGameRuntimeRegistry
+from app.version import get_package_version
+from app.core.auth_dependencies import require_project_admin_claims, require_registered_project_or_api_key_access
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_ROOT / "static"
@@ -27,16 +28,14 @@ KARAK_PROJECT_CODE = "KARAK"
 
 @dataclass
 class KarakServiceContainer:
-    graph: DungeonGraph
     bootstrap: BootstrapService
-    lobby: LobbyService
+    runtime_registry: InMemoryGameRuntimeRegistry
 
 
 def create_karak_service_container() -> KarakServiceContainer:
     return KarakServiceContainer(
-        graph=DungeonGraph(),
         bootstrap=BootstrapService(),
-        lobby=LobbyService(),
+        runtime_registry=InMemoryGameRuntimeRegistry(),
     )
 
 
@@ -73,6 +72,9 @@ def build_karak_router_bundle(
     ops_app: Any | None = None,
     frontend_public_base_path: str = "",
     frontend_base_path: str | None = None,
+    frontend_advertised_origin: str | None = None,
+    frontend_deployment_mode: str | None = None,
+    frontend_include_shmc_auth: bool | None = None,
 ) -> APIRouter:
     """
     Build the Karak local-router bundle for SHMC-style integration.
@@ -88,27 +90,40 @@ def build_karak_router_bundle(
     - /api/admin
     """
     services = services or create_karak_service_container()
-    ops_app = ops_app or SimpleNamespace(version="0.0.1")
+    ops_app = ops_app or SimpleNamespace(version=get_package_version())
     if frontend_base_path is not None:
         frontend_public_base_path = frontend_base_path
-    services.graph.ensure_entrance()
-
     router = APIRouter()
     api_auth_dependencies = get_karak_api_auth_dependencies()
     admin_auth_dependencies = get_karak_admin_auth_dependencies()
     router.include_router(build_static_router())
-    router.include_router(build_frontend_router(public_base_path=frontend_public_base_path))
+    router.include_router(build_health_router())
     router.include_router(
-        build_bootstrap_router(services.bootstrap),
+        build_frontend_router(
+            public_base_path=frontend_public_base_path,
+            advertised_origin=frontend_advertised_origin,
+            deployment_mode=frontend_deployment_mode,
+            include_shmc_auth=frontend_include_shmc_auth,
+        )
+    )
+    router.include_router(
+        build_bootstrap_router(
+            bootstrap_service=services.bootstrap,
+            runtime_registry=services.runtime_registry,
+        ),
         dependencies=api_auth_dependencies,
     )
     router.include_router(
-        build_lobby_router(services.bootstrap, services.lobby, services.graph),
+        build_game_sessions_router(services.runtime_registry),
+        dependencies=api_auth_dependencies,
+    )
+    router.include_router(
+        build_lobby_router(services.runtime_registry),
         dependencies=api_auth_dependencies,
     )
     router.include_router(
         build_game_router(
-            graph=services.graph,
+            runtime_registry=services.runtime_registry,
             ascii_tiles=ASCII_TILES,
             item_features=ITEM_FEATURES,
             get_entity_by_id=get_entity_by_id,
@@ -117,9 +132,7 @@ def build_karak_router_bundle(
     )
     router.include_router(
         build_results_router(
-            bootstrap_service=services.bootstrap,
-            lobby_service=services.lobby,
-            graph=services.graph,
+            runtime_registry=services.runtime_registry,
         ),
         dependencies=api_auth_dependencies,
     )

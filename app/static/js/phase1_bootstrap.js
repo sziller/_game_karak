@@ -18,6 +18,7 @@ function karakPath(path) {
 }
 
 const bootstrapApi = (p) => karakPath("/api/bootstrap" + (p.startsWith("/") ? p : "/" + p));
+const gamesApi = (p = "") => karakPath("/api/games" + (p ? (p.startsWith("/") ? p : "/" + p) : ""));
 
 
 // ============================================================
@@ -55,6 +56,33 @@ function clearError() {
     showMessage("(ready)", "info", "Info");
 }
 
+function setButtonBusy(button, busy) {
+    if (!button) return;
+    button.disabled = Boolean(busy);
+}
+
+async function parseApiResponse(response) {
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (_) {
+        data = null;
+    }
+    if (!response.ok) {
+        const detail = data?.detail || `HTTP ${response.status}`;
+        const message = typeof detail === "object" ? (detail.message || JSON.stringify(detail)) : detail;
+        throw new Error(message);
+    }
+    return data;
+}
+
+function storeCreatedGameContext(data) {
+    karakSetGameContext(data.game_id, data.participant_token);
+    if (Number.isInteger(data?.revision)) {
+        karakSetLastRevision(data.revision);
+    }
+}
+
 
 // ============================================================
 // Bootstrap state handling
@@ -62,8 +90,12 @@ function clearError() {
 
 function setStatus(data) {
     // Diagnostics UI was intentionally removed from bootstrap HTML.
-    // Keep the state visible in the browser console for debugging.
-    console.log("Bootstrap state:", data);
+    // Keep non-secret state visible in the browser console for debugging.
+    const safeData = data && typeof data === "object" ? {...data} : data;
+    if (safeData && typeof safeData === "object" && "participant_token" in safeData) {
+        safeData.participant_token = "[redacted]";
+    }
+    console.log("Bootstrap state:", safeData);
 }
 
 async function refreshState() {
@@ -93,6 +125,7 @@ async function startHotseat() {
     clearError();
 
     try {
+        karakClearGameContext();
         const r = await karakFetch(bootstrapApi("/hotseat"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -107,6 +140,10 @@ async function startHotseat() {
             return;
         }
 
+        karakSetGameContext(data.game_id, data.participant_token);
+        if (Number.isInteger(data?.revision)) {
+            karakSetLastRevision(data.revision);
+        }
         window.location.href = karakPath("/phase2");
     } catch (e) {
         console.error(e);
@@ -117,62 +154,81 @@ async function startHotseat() {
 async function startHost() {
     clearError();
 
-    const player_name = document.getElementById("host-name").value.trim() || "Host";
-    const bind_url = document.getElementById("host-url").value.trim() || null;
+    const button = document.getElementById("host-submit-btn");
+    const display_name = document.getElementById("host-name").value.trim() || "Host";
 
     try {
-        const r = await karakFetch(bootstrapApi("/host"), {
+        karakClearGameContext();
+        setButtonBusy(button, true);
+        const r = await karakFetch(gamesApi(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ player_name, bind_url })
+            body: JSON.stringify({
+                participation_mode: "multiplayer",
+                display_name,
+            })
         });
 
-        const data = await r.json();
+        const data = await parseApiResponse(r);
         setStatus(data);
 
-        if (!r.ok) {
-            showError(data.detail || "Failed to start host session.");
-            return;
-        }
-
+        storeCreatedGameContext(data);
         window.location.href = karakPath("/phase2");
     } catch (e) {
         console.error(e);
-        showError("Failed to start host session.");
+        karakClearGameContext();
+        showError(e.message || "Failed to create multiplayer lobby.");
+    } finally {
+        setButtonBusy(button, false);
     }
 }
 
 async function joinHost() {
     clearError();
 
-    const player_name = document.getElementById("join-name").value.trim() || "Guest";
-    const server_url = document.getElementById("join-url").value.trim();
-    const room_code = document.getElementById("join-room").value.trim() || null;
+    const button = document.getElementById("join-submit-btn");
+    const display_name = document.getElementById("join-name").value.trim() || "Guest";
+    const room_code = document.getElementById("join-room").value.trim();
 
-    if (!server_url) {
-        showError("Server URL is required.");
+    if (!room_code) {
+        showError("Room code is required.");
         return;
     }
 
     try {
-        const r = await karakFetch(bootstrapApi("/join"), {
+        setButtonBusy(button, true);
+        const r = await karakFetch(gamesApi("/join"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ player_name, server_url, room_code })
+            body: JSON.stringify({ display_name, room_code })
         });
 
-        const data = await r.json();
+        const data = await parseApiResponse(r);
         setStatus(data);
 
-        if (!r.ok) {
-            showError(data.detail || "Failed to join session.");
-            return;
-        }
-
+        storeCreatedGameContext(data);
         window.location.href = karakPath("/phase2");
     } catch (e) {
         console.error(e);
-        showError("Failed to join session.");
+        showError(e.message || "Failed to join multiplayer lobby.");
+    } finally {
+        setButtonBusy(button, false);
+    }
+}
+
+function applyJoinQuery() {
+    const params = new URLSearchParams(window.location.search);
+    const roomCode = params.get("join");
+    if (!roomCode) {
+        return;
+    }
+    const joinRoom = document.getElementById("join-room");
+    const joinName = document.getElementById("join-name");
+    if (joinRoom) {
+        joinRoom.value = roomCode.trim().toUpperCase();
+    }
+    if (joinName) {
+        joinName.focus();
     }
 }
 
@@ -182,5 +238,6 @@ async function joinHost() {
 // ============================================================
 
 if (karakRequireShmcLogin()) {
+    applyJoinQuery();
     refreshState();
 }

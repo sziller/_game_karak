@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Karak - Sign in</title>
     <link rel="icon" href="{{ karak_static_url }}/favicon.ico">
-    <link href="{{ karak_static_url }}/css/phases12.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phases12.css?v={{ karak_asset_version }}" rel="stylesheet">
 </head>
 <body>
 
@@ -61,14 +61,19 @@
 <script>
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    window.KARAK_ADVERTISED_ORIGIN = "{{ karak_advertised_origin }}";
+    window.KARAK_DEPLOYMENT_MODE = "{{ karak_deployment_mode }}";
     window.KARAK_AUTH_LOGIN_URL = "{{ karak_auth_login_url }}";
     {% if karak_local_dev_jwt %}
     window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
     {% endif %}
 </script>
+{% if karak_include_shmc_auth_script %}
 <script src="/js/shmc_auth.js"></script>
-<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
-<script src="{{ karak_static_url }}/js/phase0_login.js"></script>
+{% endif %}
+<script src="{{ karak_static_url }}/js/karak_game_context.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/karak_auth.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/phase0_login.js?v={{ karak_asset_version }}"></script>
 
 </body>
 </html>

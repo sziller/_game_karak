@@ -34,7 +34,7 @@ function karakStaticAsset(path) {
     return karakPath(path);
 }
 
-const API_BASE = karakPath("/api");
+const resultsApi = (p) => karakPath(karakGameScopedApiPath("results", p));
 
 let latestResults = null;
 
@@ -633,7 +633,7 @@ function updateSubtitle() {
 }
 
 async function loadResults() {
-    const r = await karakFetch(`${API_BASE}/results/state`);
+    const r = await karakFetch(resultsApi("/state"));
     const data = await r.json();
 
     if (!r.ok) {
@@ -649,7 +649,7 @@ async function loadResults() {
 }
 
 async function restartToBootstrap() {
-    const r = await karakFetch(`${API_BASE}/results/restart_to_bootstrap`, {
+    const r = await karakFetch(resultsApi("/restart_to_bootstrap"), {
         method: "POST",
     });
 
@@ -659,11 +659,15 @@ async function restartToBootstrap() {
         throw new Error(data?.detail || "Failed to restart.");
     }
 
+    karakClearGameContext();
     window.location.href = karakPath(data?.redirect_to || "/phase1");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
     if (!karakRequireShmcLogin()) {
+        return;
+    }
+    if (!karakRequireGameContext()) {
         return;
     }
 

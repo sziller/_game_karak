@@ -5,6 +5,9 @@ __pycache__/
 
 # Karak local runtime data
 .karak_data/
+config/instances/
+*.local.env
+*.secret.env
 
 # Replaced by installed shmc-auth-client package; keep obsolete local copies out.
 shmc_auth_client*/

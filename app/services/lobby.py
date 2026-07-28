@@ -329,6 +329,12 @@ class LobbyService:
         if self.state.mode != "hotseat":
             raise ValueError("Players can only be added in hot-seat mode.")
 
+        return self.add_player(display_name)
+
+    def add_player(self, display_name: str) -> dict:
+        if self.state is None:
+            raise ValueError("Lobby is not initialized.")
+
         cleaned = (display_name or "").strip()
 
         if not cleaned:

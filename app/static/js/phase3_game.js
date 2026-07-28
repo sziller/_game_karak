@@ -34,12 +34,23 @@ function karakStaticAsset(path) {
     return karakPath(path);
 }
 
-const gameApi = (p) => karakPath("/api/game" + (p.startsWith("/") ? p : "/" + p));
-const lobbyApi = (p) => karakPath("/api/lobby" + (p.startsWith("/") ? p : "/" + p));
+const gameApi = (p) => karakPath(karakGameScopedApiPath("game", p));
+const lobbyApi = (p) => karakPath(karakGameScopedApiPath("lobby", p));
+const gameStateApi = (query = "") => karakPath(karakGameStateApiPath(query));
 
 let latestPlayers = null;
 let latestMap = null;
 let latestFight = null;
+let latestGameProjection = null;
+let latestGamePermissions = {};
+const GAME_POLL_INTERVAL_MS = 1000;
+const GAME_POLL_HIDDEN_INTERVAL_MS = 5000;
+const GAME_POLL_MAX_BACKOFF_MS = 8000;
+let gameSyncTimer = null;
+let gameSyncInFlight = null;
+let gameSyncQueuedExplicitRefresh = false;
+let gameSyncStopped = true;
+let gameSyncFailureCount = 0;
 let selectedCurseTargetPlayerId = null;
 let selectedPoisonTargetPlayerId = null;
 let selectedPoisonTargetSkillId = null;
@@ -580,7 +591,7 @@ function renderSkillChip(skill, playerId) {
             ? `
                 <button
                     type="button"
-                    ${isUsableNow ? "" : "disabled"}
+                    ${isUsableNow && canResolveHealingChoice() ? "" : "disabled"}
                     onclick="event.stopPropagation(); confirmHealingChoice()"
                 >confirm</button>
             `
@@ -800,6 +811,7 @@ function renderMiniInventoryColumnRow(player, label, slotGroup, slotsOrValue, is
 
         const canStealTreasure =
             isAwaitingArenaLootChoice() &&
+            canChooseArenaLoot() &&
             isArenaLootLoser(playerId) &&
             !!getArenaStealableTreasureOption();
 
@@ -850,6 +862,7 @@ function renderMiniInventorySlot(player, slotGroup, slot, slotIndex) {
 
     const canStealThis =
         isAwaitingArenaLootChoice() &&
+        canChooseArenaLoot() &&
         isArenaLootLoser(playerId) &&
         !!findArenaStealableSlotOption(slotGroup, slotIndex);
 
@@ -2027,6 +2040,373 @@ function entityImagePath(entityId) {
     return `${KARAK_STATIC_URL}/media/tile-content/${entityId}.png`;
 }
 
+async function loadGameProjection({sinceRevision = null} = {}) {
+    if (!karakGetGameContext()) {
+        throw new Error("Missing Karak game context.");
+    }
+
+    const query = Number.isInteger(sinceRevision) && sinceRevision >= 0
+        ? `since_revision=${encodeURIComponent(String(sinceRevision))}`
+        : "";
+    const r = await karakFetch(gameStateApi(query));
+
+    if (r.status === 204) {
+        return null;
+    }
+
+    let data = null;
+    try {
+        data = await r.json();
+    } catch (_) {
+        data = {};
+    }
+
+    if (!r.ok) {
+        const err = new Error(data.detail || "Failed to load game state.");
+        err.status = r.status;
+        err.payload = data;
+        throw err;
+    }
+
+    return data;
+}
+
+function latestAcceptedGameRevision() {
+    const revision = Number(latestGameProjection?.revision);
+    return Number.isInteger(revision) && revision >= 0 ? revision : null;
+}
+
+function currentGamePollDelay() {
+    if (gameSyncFailureCount <= 0) {
+        return document.hidden ? GAME_POLL_HIDDEN_INTERVAL_MS : GAME_POLL_INTERVAL_MS;
+    }
+    const delay = GAME_POLL_INTERVAL_MS * (2 ** gameSyncFailureCount);
+    return Math.min(GAME_POLL_MAX_BACKOFF_MS, Math.max(GAME_POLL_INTERVAL_MS, delay));
+}
+
+function clearGameSyncTimer() {
+    if (gameSyncTimer !== null) {
+        window.clearTimeout(gameSyncTimer);
+        gameSyncTimer = null;
+    }
+}
+
+function scheduleNextGamePoll(delayMs = currentGamePollDelay()) {
+    if (gameSyncStopped || !karakGetGameContext()) {
+        return;
+    }
+    clearGameSyncTimer();
+    gameSyncTimer = window.setTimeout(() => {
+        gameSyncTimer = null;
+        requestGameState({reason: "poll"});
+    }, Math.max(GAME_POLL_INTERVAL_MS, Number(delayMs) || GAME_POLL_INTERVAL_MS));
+}
+
+function stopGameSynchronization() {
+    gameSyncStopped = true;
+    gameSyncQueuedExplicitRefresh = false;
+    clearGameSyncTimer();
+}
+
+function handleGameStateLoadFailure(err, {initial = false} = {}) {
+    const status = Number(err?.status);
+
+    if (status === 401 || status === 403 || status === 404) {
+        stopGameSynchronization();
+        karakClearGameContext();
+        showError(status === 404 ? "Game unavailable." : "Game participation expired.");
+        window.location.href = karakPath("/phase1");
+        return;
+    }
+
+    if (initial) {
+        showError(String(err?.message || err));
+        return;
+    }
+
+    gameSyncFailureCount += 1;
+    if (gameSyncFailureCount === 1) {
+        showMessage("Connection interrupted. Retrying state synchronization.", "warning", "Connection");
+    }
+    scheduleNextGamePoll();
+}
+
+async function requestGameState({forceFull = false, forceRender = false, explicit = false, initial = false, reason = "refresh"} = {}) {
+    if (gameSyncStopped && !initial) {
+        return null;
+    }
+    if (!karakGetGameContext()) {
+        stopGameSynchronization();
+        return null;
+    }
+
+    if (gameSyncInFlight) {
+        if (explicit || initial) {
+            gameSyncQueuedExplicitRefresh = true;
+        }
+        return gameSyncInFlight;
+    }
+
+    const acceptedRevision = latestAcceptedGameRevision();
+    const sinceRevision = forceFull || initial || acceptedRevision === null
+        ? null
+        : acceptedRevision;
+
+    clearGameSyncTimer();
+
+    gameSyncInFlight = (async () => {
+        try {
+            const projection = await loadGameProjection({sinceRevision});
+            if (projection === null) {
+                gameSyncFailureCount = 0;
+                return null;
+            }
+
+            acceptGameProjection(projection, {forceRender: forceRender || initial});
+            gameSyncFailureCount = 0;
+            return projection;
+        } catch (err) {
+            handleGameStateLoadFailure(err, {initial});
+            return null;
+        } finally {
+            gameSyncInFlight = null;
+
+            if (!gameSyncStopped && gameSyncQueuedExplicitRefresh) {
+                gameSyncQueuedExplicitRefresh = false;
+                await requestGameState({forceFull: true, explicit: true, reason: "queued_explicit"});
+                return;
+            }
+
+            if (!gameSyncStopped && reason !== "initial") {
+                scheduleNextGamePoll();
+            }
+        }
+    })();
+
+    return gameSyncInFlight;
+}
+
+async function handleGameplayMutationFailure(response) {
+    const status = Number(response?.status);
+    if (status !== 409 && status !== 403) {
+        return;
+    }
+
+    let detail = "";
+    try {
+        const data = await response.json();
+        detail = typeof data?.detail === "string"
+            ? data.detail
+            : data?.detail?.message || "";
+    } catch (_) {
+        detail = "";
+    }
+
+    await requestGameState({
+        forceFull: true,
+        explicit: true,
+        reason: status === 409 ? "command_conflict" : "command_denied",
+    });
+
+    if (status === 409) {
+        showError(detail || "That command used a stale game state. The current state has been reloaded.");
+        return;
+    }
+
+    showError(detail || "This player or decision is controlled by another participant.");
+}
+
+window.karakHandleGameplayMutationFailure = handleGameplayMutationFailure;
+
+async function startGameSynchronization() {
+    if (!karakRequireGameContext()) {
+        return;
+    }
+    if (!gameSyncStopped) {
+        return;
+    }
+
+    gameSyncStopped = false;
+    gameSyncFailureCount = 0;
+    gameSyncQueuedExplicitRefresh = false;
+
+    const projection = await requestGameState({
+        forceFull: true,
+        forceRender: true,
+        initial: true,
+        reason: "initial",
+    });
+
+    if (!gameSyncStopped && projection) {
+        scheduleNextGamePoll();
+    }
+}
+
+function handleGameVisibilityChange() {
+    if (gameSyncStopped) {
+        return;
+    }
+    if (document.hidden) {
+        scheduleNextGamePoll(GAME_POLL_HIDDEN_INTERVAL_MS);
+        return;
+    }
+    requestGameState({forceFull: true, explicit: true, reason: "visible"});
+}
+
+function adaptGameProjection(projection) {
+    const game = projection?.game || {};
+    const map = game.map || {};
+    const players = game.players || [];
+    const turn = game.turn || null;
+
+    return {
+        map: {
+            ok: true,
+            ...map,
+            turn,
+            active_actor: game.active_actor || null,
+            turn_actors: game.turn_actors || [],
+            game_masters: game.game_masters || {},
+        },
+        players: {
+            ok: true,
+            players,
+            active_player_idx: game.active_player_idx ?? 0,
+            active_player: game.active_player || null,
+            active_actor: game.active_actor || null,
+            turn_actors: game.turn_actors || [],
+            game_masters: game.game_masters || {},
+            turn,
+        },
+        inventory: game.inventory || null,
+        fight: game.fight || null,
+        pending: game.pending || {},
+        permissions: projection?.permissions || {},
+    };
+}
+
+function acceptGameProjection(projection, {forceRender = false} = {}) {
+    const incomingRevision = Number(projection?.revision);
+    if (!Number.isInteger(incomingRevision) || incomingRevision < 0) {
+        throw new Error("Malformed game-state projection revision.");
+    }
+
+    const latestRenderedRevision = Number(latestGameProjection?.revision);
+    const hasRenderedRevision = Number.isInteger(latestRenderedRevision) && latestRenderedRevision >= 0;
+    if (!forceRender && hasRenderedRevision && incomingRevision < latestRenderedRevision) {
+        return false;
+    }
+    if (!forceRender && hasRenderedRevision && incomingRevision === latestRenderedRevision) {
+        return false;
+    }
+
+    latestGameProjection = projection;
+    const adapted = adaptGameProjection(projection);
+    latestMap = adapted.map;
+    latestPlayers = adapted.players;
+    latestFight = adapted.fight;
+    latestGamePermissions = adapted.permissions;
+    karakSetLastRevision(incomingRevision);
+    renderGameProjection(projection, adapted);
+    return true;
+}
+
+function handleProjectionLifecycle(projection) {
+    const lifecycle = projection?.lifecycle;
+
+    if (lifecycle === "lobby") {
+        stopGameSynchronization();
+        window.location.href = karakPath("/phase2");
+        return true;
+    }
+    if (lifecycle === "results") {
+        stopGameSynchronization();
+        window.location.href = karakPath("/phase4");
+        return true;
+    }
+    if (lifecycle === "closed") {
+        stopGameSynchronization();
+        karakClearGameContext();
+        window.location.href = karakPath("/phase1");
+        return true;
+    }
+    if (lifecycle === "faulted") {
+        stopGameSynchronization();
+        const fault = projection?.fault_info || {};
+        showError(fault.message || "Game runtime is faulted.");
+        updateActionAvailability();
+        return true;
+    }
+
+    return lifecycle !== "in_game";
+}
+
+function renderGameProjection(projection, adapted = adaptGameProjection(projection)) {
+    if (handleProjectionLifecycle(projection)) {
+        return;
+    }
+
+    rememberInventoryItemRefs(adapted.inventory);
+
+    if (typeof clearPendingItemUseIfTurnChanged === "function") {
+        clearPendingItemUseIfTurnChanged();
+    }
+
+    renderPlayers(adapted.players);
+
+    if (!isSkillAvailableForActivePlayer("skill_sco_02")) {
+        selectedScoutPocketTileIndex = null;
+    }
+
+    if (!adapted.players?.players?.length) {
+        skillUiState = {};
+    }
+
+    if (!isAwaitingCurseChoice()) {
+        selectedCurseTargetPlayerId = null;
+    }
+
+    if (!isAwaitingPoisonChoice()) {
+        selectedPoisonTargetPlayerId = null;
+        selectedPoisonTargetSkillId = null;
+    }
+
+    if (!isAwaitingArenaTargetChoice()) {
+        selectedArenaOpponentPlayerId = null;
+    }
+
+    if (!isAwaitingArenaLootChoice()) {
+        selectedArenaLootChoice = null;
+    }
+
+    if (!pendingTeleportSkillId) {
+        selectedTeleportTargetPlayerId = null;
+        pendingTeleportTargetMode = null;
+    }
+
+    renderMapVisual();
+    renderEncounterPanel();
+    renderActionCounter();
+    renderRoomXCounter(adapted.map);
+    renderCurseRoomToss(adapted.map);
+    renderCurseConfirmArea();
+    renderPoisonConfirmArea();
+    renderTeleportConfirmArea();
+    renderArenaOpponentConfirmArea();
+    renderArenaLootConfirmArea();
+    renderGround(adapted.inventory);
+    renderInventory(adapted.inventory);
+    renderFight(adapted.fight);
+
+    const waitingMessageShown = renderWaitingInstructionMessage();
+
+    if (!waitingMessageShown) {
+        showMessage("Phase 3 state refreshed.", "info", "Info");
+    }
+
+    updateActionAvailability();
+}
+
 async function loadPlayers() {
     const r = await karakFetch(gameApi("/players"));
     const data = await r.json();
@@ -2050,6 +2430,39 @@ async function loadMap() {
     }
 
     latestMap = data;
+}
+
+function canResolveProjectedPendingChoice() {
+    return latestGamePermissions?.can_resolve_pending_choice === true;
+}
+
+function canResolveCurseChoice() {
+    return latestGamePermissions?.can_resolve_curse_choice === true;
+}
+
+function canResolvePoisonChoice() {
+    return latestGamePermissions?.can_resolve_poison_choice === true;
+}
+
+function canResolveHealingChoice() {
+    return latestGamePermissions?.can_resolve_healing_choice === true;
+}
+
+function canResolveKoReaction() {
+    return latestGamePermissions?.can_resolve_ko_reaction === true;
+}
+
+function canChooseArenaOpponent() {
+    return latestGamePermissions?.can_choose_arena_opponent === true;
+}
+
+function canChooseArenaLoot() {
+    return latestGamePermissions?.can_choose_arena_loot === true;
+}
+
+function canEditFightRole(role) {
+    return latestGamePermissions?.can_edit_fight === true &&
+        latestGamePermissions?.fight_owned_role === role;
 }
 
 function renderCurseConfirmArea() {
@@ -2077,7 +2490,7 @@ function renderCurseConfirmArea() {
     box.innerHTML = `
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <div>Selected: <b>${selected.display_name || ("Player #" + selected.player_id)}</b></div>
-            <button onclick="confirmCurseSelection()">☠️ Confirm Curse</button>
+            <button onclick="confirmCurseSelection()" ${canResolveCurseChoice() ? "" : "disabled"}>☠️ Confirm Curse</button>
             <button onclick="clearCurseSelection()">Reset</button>
         </div>
     `;
@@ -2112,7 +2525,7 @@ function renderArenaOpponentConfirmArea() {
                 Arena opponent:
                 <b>${selected.display_name || ("Player #" + selected.player_id)}</b>
             </div>
-            <button onclick="confirmArenaOpponentSelection()">⚔️ Confirm Challenge</button>
+            <button onclick="confirmArenaOpponentSelection()" ${canChooseArenaOpponent() ? "" : "disabled"}>⚔️ Confirm Challenge</button>
             <button onclick="clearArenaOpponentSelection()">Reset</button>
         </div>
     `;
@@ -2167,7 +2580,7 @@ function renderArenaLootConfirmArea() {
                     <b>${winnerName}</b> may steal from <b>${loserName}</b>.
                     Click an item or treasure in the loser’s mini-inventory.
                 </div>
-                <button onclick="chooseArenaLootSkip()">Skip</button>
+                <button onclick="chooseArenaLootSkip()" ${canChooseArenaLoot() ? "" : "disabled"}>Skip</button>
             </div>
         `;
         return;
@@ -2179,8 +2592,8 @@ function renderArenaLootConfirmArea() {
                 Selected loot:
                 <b>${selectedArenaLootChoice.label || selectedArenaLootChoice.steal_kind}</b>
             </div>
-            <button onclick="confirmArenaLootSelection()">Steal</button>
-            <button onclick="chooseArenaLootSkip()">Skip</button>
+            <button onclick="confirmArenaLootSelection()" ${canChooseArenaLoot() ? "" : "disabled"}>Steal</button>
+            <button onclick="chooseArenaLootSkip()" ${canChooseArenaLoot() ? "" : "disabled"}>Skip</button>
             <button onclick="clearArenaLootSelection()">Reset</button>
         </div>
     `;
@@ -2532,7 +2945,7 @@ function renderPoisonConfirmArea() {
                 /
                 <b>${prettySkillLabel(selectedPoisonTargetSkillId)}</b>
             </div>
-            <button onclick="confirmPoisonSelection()">☣️ Confirm Poison</button>
+            <button onclick="confirmPoisonSelection()" ${canResolvePoisonChoice() ? "" : "disabled"}>☣️ Confirm Poison</button>
             <button onclick="clearPoisonSelection()">Reset</button>
         </div>
     `;
@@ -2634,170 +3047,12 @@ function showKarakCreatedMessage(confirmData) {
 }
 
 async function refreshAll() {
-    try {
-        // --------------------------------------------------------
-        // Load map FIRST.
-        //
-        // The map payload is the safest global source for:
-        // - game_scope
-        // - game_over
-        // - redirect_to
-        // - turn
-        //
-        // If the game has already entered results, do not load
-        // inventory afterward, because inventory requires active turn.
-        // --------------------------------------------------------
-        await loadMap();
-
-        if (handleGameOverRedirect(latestMap)) {
-            return;
-        }
-
-        await loadPlayers();
-
-        if (handleGameOverRedirect(latestPlayers)) {
-            return;
-        }
-
-        await loadInventory();
-
-        // --------------------------------------------------------
-        // If inventory load indirectly discovered game-over, stop.
-        // This is defensive; normally map already catches it.
-        // --------------------------------------------------------
-        if (handleGameOverRedirect(latestMap) || handleGameOverRedirect(latestPlayers)) {
-            return;
-        }
-
-        // --------------------------------------------------------
-        // Clear local item-use targeting if turn changed.
-        // This prevents target-picking state from leaking into
-        // the next player's turn.
-        // --------------------------------------------------------
-        if (typeof clearPendingItemUseIfTurnChanged === "function") {
-            clearPendingItemUseIfTurnChanged();
-        }
-
-        renderPlayers(latestPlayers);
-
-        if (!isSkillAvailableForActivePlayer("skill_sco_02")) {
-            selectedScoutPocketTileIndex = null;
-        }
-
-        if (!latestPlayers?.players?.length) {
-            skillUiState = {};
-        }
-
-        if (!isAwaitingCurseChoice()) {
-            selectedCurseTargetPlayerId = null;
-        }
-
-        if (!isAwaitingPoisonChoice()) {
-            selectedPoisonTargetPlayerId = null;
-            selectedPoisonTargetSkillId = null;
-        }
-
-        if (!isAwaitingArenaTargetChoice()) {
-            selectedArenaOpponentPlayerId = null;
-        }
-
-        if (!isAwaitingArenaLootChoice()) {
-            selectedArenaLootChoice = null;
-        }
-
-        if (!pendingTeleportSkillId) {
-            selectedTeleportTargetPlayerId = null;
-            pendingTeleportTargetMode = null;
-        }
-
-        renderMapVisual();
-        renderEncounterPanel();
-        renderActionCounter();
-        renderRoomXCounter(latestMap);
-        renderCurseRoomToss(latestMap);
-        renderCurseConfirmArea();
-        renderPoisonConfirmArea();
-        renderTeleportConfirmArea();
-        renderArenaOpponentConfirmArea();
-        renderArenaLootConfirmArea();
-
-        const turn = latestMap?.turn || latestPlayers?.turn || null;
-
-        if (turn?.mode === "fight") {
-            try {
-                const r = await karakFetch(gameApi("/fight/state"));
-                const data = await r.json();
-
-                if (handleGameOverRedirect(data)) {
-                    return;
-                }
-
-                if (r.ok) {
-                    renderFight(data);
-                } else {
-                    openFightModal();
-
-                    const box = document.getElementById("fight-box");
-                    if (box) {
-                        box.innerHTML = `
-                            <div class="message-box message-error">
-                                <b>Fight state unavailable</b>
-                                <pre>${data.detail || "Backend says turn is in fight mode, but fight/state could not be loaded."}</pre>
-                            </div>
-                        `;
-                    }
-                }
-            } catch (fightError) {
-                console.error("fight/state refresh failed:", fightError);
-
-                openFightModal();
-
-                const box = document.getElementById("fight-box");
-                if (box) {
-                    box.innerHTML = `
-                        <div class="message-box message-error">
-                            <b>Fight render failed</b>
-                            <pre>${String(fightError)}</pre>
-                        </div>
-                    `;
-                }
-            }
-        } else {
-            renderFight(null);
-        }
-
-        const waitingMessageShown = renderWaitingInstructionMessage();
-
-        if (!waitingMessageShown) {
-            showMessage("Phase 3 state refreshed.", "info", "Info");
-        }
-
-        updateActionAvailability();
-
-    } catch (e) {
-        console.error("refreshAll failed:", e);
-
-        const message = String(e?.message || e);
-
-        // --------------------------------------------------------
-        // If anything failed because the backend has no active turn,
-        // reload map and let map/results redirect decide.
-        // --------------------------------------------------------
-        if (message.includes("No active turn")) {
-            try {
-                await loadMap();
-
-                if (handleGameOverRedirect(latestMap)) {
-                    return;
-                }
-            } catch (mapError) {
-                console.error("refreshAll recovery loadMap failed:", mapError);
-            }
-        }
-
-        showError(message);
-        updateActionAvailability();
-    }
+    await requestGameState({
+        forceFull: true,
+        forceRender: latestGameProjection === null,
+        explicit: true,
+        reason: "explicit",
+    });
 }
 
 async function confirmHealingChoice() {
@@ -3115,7 +3370,8 @@ function renderGround(data) {
     const groundItemDesc = groundItem?.desc || "";
 
     const activationUi = data?.ground_activation_ui || {};
-    const activationEnabled = !!activationUi.activation_enabled;
+    const inventoryAllowed = latestGamePermissions?.can_use_inventory !== false;
+    const activationEnabled = inventoryAllowed && !!activationUi.activation_enabled;
     const activationLabel = activationUi.activation_label || "activate";
     const activationEffect = activationUi.activation_effect || null;
     const activationReason = activationUi.activation_reason || "";
@@ -3166,6 +3422,7 @@ function renderSingleSlotCard(slotGroup, slot) {
     const item = slot?.item || null;
     const itemId = slot?.item_id || item?.item_id || null;
     const slotIndex = slot?.slot_index ?? 0;
+    const inventoryAllowed = latestGamePermissions?.can_use_inventory !== false;
 
     // --------------------------------------------------------
     // Explicit USE button
@@ -3177,7 +3434,7 @@ function renderSingleSlotCard(slotGroup, slot) {
     // --------------------------------------------------------
     const canUse = !!slot?.can_use_slot_item;
     const useEffect = slot?.use_effect || null;
-    const useDisabled = !canUse || !itemId || !useEffect;
+    const useDisabled = !inventoryAllowed || !canUse || !itemId || !useEffect;
 
     // --------------------------------------------------------
     // Slot action button
@@ -3195,9 +3452,12 @@ function renderSingleSlotCard(slotGroup, slot) {
     const actionReason = slot?.action_reason || slot?.drop_reason || slot?.pickup_reason || slot?.swap_reason || "";
 
     const actionEnabled =
-        availableAction === "pickup" ||
-        availableAction === "drop" ||
-        availableAction === "swap";
+        inventoryAllowed &&
+        (
+            availableAction === "pickup" ||
+            availableAction === "drop" ||
+            availableAction === "swap"
+        );
 
     const actionLabel = actionEnabled ? availableAction : "";
     const actionDisabled = !actionEnabled;
@@ -3299,7 +3559,7 @@ function renderInventory(data) {
     html += renderSlotRow("Scrolls", "scroll", slots.scroll || []);
 
     const treasureUi = data.treasure_ui || {};
-    const treasurePickupEnabled = !!treasureUi.pickup_enabled;
+    const treasurePickupEnabled = latestGamePermissions?.can_use_inventory !== false && !!treasureUi.pickup_enabled;
     const treasurePickupLabel = treasureUi.pickup_label || "pick up";
 
     html += `
@@ -3325,6 +3585,8 @@ function renderFightRows(rows, role, editableRole) {
     }
     const roleArg = role || "challenged";
     const isEditableRole = !editableRole || editableRole === roleArg;
+    const canAct = latestGamePermissions?.can_act !== false;
+    const canEditRole = canEditFightRole(roleArg);
 
     let html = `
         <table style="width:100%; border-collapse:collapse; margin-top:8px;">
@@ -3360,7 +3622,7 @@ function renderFightRows(rows, role, editableRole) {
                     return `
                         <button
                             onclick="fightToggleScroll('${slotId}', '${roleArg}')"
-                            ${btn.enabled && isEditableRole ? "" : "disabled"}
+                            ${btn.enabled && isEditableRole && canEditRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || slotId || ""}"
                         >
@@ -3383,7 +3645,7 @@ function renderFightRows(rows, role, editableRole) {
                     return `
                         <button
                             onclick="fightToggleSkill('${skillId}', '${roleArg}')"
-                            ${btn.enabled && skillId && isEditableRole ? "" : "disabled"}
+                            ${btn.enabled && skillId && isEditableRole && canEditRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${warning}"
                         >
@@ -3405,7 +3667,7 @@ function renderFightRows(rows, role, editableRole) {
                     return `
                         <button
                             onclick="fightRerollDie(${dieIndex}, '${skillId}', '${roleArg}')"
-                            ${btn.enabled && dieIndex && skillId && isEditableRole ? "" : "disabled"}
+                            ${btn.enabled && dieIndex && skillId && isEditableRole && canEditRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || ("reroll die " + dieIndex)}"
                         >
@@ -3425,7 +3687,7 @@ function renderFightRows(rows, role, editableRole) {
                     return `
                         <button
                             onclick="fightRerollBoth('${skillId}', '${roleArg}')"
-                            ${btn.enabled && skillId && isEditableRole ? "" : "disabled"}
+                            ${btn.enabled && skillId && isEditableRole && canEditRole ? "" : "disabled"}
                             style="margin-right:6px; ${activeStyle}"
                             title="${btn.label || "reroll both dice"}"
                         >
@@ -3455,7 +3717,7 @@ function renderFightRows(rows, role, editableRole) {
             // ------------------------------------------------------------
             if (row.button_action === "fight_toss") {
                 actionHtml = `
-                    <button onclick="fightToss('${roleArg}')" ${row.button_enabled && isEditableRole ? "" : "disabled"}>
+                    <button onclick="fightToss('${roleArg}')" ${row.button_enabled && isEditableRole && canEditRole ? "" : "disabled"}>
                         ${row.button_label}
                     </button>
                 `;
@@ -3495,7 +3757,7 @@ function renderFightSide(side, title, editableRole) {
 
     const participant = side.participant || {};
     const role = participant.role || null;
-    const isEditable = editableRole && role === editableRole;
+    const isEditable = editableRole && role === editableRole && canEditFightRole(role);
     const diceState = side.dice_state || null;
 
     let html = `
@@ -3634,9 +3896,11 @@ function renderFight(data) {
 
     const isArenaPvp = context.fight_kind === "arena_pvp";
     const isResolvable = !!prediction?.is_resolvable;
+    const canEditCurrentRole = editableRole ? canEditFightRole(editableRole) : false;
     const canCommitEditableRole =
         isArenaPvp &&
         editableRole &&
+        canEditCurrentRole &&
         !committedRoles.includes(editableRole);
 
     let html = `
@@ -3659,7 +3923,7 @@ function renderFight(data) {
             <button
                 type="button"
                 onclick="fightResolve()"
-                ${isResolvable ? "" : "disabled"}
+                ${isResolvable && (latestGamePermissions?.can_act !== false) ? "" : "disabled"}
             >
                 Resolve fight
             </button>
@@ -4437,14 +4701,11 @@ async function endTurn() {
             // In that state /turn/end correctly returns:
             // "No active turn."
             //
-            // So reload /api/game/map and redirect if phase4 is active.
+            // So reload the unified projection and redirect if phase4 is active.
             // ----------------------------------------------------
             if (String(detail).includes("No active turn")) {
-                await loadMap();
-
-                if (handleGameOverRedirect(latestMap)) {
-                    return;
-                }
+                await refreshAll();
+                return;
             }
 
             throw new Error(detail);
@@ -4478,13 +4739,10 @@ async function endTurn() {
 
         if (message.includes("No active turn")) {
             try {
-                await loadMap();
-
-                if (handleGameOverRedirect(latestMap)) {
-                    return;
-                }
+                await refreshAll();
+                return;
             } catch (mapError) {
-                console.error("endTurn recovery loadMap failed:", mapError);
+                console.error("endTurn recovery refreshAll failed:", mapError);
             }
         }
 
@@ -4494,6 +4752,20 @@ async function endTurn() {
 
 function handleGameOverRedirect(data) {
     if (!data) return false;
+
+    if (data.lifecycle === "results") {
+        window.location.href = karakPath("/phase4");
+        return true;
+    }
+    if (data.lifecycle === "lobby") {
+        window.location.href = karakPath("/phase2");
+        return true;
+    }
+    if (data.lifecycle === "closed") {
+        karakClearGameContext();
+        window.location.href = karakPath("/phase1");
+        return true;
+    }
 
     // --------------------------------------------------------
     // Direct game-over payload.
@@ -4614,6 +4886,11 @@ function updateActionAvailability() {
     const confirmTileBtn = document.getElementById("confirm-tile-btn");
 
     const mode = turn?.mode || "idle";
+    const permissions = latestGamePermissions || {};
+    const canAct = permissions.can_act !== false;
+    const canEndTurn = permissions.can_end_turn !== false;
+    const canUseInventory = permissions.can_use_inventory !== false;
+    const canResolvePendingChoice = permissions.can_resolve_pending_choice !== false;
 
     const isIdle = mode === "idle";
     const isPendingTile = mode === "pending_tile";
@@ -4663,7 +4940,7 @@ function updateActionAvailability() {
         !isAwaitingArenaLoot;
 
     if (fightBtn) {
-        fightBtn.disabled = !canStartFight;
+        fightBtn.disabled = !canAct || !canStartFight;
     }
 
     // Old button: no longer part of the normal UI.
@@ -4674,6 +4951,7 @@ function updateActionAvailability() {
 
     if (endTurnBtn) {
         endTurnBtn.disabled =
+            !canEndTurn ||
             isPendingTile ||
             isAwaitingEntityChoice ||
             isAwaitingEntityEncounter ||
@@ -4714,8 +4992,8 @@ function updateActionAvailability() {
         !isAwaitingArenaTarget &&
         !isAwaitingArenaLoot;
 
-    const canResolveKoReaction =
-        isAwaitingKoReaction;
+    const canUseKoReactionTeleport =
+        isAwaitingKoReaction && canResolveKoReaction();
 
     const canResolveItemUseCoordinates =
         !!pendingItemUse &&
@@ -4724,7 +5002,7 @@ function updateActionAvailability() {
     const teleportAreaEnabled =
         canUsePortalTeleport ||
         canUseCoordinateSkillTeleport ||
-        canResolveKoReaction ||
+        canUseKoReactionTeleport ||
         canResolveItemUseCoordinates;
 
     if (teleportBtn) {
@@ -4766,6 +5044,7 @@ function updateActionAvailability() {
     moveButtons.forEach(btn => {
         if (btn) {
             btn.disabled =
+                !canAct ||
                 isTeleportTargeting ||
                 isItemTargeting ||
                 isAwaitingKoReaction ||
@@ -4779,6 +5058,7 @@ function updateActionAvailability() {
     rotateButtons.forEach(btn => {
         if (btn) {
             btn.disabled =
+                !canAct ||
                 isTeleportTargeting ||
                 isItemTargeting ||
                 isAwaitingKoReaction ||
@@ -4792,6 +5072,7 @@ function updateActionAvailability() {
 
     if (confirmTileBtn) {
         confirmTileBtn.disabled =
+            !canAct ||
             isTeleportTargeting ||
             isItemTargeting ||
             isAwaitingKoReaction ||
@@ -4939,28 +5220,16 @@ async function fightStart() {
     }
 
     if (data.mode === "chest_opened") {
-        renderFight(null);
         await refreshAll();
         return;
     }
 
-    renderFight(data);
     await refreshAll();
 }
 
 async function fightRefresh() {
     clearError();
-
-    const r = await karakFetch(gameApi("/fight/state"));
-    const data = await r.json();
-
-    if (!r.ok) {
-        renderFight(null);
-        showError(data.detail || "No active fight.");
-        return;
-    }
-
-    renderFight(data);
+    await refreshAll();
 }
 
 async function fightToss(role = "challenged") {
@@ -4978,7 +5247,6 @@ async function fightToss(role = "challenged") {
         return;
     }
 
-    renderFight(data.fight || data);
     await refreshAll();
 }
 
@@ -5001,7 +5269,6 @@ async function fightRerollDie(dieIndex, skillId, role = "challenged") {
         return;
     }
 
-    renderFight(data.fight || data);
     await refreshAll();
 }
 
@@ -5023,7 +5290,6 @@ async function fightRerollBoth(skillId, role = "challenged") {
         return;
     }
 
-    renderFight(data.fight || data);
     await refreshAll();
 }
 
@@ -5045,7 +5311,6 @@ async function fightResolve() {
         return;
     }
 
-    renderFight(null);
     await refreshAll();
 
     if (data.status === "arena_pvp_resolved_awaiting_loot_choice") {
@@ -5082,7 +5347,6 @@ async function fightToggleSkill(skillId, role = "challenged") {
         return;
     }
 
-    renderFight(data.fight || data);
     await refreshAll();
 }
 
@@ -5104,7 +5368,6 @@ async function fightToggleScroll(slotId, role = "challenged") {
         return;
     }
 
-    renderFight(data.fight || data);
     await refreshAll();
 }
 
@@ -5124,7 +5387,6 @@ async function fightCommitRole(role) {
         return;
     }
 
-    renderFight(data.fight || data);
     await refreshAll();
 
     showMessage(
@@ -5168,6 +5430,7 @@ async function postGameAction(path, payload = null) {
 
 
 async function leaveGame() {
+    stopGameSynchronization();
     try {
         await karakFetch(lobbyApi("/reset_to_phase1"), {method: "POST"});
     } catch (e) {
@@ -5178,6 +5441,7 @@ async function leaveGame() {
     selectedCurseTargetPlayerId = null;
     latestFight = null;
 
+    karakClearGameContext();
     window.location.href = karakPath("/phase1");
 }
 
@@ -5477,6 +5741,8 @@ function clearError() {
     showMessage("(ready)", "info", "Info");
 }
 
-if (karakRequireShmcLogin()) {
-    refreshAll();
+if (karakRequireShmcLogin() && karakRequireGameContext()) {
+    document.addEventListener("visibilitychange", handleGameVisibilityChange);
+    window.addEventListener("beforeunload", stopGameSynchronization);
+    startGameSynchronization();
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import FastAPI
@@ -16,10 +17,10 @@ class KarakMountedApp:
 
     def __init__(
         self,
-        frontend_public_base_path: str = "/app/karak",
+        frontend_public_base_path: str | None = None,
         **kwargs: Any,
     ) -> None:
-        self.frontend_public_base_path = frontend_public_base_path
+        self.frontend_public_base_path = frontend_public_base_path if frontend_public_base_path is not None else os.getenv("KARAK_PUBLIC_BASE_PATH", "")
         self.kwargs = kwargs
         self.app: FastAPI | None = None
         self.reinit()

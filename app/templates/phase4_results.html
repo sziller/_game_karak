@@ -6,10 +6,10 @@
     <link href="{{ karak_static_url }}/favicon.ico" rel="icon">
 
     <!-- Reuse Phase 3 base visual language -->
-    <link href="{{ karak_static_url }}/css/phase3_game.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phase3_game.css?v={{ karak_asset_version }}" rel="stylesheet">
 
     <!-- Phase 4 extension -->
-    <link href="{{ karak_static_url }}/css/phase4_results.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phase4_results.css?v={{ karak_asset_version }}" rel="stylesheet">
 </head>
 
 <body class="karak-page">
@@ -48,12 +48,17 @@
 <script>
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    window.KARAK_ADVERTISED_ORIGIN = "{{ karak_advertised_origin }}";
+    window.KARAK_DEPLOYMENT_MODE = "{{ karak_deployment_mode }}";
     {% if karak_local_dev_jwt %}
     window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
     {% endif %}
 </script>
+{% if karak_include_shmc_auth_script %}
 <script src="/js/shmc_auth.js"></script>
-<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
-<script src="{{ karak_static_url }}/js/phase4_results.js"></script>
+{% endif %}
+<script src="{{ karak_static_url }}/js/karak_game_context.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/karak_auth.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/phase4_results.js?v={{ karak_asset_version }}"></script>
 </body>
 </html>

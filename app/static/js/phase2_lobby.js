@@ -1,6 +1,15 @@
 let latestLobbyState = null;
+let latestLobbyProjection = null;
 let latestCharacterCatalog = [];
 let selectedLobbyPlayerId = null;
+let lobbyPollTimer = null;
+let lobbyPollInFlight = false;
+let lobbyPollErrorCount = 0;
+let lobbyPollStarted = false;
+let startGameInFlight = false;
+
+const LOBBY_POLL_INTERVAL_MS = 1000;
+const LOBBY_POLL_MAX_BACKOFF_MS = 8000;
 
 // Arrow-step class selector state.
 let selectedClassIndexByPlayerId = {};
@@ -41,6 +50,25 @@ function karakStaticAsset(path) {
     return karakPath(path);
 }
 
+function lobbyApi(path) {
+    return karakPath(karakGameScopedApiPath("lobby", path));
+}
+
+function gameApi(path) {
+    const context = karakRequireGameContext();
+    if (!context) {
+        return "";
+    }
+    return karakPath(`/api/games/${encodeURIComponent(context.game_id)}${path.startsWith("/") ? path : `/${path}`}`);
+}
+
+function lobbyStateApi(sinceRevision = null) {
+    if (sinceRevision === null || sinceRevision === undefined) {
+        return karakPath(karakGameStateApiPath());
+    }
+    return karakPath(karakGameStateApiPath(`since_revision=${encodeURIComponent(sinceRevision)}`));
+}
+
 function showMessage(kind, title, content) {
     const box = document.getElementById("message-box");
     const titleEl = document.getElementById("message-title");
@@ -74,26 +102,154 @@ async function apiJson(url, options = {}) {
 
     if (!response.ok) {
         const detail = data?.detail || `HTTP ${response.status}`;
-        throw new Error(detail);
+        const message = typeof detail === "object" ? (detail.message || JSON.stringify(detail)) : detail;
+        const err = new Error(message);
+        err.status = response.status;
+        err.currentRevision = data?.current_revision ?? data?.detail?.current_revision ?? null;
+        throw err;
     }
 
     return data;
 }
 
-async function loadLobby() {
-    const [stateRes, catalogRes] = await Promise.all([
-        apiJson(karakPath("/api/lobby/state")),
-        apiJson(karakPath("/api/lobby/character_catalog")),
-    ]);
+async function fetchLobbyProjection({ sinceRevision = null } = {}) {
+    const response = await karakFetch(lobbyStateApi(sinceRevision));
 
-    latestLobbyState = stateRes.lobby_state;
-    latestCharacterCatalog = catalogRes.classes || [];
+    if (response.status === 204) {
+        return null;
+    }
+
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (_) {
+        data = null;
+    }
+
+    if (!response.ok) {
+        const detail = data?.detail || `HTTP ${response.status}`;
+        const message = typeof detail === "object" ? (detail.message || JSON.stringify(detail)) : detail;
+        const err = new Error(message);
+        err.status = response.status;
+        throw err;
+    }
+
+    return data;
+}
+
+function applyLobbyProjection(projection) {
+    if (!projection) {
+        return false;
+    }
+    const currentRevision = karakGetLastRevision();
+    if (currentRevision !== null && projection.revision < currentRevision) {
+        return false;
+    }
+
+    latestLobbyProjection = projection;
+    latestLobbyState = projection.lobby || {};
+    karakSetLastRevision(projection.revision);
 
     if (!selectedLobbyPlayerId && latestLobbyState.players?.length) {
         selectedLobbyPlayerId = latestLobbyState.players[0].player_id;
     }
 
-    renderLobby();
+    const stillExists = (latestLobbyState.players || []).some(p => p.player_id === selectedLobbyPlayerId);
+    if (!stillExists) {
+        selectedLobbyPlayerId = latestLobbyState.players?.[0]?.player_id || null;
+    }
+
+    if (selectedLobbyPlayerId) {
+        syncClassIndexAfterLobbyChange(selectedLobbyPlayerId);
+    }
+
+    return true;
+}
+
+async function loadLobby({ sinceRevision = null, render = true } = {}) {
+    const projection = await fetchLobbyProjection({ sinceRevision });
+    const changed = applyLobbyProjection(projection);
+
+    if (!projection || !changed) {
+        return changed;
+    }
+
+    if (handleLobbyLifecycle(projection)) {
+        return changed;
+    }
+
+    const catalogRes = await apiJson(lobbyApi("/character_catalog"));
+    latestCharacterCatalog = catalogRes.classes || [];
+
+    if (render && changed) {
+        renderLobby();
+    }
+
+    return changed;
+}
+
+function handleLobbyLifecycle(projection) {
+    const lifecycle = projection?.lifecycle;
+    if (lifecycle === "in_game") {
+        stopLobbyPolling();
+        window.location.href = karakPath("/phase3");
+        return true;
+    }
+    if (lifecycle === "results") {
+        stopLobbyPolling();
+        window.location.href = karakPath("/phase4");
+        return true;
+    }
+    if (lifecycle === "closed") {
+        stopLobbyPolling();
+        karakClearGameContext();
+        showMessage("warning", "Game closed", "This game is no longer available.");
+        window.setTimeout(() => {
+            window.location.href = karakPath("/phase1");
+        }, 1200);
+        return true;
+    }
+    if (lifecycle === "faulted") {
+        stopLobbyPolling();
+        showMessage("error", "Game faulted", "This game cannot continue.");
+        return true;
+    }
+    return false;
+}
+
+async function reloadAuthoritativeLobby(message = null) {
+    const changed = await loadLobby({ render: true });
+    if (message) {
+        showMessage("warning", "Lobby refreshed", message);
+    }
+    return changed;
+}
+
+async function mutateLobby(url, options = {}) {
+    try {
+        const result = await apiJson(url, options);
+        if (Number.isInteger(result?.revision)) {
+            karakSetLastRevision(result.revision);
+        }
+        await loadLobby({ render: true });
+        return result;
+    } catch (err) {
+        if (err.status === 409) {
+            await reloadAuthoritativeLobby("Your lobby view was stale. Review the refreshed state and try again.");
+        }
+        throw err;
+    }
+}
+
+async function finalGameMutation(url, options = {}) {
+    try {
+        return await apiJson(url, options);
+    } catch (err) {
+        if (err.status === 409) {
+            await reloadAuthoritativeLobby("Your lobby view was stale. Review the refreshed state and try again.");
+        }
+        throw err;
+    }
 }
 
 function getSelectedPlayer() {
@@ -118,17 +274,182 @@ function renderLobby() {
     }
 
     renderSessionLabel();
+    renderParticipationBar();
+    renderParticipants();
     renderPlayers();
     renderClassCard();
     renderConfigEditor();
     updateStartButton();
+    updateLobbyControls();
+}
+
+function isMultiplayerLobby() {
+    return latestLobbyProjection?.participation_mode === "multiplayer";
+}
+
+function currentPermissions() {
+    return latestLobbyProjection?.permissions || {};
+}
+
+function buildJoinUrl() {
+    const roomCode = latestLobbyProjection?.room_code;
+    if (!roomCode) {
+        return "";
+    }
+    const basePath = window.KARAK_BASE_URL || "";
+    const prefix = basePath.replace(/\/+$/, "");
+    const advertisedOrigin = String(window.KARAK_ADVERTISED_ORIGIN || "").replace(/\/+$/, "");
+    const origin = advertisedOrigin || window.location.origin;
+    return `${origin}${prefix}/phase1?join=${encodeURIComponent(roomCode)}`;
+}
+
+async function copyJoinUrl() {
+    const joinUrl = buildJoinUrl();
+    if (!joinUrl) {
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(joinUrl);
+        showMessage("info", "Join URL copied", joinUrl);
+    } catch (_) {
+        const field = document.getElementById("join-url-output");
+        if (field) {
+            field.focus();
+            field.select();
+        }
+        showMessage("warning", "Copy manually", "Select and copy the join URL.");
+    }
+}
+
+async function leaveLobby() {
+    try {
+        const confirmed = window.confirm("Leave this lobby?");
+        if (!confirmed) return;
+        const res = await finalGameMutation(gameApi("/leave"), {method: "POST"});
+        stopLobbyPolling();
+        karakClearGameContext();
+        showMessage("info", "Left lobby", res?.game_id || "");
+        window.location.href = karakPath("/phase1");
+    } catch (err) {
+        showMessage("error", "Leave failed", err.message);
+    }
+}
+
+async function closeLobby() {
+    try {
+        const confirmed = window.confirm("Close this game for every participant?");
+        if (!confirmed) return;
+        const res = await finalGameMutation(gameApi("/close"), {method: "POST"});
+        stopLobbyPolling();
+        karakClearGameContext();
+        showMessage("info", "Game closed", res?.game_id || "");
+        window.location.href = karakPath("/phase1");
+    } catch (err) {
+        showMessage("error", "Close failed", err.message);
+    }
+}
+
+function renderParticipationBar() {
+    const box = document.getElementById("lobby-participation-bar");
+    if (!box || !latestLobbyProjection) return;
+
+    const permissions = currentPermissions();
+    const self = latestLobbyProjection.self || {};
+    const joinUrl = buildJoinUrl();
+
+    box.innerHTML = "";
+
+    const details = document.createElement("div");
+    details.className = "lobby-participation-details";
+
+    const selfLabel = `${self.display_name || "Participant"}${self.is_host ? " (host)" : ""}`;
+    details.innerHTML = `
+        <span>Mode: ${escapeHtml(latestLobbyProjection.participation_mode)}</span>
+        <span>Lifecycle: ${escapeHtml(latestLobbyProjection.lifecycle)}</span>
+        <span>You: ${escapeHtml(selfLabel)}</span>
+        <span>Revision: ${escapeHtml(latestLobbyProjection.revision)}</span>
+    `;
+    box.appendChild(details);
+
+    if (isMultiplayerLobby() && latestLobbyProjection.room_code) {
+        const joinRow = document.createElement("div");
+        joinRow.className = "lobby-join-row";
+        joinRow.innerHTML = `
+            <span>Room: <b>${escapeHtml(latestLobbyProjection.room_code)}</b></span>
+            <input id="join-url-output" readonly value="${escapeHtml(joinUrl)}">
+            <button id="copy-join-url-btn" type="button">Copy</button>
+        `;
+        box.appendChild(joinRow);
+        document.getElementById("copy-join-url-btn")?.addEventListener("click", copyJoinUrl);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "lobby-participation-actions";
+    if (permissions.can_leave) {
+        const leaveBtn = document.createElement("button");
+        leaveBtn.id = "leave-lobby-btn";
+        leaveBtn.type = "button";
+        leaveBtn.textContent = "Leave";
+        leaveBtn.addEventListener("click", leaveLobby);
+        actions.appendChild(leaveBtn);
+    }
+    if (permissions.can_close) {
+        const closeBtn = document.createElement("button");
+        closeBtn.id = "close-lobby-btn";
+        closeBtn.type = "button";
+        closeBtn.textContent = "Close Game";
+        closeBtn.addEventListener("click", closeLobby);
+        actions.appendChild(closeBtn);
+    }
+    if (actions.children.length) {
+        box.appendChild(actions);
+    }
+}
+
+function participantById(participantId) {
+    return (latestLobbyProjection?.participants || []).find(p => p.participant_id === participantId) || null;
+}
+
+function participantOwnedSeatLabels(participant) {
+    const playerById = new Map((latestLobbyState?.players || []).map(p => [p.player_id, p]));
+    const owned = participant?.owned_player_ids || [];
+    if (!owned.length) {
+        return "unassigned";
+    }
+    return owned.map(playerId => playerById.get(playerId)?.display_name || playerId).join(", ");
+}
+
+function renderParticipants() {
+    const box = document.getElementById("participant-list");
+    if (!box || !latestLobbyProjection) return;
+
+    box.innerHTML = "";
+    const title = document.createElement("div");
+    title.className = "participant-list-title";
+    title.textContent = "Participants";
+    box.appendChild(title);
+
+    for (const participant of latestLobbyProjection.participants || []) {
+        const row = document.createElement("div");
+        row.className = "participant-row";
+        const markers = [];
+        if (participant.is_host) markers.push("host");
+        if (participant.participant_id === latestLobbyProjection.self?.participant_id) markers.push("you");
+        row.innerHTML = `
+            <div class="participant-name">${escapeHtml(participant.display_name)} ${markers.length ? `<span>${escapeHtml(markers.join(", "))}</span>` : ""}</div>
+            <div class="participant-seats">${escapeHtml(participantOwnedSeatLabels(participant))}</div>
+        `;
+        box.appendChild(row);
+    }
 }
 
 function renderSessionLabel() {
     const el = document.getElementById("lobby-session-label");
     if (!el || !latestLobbyState) return;
 
-    el.textContent = `Session: ${latestLobbyState.session_id} | Admin: ${latestLobbyState.admin_name}`;
+    const mode = latestLobbyProjection?.participation_mode || latestLobbyState.mode || "hotseat";
+    const revision = latestLobbyProjection?.revision ?? karakGetLastRevision();
+    el.textContent = `Session: ${latestLobbyProjection?.game_id || latestLobbyState.session_id} | Mode: ${mode} | Revision: ${revision}`;
 }
 
 function renderPlayers() {
@@ -169,9 +490,14 @@ function renderPlayers() {
         profession.className = "lobby-player-profession";
         profession.textContent = player.profession || "no profession";
 
+        const owner = document.createElement("div");
+        owner.className = "lobby-player-owner";
+        owner.textContent = player.owner_display_name ? `Owner: ${player.owner_display_name}` : "Unassigned";
+
         const removeBtn = document.createElement("button");
         removeBtn.className = "lobby-remove-btn";
         removeBtn.textContent = "Remove";
+        removeBtn.disabled = !latestLobbyProjection?.permissions?.can_remove_player;
         removeBtn.onclick = async (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
@@ -180,29 +506,13 @@ function renderPlayers() {
             const removedPlayerName = player.display_name;
 
             try {
-                const res = await apiJson(karakPath(`/api/lobby/remove_player/${encodeURIComponent(removedPlayerId)}`), {
+                await mutateLobby(lobbyApi(`/remove_player/${encodeURIComponent(removedPlayerId)}`), {
                     method: "POST",
                 });
-
-                latestLobbyState = res.lobby_state;
 
                 // Remove stale carousel state for deleted player.
                 delete selectedClassIndexByPlayerId[removedPlayerId];
 
-                // If the currently selected player was removed, choose a valid remaining player.
-                const stillExists = (latestLobbyState.players || []).some(
-                    p => p.player_id === selectedLobbyPlayerId
-                );
-
-                if (!stillExists) {
-                    selectedLobbyPlayerId = latestLobbyState.players?.at(-1)?.player_id || null;
-                }
-
-                if (selectedLobbyPlayerId) {
-                    syncClassIndexAfterLobbyChange(selectedLobbyPlayerId);
-                }
-
-                renderLobby();
                 showMessage("info", "Player removed", removedPlayerName);
             } catch (err) {
                 showMessage("error", "Remove failed", err.message);
@@ -212,10 +522,98 @@ function renderPlayers() {
         row.appendChild(colorDot);
         row.appendChild(name);
         row.appendChild(profession);
+        const seatControls = createSeatControls(player);
+
+        row.appendChild(owner);
         row.appendChild(removeBtn);
+        if (seatControls) {
+            row.appendChild(seatControls);
+        }
 
         box.appendChild(row);
     }
+}
+
+function createSeatControls(player) {
+    if (!isMultiplayerLobby()) {
+        return null;
+    }
+
+    const controls = document.createElement("div");
+    controls.className = "seat-controls";
+    controls.addEventListener("click", ev => {
+        ev.stopPropagation();
+    });
+
+    const canAssign = Boolean(currentPermissions().can_assign_seat);
+    const canUnassign = Boolean(currentPermissions().can_unassign_seat);
+
+    if (!canAssign && !canUnassign) {
+        controls.textContent = player.owner_display_name || "Unassigned";
+        return controls;
+    }
+
+    const select = document.createElement("select");
+    select.className = "seat-owner-select";
+    select.disabled = Boolean(player.owner_participant_id) || !canAssign;
+
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "Assign to...";
+    select.appendChild(empty);
+
+    for (const participant of latestLobbyProjection?.participants || []) {
+        const option = document.createElement("option");
+        option.value = participant.participant_id;
+        option.textContent = participant.display_name + (participant.is_host ? " (host)" : "");
+        select.appendChild(option);
+    }
+
+    const assignBtn = document.createElement("button");
+    assignBtn.type = "button";
+    assignBtn.textContent = "Assign";
+    assignBtn.disabled = Boolean(player.owner_participant_id) || !canAssign;
+    assignBtn.onclick = async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const participantId = select.value;
+        if (!participantId) {
+            showMessage("warning", "No participant selected", "Choose a participant before assigning.");
+            return;
+        }
+        try {
+            await mutateLobby(lobbyApi(`/seats/${encodeURIComponent(player.player_id)}/assign`), {
+                method: "POST",
+                body: JSON.stringify({participant_id: participantId}),
+            });
+            const target = participantById(participantId);
+            showMessage("info", "Seat assigned", `${player.display_name} -> ${target?.display_name || participantId}`);
+        } catch (err) {
+            showMessage("error", "Seat assignment failed", err.message);
+        }
+    };
+
+    const unassignBtn = document.createElement("button");
+    unassignBtn.type = "button";
+    unassignBtn.textContent = "Unassign";
+    unassignBtn.disabled = !player.owner_participant_id || !canUnassign;
+    unassignBtn.onclick = async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+            await mutateLobby(lobbyApi(`/seats/${encodeURIComponent(player.player_id)}/unassign`), {
+                method: "POST",
+            });
+            showMessage("info", "Seat unassigned", player.display_name);
+        } catch (err) {
+            showMessage("error", "Seat unassignment failed", err.message);
+        }
+    };
+
+    controls.appendChild(select);
+    controls.appendChild(assignBtn);
+    controls.appendChild(unassignBtn);
+    return controls;
 }
 
 function renderClassCard() {
@@ -227,6 +625,12 @@ function renderClassCard() {
     if (!player) {
         box.innerHTML = `<div class="muted">Add or select a player first.</div>`;
         return;
+    }
+
+    if (!currentPermissions().can_assign_profession) {
+        box.classList.add("readonly");
+    } else {
+        box.classList.remove("readonly");
     }
 
     const availableClasses = getAvailableClassesForPlayer(player);
@@ -331,11 +735,11 @@ function renderClassCard() {
     }
 
     if (assignBtn) {
-        assignBtn.disabled = player.profession === selectedProfession;
+        assignBtn.disabled = player.profession === selectedProfession || !latestLobbyProjection?.permissions?.can_assign_profession;
 
         assignBtn.onclick = async () => {
             try {
-                const res = await apiJson(karakPath("/api/lobby/assign_profession"), {
+                await mutateLobby(lobbyApi("/assign_profession"), {
                     method: "POST",
                     body: JSON.stringify({
                         player_id: player.player_id,
@@ -343,12 +747,9 @@ function renderClassCard() {
                     }),
                 });
 
-                latestLobbyState = res.lobby_state;
-
                 // Keep the selector coherent after filtering changes.
                 syncClassIndexAfterLobbyChange(player.player_id);
 
-                renderLobby();
                 showMessage("info", "Profession assigned", `${player.display_name} -> ${selectedProfession}`);
             } catch (err) {
                 showMessage("error", "Profession assignment failed", err.message);
@@ -526,6 +927,7 @@ function createConfigInput(path, value) {
         input.className = "config-input";
         input.dataset.configPath = pathStr;
         input.dataset.configType = "boolean";
+        input.disabled = !latestLobbyProjection?.permissions?.can_configure;
         return input;
     }
 
@@ -536,6 +938,7 @@ function createConfigInput(path, value) {
         input.className = "config-input";
         input.dataset.configPath = pathStr;
         input.dataset.configType = Number.isInteger(value) ? "integer" : "float";
+        input.disabled = !latestLobbyProjection?.permissions?.can_configure;
         return input;
     }
 
@@ -546,6 +949,7 @@ function createConfigInput(path, value) {
         input.className = "config-input";
         input.dataset.configPath = pathStr;
         input.dataset.configType = "string";
+        input.disabled = !latestLobbyProjection?.permissions?.can_configure;
         return input;
     }
 
@@ -555,6 +959,7 @@ function createConfigInput(path, value) {
     input.className = "config-input config-json-textarea";
     input.dataset.configPath = pathStr;
     input.dataset.configType = "json";
+    input.disabled = !latestLobbyProjection?.permissions?.can_configure;
     return input;
 }
 
@@ -621,6 +1026,10 @@ function isPlainObject(value) {
 }
 
 async function addPlayerFromInput() {
+    if (!currentPermissions().can_add_player) {
+        showMessage("error", "Not allowed", "Only the host can add player seats.");
+        return;
+    }
     const input = document.getElementById("player-name-input");
     const name = input?.value?.trim();
 
@@ -630,14 +1039,12 @@ async function addPlayerFromInput() {
     }
 
     try {
-        const res = await apiJson(karakPath("/api/lobby/add_hotseat_player"), {
+        await mutateLobby(lobbyApi("/add_hotseat_player"), {
             method: "POST",
             body: JSON.stringify({
                 display_name: name,
             }),
         });
-
-        latestLobbyState = res.lobby_state;
 
         const newPlayer = latestLobbyState.players?.at(-1) || null;
 
@@ -649,7 +1056,6 @@ async function addPlayerFromInput() {
 
         input.value = "";
 
-        renderLobby();
         showMessage("info", "Player added", name);
     } catch (err) {
         showMessage("error", "Add player failed", err.message);
@@ -660,41 +1066,79 @@ function updateStartButton() {
     const btn = document.getElementById("start-game-btn");
     if (!btn) return;
 
-    const players = latestLobbyState?.players || [];
-    const canStart = players.length >= 1 && players.every(p => Boolean(p.profession));
+    const readiness = latestLobbyProjection?.start_readiness || null;
+    const readinessMessages = (readiness?.blocking_reasons || [])
+        .map(reason => reason?.message || String(reason || ""))
+        .filter(Boolean);
+    const canStart = Boolean(latestLobbyProjection?.permissions?.can_start_game);
 
-    btn.disabled = !canStart;
+    btn.disabled = !canStart || startGameInFlight;
+    btn.textContent = startGameInFlight ? "Starting..." : "Start game";
+    btn.title = readinessMessages.join("\n");
+
+    let readinessBox = document.getElementById("start-readiness-box");
+    if (!readinessBox && btn.parentElement) {
+        readinessBox = document.createElement("div");
+        readinessBox.id = "start-readiness-box";
+        readinessBox.className = "lobby-start-readiness";
+        btn.parentElement.appendChild(readinessBox);
+    }
+    if (readinessBox) {
+        readinessBox.innerHTML = "";
+        if (isMultiplayerLobby() && readinessMessages.length) {
+            for (const message of readinessMessages) {
+                const line = document.createElement("div");
+                line.textContent = message;
+                readinessBox.appendChild(line);
+            }
+        }
+    }
+}
+
+function updateLobbyControls() {
+    const permissions = currentPermissions();
+    const addInput = document.getElementById("player-name-input");
+    const addButton = document.getElementById("add-player-btn");
+    if (addInput) {
+        addInput.disabled = !permissions.can_add_player;
+    }
+    if (addButton) {
+        addButton.disabled = !permissions.can_add_player;
+    }
 }
 
 async function startGameFromLobby() {
+    if (startGameInFlight) {
+        return;
+    }
+    startGameInFlight = true;
+    updateStartButton();
     try {
         const runtimeConfig = collectRuntimeConfigFromEditor();
 
-        const res = await apiJson(karakPath("/api/lobby/start_game"), {
+        await mutateLobby(lobbyApi("/start_game"), {
             method: "POST",
             body: JSON.stringify({
                 runtime_config: runtimeConfig,
             }),
         });
-
-        if (res.redirect_to) {
-            window.location.href = karakPath(res.redirect_to);
-            return;
-        }
-
-        showMessage("info", "Game started", JSON.stringify(res, null, 2));
+        showMessage("info", "Game started", "Loading gameplay...");
     } catch (err) {
         showMessage("error", "Start game failed", err.message);
+    } finally {
+        startGameInFlight = false;
+        updateStartButton();
     }
 }
 
 async function resetToPhase1() {
     try {
-        const res = await apiJson(karakPath("/api/lobby/reset_to_phase1"), {
+        const res = await mutateLobby(lobbyApi("/reset_to_phase1"), {
             method: "POST",
         });
 
         if (res.redirect_to) {
+            karakClearGameContext();
             window.location.href = karakPath(res.redirect_to);
             return;
         }
@@ -702,6 +1146,74 @@ async function resetToPhase1() {
         showMessage("info", "Reset", "Returned to Phase 1.");
     } catch (err) {
         showMessage("error", "Reset failed", err.message);
+    }
+}
+
+function scheduleLobbyPoll(delayMs = LOBBY_POLL_INTERVAL_MS) {
+    if (!karakGetGameContext()) {
+        return;
+    }
+    if (lobbyPollTimer !== null) {
+        window.clearTimeout(lobbyPollTimer);
+    }
+    lobbyPollTimer = window.setTimeout(runLobbyPoll, delayMs);
+}
+
+async function runLobbyPoll() {
+    lobbyPollTimer = null;
+    if (lobbyPollInFlight || !karakGetGameContext()) {
+        scheduleLobbyPoll();
+        return;
+    }
+
+    const revision = karakGetLastRevision();
+    if (revision === null) {
+        scheduleLobbyPoll();
+        return;
+    }
+
+    lobbyPollInFlight = true;
+    try {
+        const changed = await loadLobby({ sinceRevision: revision, render: true });
+        lobbyPollErrorCount = 0;
+        scheduleLobbyPoll();
+        return changed;
+    } catch (err) {
+        if (err.status === 401 || err.status === 403 || err.status === 404) {
+            stopLobbyPolling();
+            karakClearGameContext();
+            showMessage("warning", "Lobby unavailable", "The game was closed or your participant session is no longer valid.");
+            window.setTimeout(() => {
+                window.location.href = karakPath("/phase1");
+            }, 1200);
+            return false;
+        }
+        lobbyPollErrorCount += 1;
+        const backoff = Math.min(
+            LOBBY_POLL_MAX_BACKOFF_MS,
+            LOBBY_POLL_INTERVAL_MS * Math.max(1, lobbyPollErrorCount)
+        );
+        scheduleLobbyPoll(backoff);
+        return false;
+    } finally {
+        lobbyPollInFlight = false;
+    }
+}
+
+function startLobbyPolling() {
+    if (lobbyPollStarted) {
+        return;
+    }
+    lobbyPollStarted = true;
+    scheduleLobbyPoll();
+}
+
+function stopLobbyPolling() {
+    lobbyPollStarted = false;
+    lobbyPollInFlight = false;
+    if (lobbyPollTimer !== null) {
+        window.clearTimeout(lobbyPollTimer);
+        lobbyPollTimer = null;
     }
 }
 
@@ -718,6 +1230,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!karakRequireShmcLogin()) {
         return;
     }
+    if (!karakRequireGameContext()) {
+        return;
+    }
 
     document.getElementById("add-player-btn")?.addEventListener("click", addPlayerFromInput);
 
@@ -729,9 +1244,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById("start-game-btn")?.addEventListener("click", startGameFromLobby);
     document.getElementById("back-to-phase1-btn")?.addEventListener("click", resetToPhase1);
+    window.addEventListener("beforeunload", stopLobbyPolling);
 
     try {
         await loadLobby();
+        startLobbyPolling();
         showMessage("info", "Lobby ready", "Add players, assign professions, edit rules, then start.");
     } catch (err) {
         showMessage("error", "Lobby load failed", err.message);

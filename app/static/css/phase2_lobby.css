@@ -27,15 +27,47 @@ body.karak-page {
 }
 
 .lobby-shell {
-    width: min(100vw, calc(100vh * 16 / 9));
-    aspect-ratio: 16 / 9;
+    width: min(100vw, 1440px);
+    height: 100vh;
+    min-height: 0;
 
     display: grid;
-    grid-template-rows: 8% 82% 10%;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
 
     background: #111;
     border: 2px solid #333;
     overflow: hidden;
+}
+
+.lobby-participation-bar {
+    min-width: 0;
+    min-height: 0;
+    padding: 6px 12px;
+    border-bottom: 1px solid #333;
+    background: #0d0d0d;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    overflow: hidden;
+}
+
+.lobby-participation-details,
+.lobby-join-row,
+.lobby-participation-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.lobby-participation-details {
+    color: #aaa;
+    font-size: 12px;
+}
+
+.lobby-join-row input {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .lobby-header,
@@ -50,7 +82,7 @@ body.karak-page {
     align-items: center;
     justify-content: space-between;
 
-    padding: 10px 14px;
+    padding: 8px 12px;
 
     background: #090909;
     border-bottom: 1px solid #333;
@@ -59,7 +91,7 @@ body.karak-page {
 .lobby-title {
     color: #ddd;
     font-weight: bold;
-    font-size: 20px;
+    font-size: 18px;
 }
 
 .lobby-session {
@@ -70,19 +102,19 @@ body.karak-page {
 .lobby-main {
     display: grid;
 
-    /* Player setup gets the broad side, rules become compact. */
-    grid-template-columns: 68% 32%;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
 
-    gap: 10px;
-    padding: 10px;
+    gap: 8px;
+    padding: 8px;
+    overflow: hidden;
 }
 
 .lobby-footer {
     display: grid;
     grid-template-columns: 140px 1fr 160px;
-    gap: 10px;
+    gap: 8px;
 
-    padding: 10px;
+    padding: 8px;
 
     background: #090909;
     border-top: 1px solid #333;
@@ -95,7 +127,7 @@ body.karak-page {
     border: 1px solid #333;
     background: #0b0b0b;
 
-    padding: 10px;
+    padding: 8px;
     overflow: hidden;
 }
 
@@ -106,14 +138,14 @@ body.karak-page {
        Left part: add/player list.
        Right part: large profession selector.
     */
-    grid-template-columns: 45% 55%;
+    grid-template-columns: minmax(260px, 42%) minmax(360px, 58%);
     grid-template-rows: auto 1fr;
 
     grid-template-areas:
         "title title"
         "players class";
 
-    gap: 10px;
+    gap: 8px;
 
     min-width: 0;
     min-height: 0;
@@ -122,7 +154,7 @@ body.karak-page {
 .lobby-right-panel {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 
     min-width: 0;
     min-height: 0;
@@ -153,6 +185,7 @@ body.karak-page {
 
     display: flex;
     flex-direction: column;
+    gap: 8px;
 
     overflow: hidden;
 }
@@ -245,18 +278,73 @@ pre {
 
 .lobby-player-row {
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) minmax(80px, 120px) 58px;
+    grid-template-columns: 22px minmax(0, 1fr) minmax(80px, 120px) minmax(80px, 120px) 58px;
     gap: 8px;
     align-items: center;
 
-    padding: 8px;
-    margin-bottom: 6px;
+    padding: 6px;
+    margin-bottom: 5px;
 
     background: #101010;
     border: 1px solid #222;
 
     box-sizing: border-box;
     cursor: pointer;
+}
+
+.lobby-player-row .seat-controls {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 80px 90px;
+    gap: 6px;
+}
+
+.lobby-player-owner {
+    color: #aaa;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.participant-list {
+    flex: 0 0 auto;
+    border: 1px solid #222;
+    background: #101010;
+    padding: 6px;
+    max-height: 82px;
+    overflow-y: auto;
+}
+
+.participant-list-title {
+    color: #ddd;
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.participant-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    padding: 4px 0;
+    border-top: 1px solid #222;
+    font-size: 12px;
+}
+
+.participant-row:first-of-type {
+    border-top: 0;
+}
+
+.participant-name,
+.participant-seats {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.participant-name span {
+    color: #9ab;
 }
 
 .lobby-player-row:hover {
@@ -318,7 +406,7 @@ pre {
 
 .lobby-class-card {
     width: 100%;
-    height: 100%;
+    flex: 1 1 auto;
 
     min-width: 0;
     min-height: 0;
@@ -331,16 +419,35 @@ pre {
        info: current/candidate/skills
        button: assign
     */
-    grid-template-rows: 52px minmax(0, 1fr) auto 38px;
+    grid-template-rows: 44px minmax(82px, 1fr) auto 34px;
 
-    gap: 10px;
+    gap: 8px;
 
     background: #151515;
     border: 1px solid #333;
-    padding: 10px;
+    padding: 8px;
 
     box-sizing: border-box;
     overflow: hidden;
+}
+
+@media (max-width: 980px) {
+    .lobby-main {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+
+    .lobby-left-panel {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "title"
+            "players"
+            "class";
+    }
+
+    .lobby-right-panel {
+        min-height: 0;
+    }
 }
 
 .class-select-row {

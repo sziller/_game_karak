@@ -3540,8 +3540,9 @@ class DungeonGraph:
             """
             turn.pending_item_pickup = False
             turn.pending_retreat = False
-            turn.pending_curse_choice = False
+            turn.pending_curse_choice = None
             turn.pending_poison_choice = None
+            turn.pending_healing_choice = None
             turn.pending_arena_loot_choice = None
             turn.fight_continue_after_item_pickup = False
             turn.fight_continue_skill_id = None
@@ -3747,7 +3748,13 @@ class DungeonGraph:
             apply_swordsman_continuation_state(enabled=may_continue_by_swo_02)
 
             if entity_id == "Mummy":
-                turn.pending_curse_choice = True
+                turn.pending_curse_choice = {
+                    "owner_player_id": active.player_id,
+                    "category": "curse",
+                    "source": "Mummy",
+                    "killed_entity_id": entity_id,
+                    "requires_target": "player",
+                }
                 self.set_turn_mode("awaiting_curse_choice")
 
                 return build_response(
@@ -3759,6 +3766,8 @@ class DungeonGraph:
 
             if entity_id == "GiantSnake":
                 turn.pending_poison_choice = {
+                    "owner_player_id": active.player_id,
+                    "category": "poison",
                     "source": "GiantSnake",
                     "requires_target": "player_skill",
                     "killed_entity_id": entity_id,
@@ -6107,8 +6116,9 @@ class DungeonGraph:
                 # Fallback: if retreat cannot be resolved, still force turn end.
                 turn.pending_retreat = False
                 turn.pending_item_pickup = False
-                turn.pending_curse_choice = False
+                turn.pending_curse_choice = None
                 turn.pending_poison_choice = None
+                turn.pending_healing_choice = None
                 turn.pending_entity_encounter = None
                 turn.pending_arena_pvp = None
                 turn.pending_arena_loot_choice = None
@@ -6130,8 +6140,9 @@ class DungeonGraph:
         else:
             turn.pending_retreat = False
             turn.pending_item_pickup = False
-            turn.pending_curse_choice = False
+            turn.pending_curse_choice = None
             turn.pending_poison_choice = None
+            turn.pending_healing_choice = None
             turn.pending_entity_encounter = None
             turn.pending_arena_pvp = None
             turn.pending_arena_loot_choice = None
@@ -7353,7 +7364,7 @@ class DungeonGraph:
 
         self._apply_curse_to_player(target)
 
-        turn.pending_curse_choice = False
+        turn.pending_curse_choice = None
 
         if active.is_skill_active("skill_bar_02"):
             turn.pending_item_pickup = False
@@ -7447,6 +7458,9 @@ class DungeonGraph:
         if turn.mode != "awaiting_heal_choice":
             raise ValueError(f"Cannot resolve healing choice while turn mode is '{turn.mode}'.")
 
+        if not turn.pending_healing_choice:
+            raise ValueError("No pending healing choice to resolve.")
+
         if not self._is_active_player_on_fountain():
             raise ValueError("Healing choice is only valid on a fountain.")
 
@@ -7455,6 +7469,7 @@ class DungeonGraph:
         if "skill_bar_01" not in active.skills:
             raise ValueError("Active player has no variable-heal skill.")
 
+        turn.pending_healing_choice = None
         return self._finalize_current_turn_and_advance(
             end_cause=end_cause,
             heal_target_hp=action.target_hp,
@@ -9042,8 +9057,9 @@ class DungeonGraph:
         turn.pending_turn_end_cause = "player_quit"
         turn.pending_item_pickup = False
         turn.pending_retreat = False
-        turn.pending_curse_choice = False
+        turn.pending_curse_choice = None
         turn.pending_poison_choice = None
+        turn.pending_healing_choice = None
         turn.pending_arena_pvp = None
         turn.pending_arena_loot_choice = None
         turn.fight_continue_after_item_pickup = False
@@ -10313,6 +10329,15 @@ class DungeonGraph:
             # --------------------------------------------------
             if active.is_skill_active("skill_bar_01") and heal_target_hp is None:
                 turn.pending_turn_end_cause = end_cause
+                turn.pending_healing_choice = {
+                    "owner_player_id": active.player_id,
+                    "category": "healing",
+                    "source": "fountain",
+                    "requires_target": "hp_value",
+                    "current_hp": active.hp,
+                    "max_hp": getattr(active, "max_hp", 5),
+                    "curse_removed_before_choice": bool(pre_healing_result.get("curse_removed")),
+                }
                 self.set_turn_mode("awaiting_heal_choice")
 
                 return {

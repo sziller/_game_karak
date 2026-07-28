@@ -11,12 +11,19 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "python-jose",
-    "shmc-auth-client==0.1.0",
     "uvicorn",
     "pydantic",
     "PyYAML",
     "jinja2",
 ]
+
+[project.optional-dependencies]
+shmc = ["shmc-auth-client==0.1.0"]
+build = ["build", "wheel"]
+test = ["pytest", "httpx"]
+
+[project.scripts]
+karak-server = "app.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -28,9 +35,38 @@ py-modules = ["RUN_API_karak"]
 [tool.setuptools.package-data]
 "app" = [
     "templates/*.html",
-    "static/**/*",
-    "content/**/*",
+    "static/favicon.ico",
+    "static/css/*.css",
+    "static/js/*.js",
+    "static/media/hero-boards/*.png",
+    "static/media/tile-content/*.png",
+    "static/media/tiles/*.png",
+    "content/base/*.yaml",
+    "content/dragonfall_escape/*.yaml",
 ]
+
+[tool.setuptools.data-files]
+"share/karak-game/config" = [
+    "config/karak.example.env",
+    "config/profiles/local-pc.example.env",
+    "config/profiles/trusted-lan.example.env",
+    "config/profiles/media-center.example.env",
+    "config/profiles/central-hosted.example.env",
+]
+"share/karak-game/deploy/examples" = [
+    "deploy/examples/karak@.service",
+    "deploy/examples/nginx-dedicated-host.conf",
+    "deploy/examples/nginx-mounted-prefix.conf",
+]
+"share/karak-game/docs" = [
+    "docs/portable_deployment_configuration.adoc",
+    "docs/central_hosted_deployment.adoc",
+    "docs/trusted_lan_hosting.adoc",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "app/domain"]
 
 # python3 -m pip install --upgrade build
 # python3 -m build

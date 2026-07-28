@@ -9,8 +9,8 @@ def test_player_defaults():
     assert p.player_id == 0
     assert p.x == 1
     assert p.y == 2
-    assert p.max_hp == 6
-    assert p.hp == 6
+    assert p.max_hp == 5
+    assert p.hp == 5
     assert p.is_conscious is True
     assert p.is_evil is False
     assert p.is_cursed is False
@@ -37,7 +37,7 @@ def test_set_hp_clamps_into_range():
     assert p.is_conscious is False
 
     p.set_hp(999)
-    assert p.hp == 6
+    assert p.hp == 5
     assert p.is_conscious is True
 
 

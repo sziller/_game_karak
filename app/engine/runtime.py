@@ -265,8 +265,13 @@ class TurnState:
     pending_forced_fight: bool = False
     pending_item_pickup: bool = False
     pending_retreat: bool = False
-    pending_curse_choice: bool = False
+    # Used while mode == "awaiting_curse_choice".
+    # Shape: {"owner_player_id": int, "category": "curse", ...}
+    pending_curse_choice: Optional[dict[str, Any]] = None
     pending_poison_choice: Optional[dict[str, Any]] = None
+    # Used while mode == "awaiting_heal_choice".
+    # Shape: {"owner_player_id": int, "category": "healing", ...}
+    pending_healing_choice: Optional[dict[str, Any]] = None
     pending_ko_reaction: Optional[dict[str, Any]] = None
 
     # Pending tile reveal/discovery pipeline.
@@ -373,6 +378,7 @@ class TurnState:
                 "pending_retreat": self.pending_retreat,
                 "pending_curse_choice": self.pending_curse_choice,
                 "pending_poison_choice": self.pending_poison_choice,
+                "pending_healing_choice": self.pending_healing_choice,
                 "pending_ko_reaction": self.pending_ko_reaction,
                 "pending_discovery": self.pending_discovery,
                 "pending_entity_choice": self.pending_entity_choice,

@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from app.bootstrap import SessionPhase
 from app.dto import (
     BootstrapHotseatRequest,
     BootstrapHostRequest,
     BootstrapJoinRequest,
 )
+from app.runtime import ParticipationMode
+from app.runtime.game_sessions import create_runtime_session
+from app.runtime.registry import InMemoryGameRuntimeRegistry
 
 
-def build_bootstrap_router(bootstrap_service) -> APIRouter:
+def build_bootstrap_router(*, bootstrap_service, runtime_registry: InMemoryGameRuntimeRegistry) -> APIRouter:
     router = APIRouter(prefix="/api/bootstrap", tags=["Karak - bootstrap"])
 
     @router.get(
@@ -35,7 +39,40 @@ def build_bootstrap_router(bootstrap_service) -> APIRouter:
     )
     def start_hotseat(req: BootstrapHotseatRequest):
         try:
-            return bootstrap_service.start_hotseat(player_name=req.player_name)
+            runtime, participant_token = create_runtime_session(
+                registry=runtime_registry,
+                participation_mode=ParticipationMode.HOTSEAT,
+                display_name=req.player_name,
+            )
+            runtime.lobby.init_from_bootstrap({
+                "phase": "lobby",
+                "mode": "hotseat",
+                "session_id": runtime.game_id,
+                "player_name": req.player_name,
+                "is_connected": True,
+            })
+
+            # Compatibility status only. The runtime registry is authoritative.
+            bootstrap_service.state.reset()
+            bootstrap_service.state.phase = SessionPhase.LOBBY
+
+            participant = runtime.participants[runtime.host_participant_id]
+            return {
+                "ok": True,
+                "mode": "hotseat",
+                "phase": runtime.lifecycle.value,
+                "game_id": runtime.game_id,
+                "participant_token": participant_token,
+                "participant": {
+                    "participant_id": participant.participant_id,
+                    "display_name": participant.display_name,
+                    "is_host": participant.is_host,
+                    "owned_player_ids": sorted(participant.owned_player_ids),
+                },
+                "participation_mode": runtime.participation_mode.value,
+                "lifecycle": runtime.lifecycle.value,
+                "revision": runtime.revision,
+            }
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 

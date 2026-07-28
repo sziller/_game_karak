@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Karak - Game style selection</title>
     <link rel="icon" href="{{ karak_static_url }}/favicon.ico">
-    <link href="{{ karak_static_url }}/css/phases12.css" rel="stylesheet">
+    <link href="{{ karak_static_url }}/css/phases12.css?v={{ karak_asset_version }}" rel="stylesheet">
 </head>
 <body>
 
@@ -22,16 +22,14 @@
 <div class="panel">
     <h2>Host</h2>
     <input id="host-name" placeholder="Host name" type="text" value="Host">
-    <input id="host-url" placeholder="Optional bind URL" type="text" value="">
-    <button onclick="startHost()">Start Host Session</button>
+    <button id="host-submit-btn" onclick="startHost()">Create Multiplayer Lobby</button>
 </div>
 
 <div class="panel">
     <h2>Join</h2>
     <input id="join-name" placeholder="Player name" type="text" value="Guest">
-    <input id="join-url" placeholder="Server URL" type="text" value="http://127.0.0.1:8000">
-    <input id="join-room" placeholder="Optional room code" type="text" value="">
-    <button onclick="joinHost()">Join Session</button>
+    <input id="join-room" placeholder="Room code" type="text" value="">
+    <button id="join-submit-btn" onclick="joinHost()">Join Multiplayer Lobby</button>
 </div>
 
 <div class="message-box message-info" id="message-box">
@@ -42,13 +40,18 @@
 <script>
     window.KARAK_BASE_URL = "{{ karak_base_url }}";
     window.KARAK_STATIC_URL = "{{ karak_static_url }}";
+    window.KARAK_ADVERTISED_ORIGIN = "{{ karak_advertised_origin }}";
+    window.KARAK_DEPLOYMENT_MODE = "{{ karak_deployment_mode }}";
     {% if karak_local_dev_jwt %}
     window.KARAK_LOCAL_DEV_JWT = "{{ karak_local_dev_jwt }}";
     {% endif %}
 </script>
+{% if karak_include_shmc_auth_script %}
 <script src="/js/shmc_auth.js"></script>
-<script src="{{ karak_static_url }}/js/karak_auth.js"></script>
-<script src="{{ karak_static_url }}/js/phase1_bootstrap.js"></script>
+{% endif %}
+<script src="{{ karak_static_url }}/js/karak_game_context.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/karak_auth.js?v={{ karak_asset_version }}"></script>
+<script src="{{ karak_static_url }}/js/phase1_bootstrap.js?v={{ karak_asset_version }}"></script>
 
 </body>
 </html>
