@@ -54,8 +54,9 @@ Karak is a browser game and API integration package.
 - Authentication is handled through the configured application auth flow where deployment requires it.
 
 **Useful links**
-- Start page: `GET /`
-- Phase 1 bootstrap: `GET /phase1`
+- Full server bootstrap: `GET /` or `GET /server`
+- Client-only join page: `GET /join`
+- Legacy Phase 1 bootstrap: `GET /phase1`
 - Phase 2 lobby: `GET /phase2`
 - Phase 3 game: `GET /phase3`
 - Phase 4 results: `GET /phase4`
@@ -188,6 +189,8 @@ def create_karak_app(*, frontend_public_base_path: str = "") -> FastAPI:
             frontend_advertised_origin=deployment_config.advertised_origin,
             frontend_deployment_mode=deployment_config.mode.value,
             frontend_include_shmc_auth=deployment_config.shmc_browser_auth_enabled,
+            frontend_server_host=deployment_config.host,
+            frontend_server_port=deployment_config.port,
         )
     )
 

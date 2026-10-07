@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.core.deployment_config import KarakDeploymentMode, normalize_deployment_mode
 from app.core.lan_config import normalize_advertised_origin
+from app.core.lan_config import is_local_client_host
 
 
 def normalize_public_base_path(path: str) -> str:
@@ -48,6 +50,7 @@ def build_frontend_router(
     advertised_origin: str | None = None,
     deployment_mode: str | None = None,
     include_shmc_auth: bool | None = None,
+    advertised_origin_candidates: tuple[str, ...] = (),
 ) -> APIRouter:
     router = APIRouter(tags=["Karak - frontend"])
 
@@ -59,7 +62,7 @@ def build_frontend_router(
         "KARAK_AUTH_LOGIN_URL",
         "/app/auth/api/login",
     )
-    karak_asset_version = os.getenv("KARAK_ASSET_VERSION", "stage3a2")
+    karak_asset_version = os.getenv("KARAK_ASSET_VERSION", "server-client-step3")
     show_dev_auth_helper = dev_auth_helper_enabled()
     karak_advertised_origin = advertised_origin
     if karak_advertised_origin is None:
@@ -70,6 +73,10 @@ def build_frontend_router(
         or bool(karak_base_url)
         or resolved_deployment_mode == KarakDeploymentMode.CENTRAL_HOSTED.value
     )
+    restrict_server_controls = resolved_deployment_mode != KarakDeploymentMode.CENTRAL_HOSTED.value
+
+    def _is_server_machine(request: Request) -> bool:
+        return bool(request.client and is_local_client_host(request.client.host))
 
     def _serve_template(request: Request, filename: str) -> HTMLResponse:
         page = templates_dir / filename
@@ -86,28 +93,65 @@ def build_frontend_router(
                 "karak_local_dev_jwt": get_optional_local_dev_jwt(),
                 "karak_dev_auth_helper_enabled": show_dev_auth_helper,
                 "karak_advertised_origin": karak_advertised_origin or "",
+                "karak_advertised_origin_candidates": advertised_origin_candidates,
                 "karak_deployment_mode": resolved_deployment_mode,
                 "karak_include_shmc_auth_script": include_shmc_auth_script,
                 "karak_asset_version": karak_asset_version,
             },
         )
 
+    def _join_path(room_code: str | None = None) -> str:
+        path = f"{karak_base_url}/join" if karak_base_url else "/join"
+        if not room_code:
+            return path
+        return f"{path}?{urlencode({'room': room_code})}"
+
     @router.get(
         "/",
         response_class=HTMLResponse,
         summary="Root entrypoint",
-        description="Serves the Phase 1 bootstrap shell.",
+        description="Serves the full local server bootstrap shell.",
     )
     def root(request: Request):
+        if restrict_server_controls and not _is_server_machine(request):
+            return RedirectResponse(_join_path(), status_code=307)
         return _serve_template(request, "phase1_bootstrap.html")
+
+    @router.get(
+        "/server",
+        response_class=HTMLResponse,
+        summary="Server bootstrap",
+        description="Serves the full server bootstrap with Hotseat, hosting, and joining options.",
+    )
+    def serve_server(request: Request):
+        if restrict_server_controls and not _is_server_machine(request):
+            raise HTTPException(
+                status_code=403,
+                detail="The full server bootstrap is available only on the Karak server machine.",
+            )
+        return _serve_template(request, "phase1_bootstrap.html")
+
+    @router.get(
+        "/join",
+        response_class=HTMLResponse,
+        summary="Client join page",
+        description="Serves the client-only Multiplayer join page.",
+    )
+    def serve_join(request: Request):
+        return _serve_template(request, "phase1_join.html")
 
     @router.get(
         "/phase1",
         response_class=HTMLResponse,
         summary="Phase 1 page",
-        description="Serves Phase 1 bootstrap/startup UI.",
+        description="Compatibility entrypoint for the server bootstrap and legacy join links.",
     )
     def serve_phase1(request: Request):
+        legacy_room_code = request.query_params.get("join")
+        if legacy_room_code:
+            return RedirectResponse(_join_path(legacy_room_code), status_code=307)
+        if restrict_server_controls and not _is_server_machine(request):
+            return RedirectResponse(_join_path(), status_code=307)
         return _serve_template(request, "phase1_bootstrap.html")
 
     @router.get(

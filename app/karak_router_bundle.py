@@ -20,6 +20,7 @@ from app.routers.router_phase4_results import build_results_router
 from app.runtime.registry import InMemoryGameRuntimeRegistry
 from app.version import get_package_version
 from app.core.auth_dependencies import require_project_admin_claims, require_registered_project_or_api_key_access
+from app.core.lan_config import build_advertised_origin_candidates
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_ROOT / "static"
@@ -75,6 +76,8 @@ def build_karak_router_bundle(
     frontend_advertised_origin: str | None = None,
     frontend_deployment_mode: str | None = None,
     frontend_include_shmc_auth: bool | None = None,
+    frontend_server_host: str = "127.0.0.1",
+    frontend_server_port: int = 8001,
 ) -> APIRouter:
     """
     Build the Karak local-router bundle for SHMC-style integration.
@@ -96,6 +99,15 @@ def build_karak_router_bundle(
     router = APIRouter()
     api_auth_dependencies = get_karak_api_auth_dependencies()
     admin_auth_dependencies = get_karak_admin_auth_dependencies()
+    advertised_origin_candidates = tuple(
+        build_advertised_origin_candidates(
+            bind_host=frontend_server_host,
+            port=frontend_server_port,
+            configured_origin=frontend_advertised_origin,
+            include_detected=frontend_deployment_mode != "central_hosted",
+        )
+    )
+    restrict_host_actions_to_local = frontend_deployment_mode != "central_hosted"
     router.include_router(build_static_router())
     router.include_router(build_health_router())
     router.include_router(
@@ -104,17 +116,23 @@ def build_karak_router_bundle(
             advertised_origin=frontend_advertised_origin,
             deployment_mode=frontend_deployment_mode,
             include_shmc_auth=frontend_include_shmc_auth,
+            advertised_origin_candidates=advertised_origin_candidates,
         )
     )
     router.include_router(
         build_bootstrap_router(
             bootstrap_service=services.bootstrap,
             runtime_registry=services.runtime_registry,
+            restrict_host_actions_to_local=restrict_host_actions_to_local,
         ),
         dependencies=api_auth_dependencies,
     )
     router.include_router(
-        build_game_sessions_router(services.runtime_registry),
+        build_game_sessions_router(
+            services.runtime_registry,
+            advertised_origin_candidates=advertised_origin_candidates,
+            restrict_creation_to_local=restrict_host_actions_to_local,
+        ),
         dependencies=api_auth_dependencies,
     )
     router.include_router(

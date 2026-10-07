@@ -52,6 +52,37 @@ pre {
     max-width: 500px;
 }
 
+.joinable-rooms {
+    display: grid;
+    gap: 8px;
+    max-width: 620px;
+    margin: 12px auto;
+}
+
+.joinable-room {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    border: 1px solid #444;
+    background: #151515;
+    color: #ddd;
+    text-align: left;
+    cursor: pointer;
+}
+
+.joinable-room:hover,
+.joinable-room:focus {
+    border-color: #77ff77;
+    background: #1d2a1d;
+}
+
+.joinable-room span {
+    color: #aaa;
+    font-size: 0.9em;
+}
+
 /* =========================================================
    5. FEEDBACK / UTILITY
    ========================================================= */

@@ -19,6 +19,7 @@ function karakPath(path) {
 
 const bootstrapApi = (p) => karakPath("/api/bootstrap" + (p.startsWith("/") ? p : "/" + p));
 const gamesApi = (p = "") => karakPath("/api/games" + (p ? (p.startsWith("/") ? p : "/" + p) : ""));
+const ROOM_DISCOVERY_INTERVAL_MS = 3000;
 
 
 // ============================================================
@@ -156,6 +157,13 @@ async function startHost() {
 
     const button = document.getElementById("host-submit-btn");
     const display_name = document.getElementById("host-name").value.trim() || "Host";
+    const room_name = document.getElementById("host-room-name").value.trim();
+    const advertised_origin = document.getElementById("advertised-origin")?.value || null;
+
+    if (!room_name) {
+        showError("Room name is required.");
+        return;
+    }
 
     try {
         karakClearGameContext();
@@ -166,6 +174,8 @@ async function startHost() {
             body: JSON.stringify({
                 participation_mode: "multiplayer",
                 display_name,
+                room_name,
+                advertised_origin,
             })
         });
 
@@ -180,6 +190,89 @@ async function startHost() {
         showError(e.message || "Failed to create multiplayer lobby.");
     } finally {
         setButtonBusy(button, false);
+    }
+}
+
+function openExternalServer() {
+    clearError();
+    const input = document.getElementById("external-server-address");
+    const rawAddress = String(input?.value || "").trim();
+    if (!rawAddress) {
+        showError("Server address is required.");
+        return;
+    }
+    try {
+        const withScheme = /^https?:\/\//i.test(rawAddress) ? rawAddress : `http://${rawAddress}`;
+        const target = new URL(withScheme);
+        if (!['http:', 'https:'].includes(target.protocol) || !target.hostname) {
+            throw new Error("Unsupported server address.");
+        }
+        const cleanPath = target.pathname.replace(/\/+$/, "");
+        target.pathname = cleanPath.endsWith("/join") ? cleanPath : `${cleanPath}/join`;
+        target.search = "";
+        target.hash = "";
+        window.location.href = target.toString();
+    } catch (error) {
+        console.error(error);
+        showError("Enter a valid Karak server address such as 10.3.77.45:8001.");
+    }
+}
+
+function selectJoinableRoom(roomCode) {
+    const joinRoom = document.getElementById("join-room");
+    const joinName = document.getElementById("join-name");
+    if (joinRoom) {
+        joinRoom.value = String(roomCode || "").trim().toUpperCase();
+    }
+    if (joinName) {
+        joinName.focus();
+    }
+}
+
+function renderJoinableRooms(rooms) {
+    const container = document.getElementById("joinable-rooms");
+    if (!container) return;
+    container.replaceChildren();
+
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "muted";
+        empty.textContent = "No Multiplayer rooms are currently available on this server.";
+        container.appendChild(empty);
+        return;
+    }
+
+    rooms.forEach(room => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "joinable-room";
+        row.dataset.roomCode = room.room_code;
+
+        const name = document.createElement("strong");
+        name.textContent = room.room_name;
+        const details = document.createElement("span");
+        const participantLabel = room.participant_count === 1 ? "participant" : "participants";
+        details.textContent = `Host: ${room.host_display_name} · ${room.participant_count} ${participantLabel}`;
+        row.append(name, details);
+        row.addEventListener("click", () => selectJoinableRoom(room.room_code));
+        container.appendChild(row);
+    });
+}
+
+async function refreshJoinableRooms() {
+    const container = document.getElementById("joinable-rooms");
+    if (!container) return;
+    try {
+        const response = await karakFetch(gamesApi("/joinable"));
+        const data = await parseApiResponse(response);
+        renderJoinableRooms(data.rooms);
+    } catch (error) {
+        console.error(error);
+        container.replaceChildren();
+        const warning = document.createElement("p");
+        warning.className = "muted";
+        warning.textContent = "Available rooms could not be loaded. You can still enter a room code manually.";
+        container.appendChild(warning);
     }
 }
 
@@ -218,7 +311,7 @@ async function joinHost() {
 
 function applyJoinQuery() {
     const params = new URLSearchParams(window.location.search);
-    const roomCode = params.get("join");
+    const roomCode = params.get("room") || params.get("join");
     if (!roomCode) {
         return;
     }
@@ -240,4 +333,6 @@ function applyJoinQuery() {
 if (karakRequireShmcLogin()) {
     applyJoinQuery();
     refreshState();
+    refreshJoinableRooms();
+    window.setInterval(refreshJoinableRooms, ROOM_DISCOVERY_INTERVAL_MS);
 }

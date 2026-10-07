@@ -298,9 +298,11 @@ function buildJoinUrl() {
     }
     const basePath = window.KARAK_BASE_URL || "";
     const prefix = basePath.replace(/\/+$/, "");
-    const advertisedOrigin = String(window.KARAK_ADVERTISED_ORIGIN || "").replace(/\/+$/, "");
+    const advertisedOrigin = String(
+        latestLobbyProjection?.advertised_origin || window.KARAK_ADVERTISED_ORIGIN || ""
+    ).replace(/\/+$/, "");
     const origin = advertisedOrigin || window.location.origin;
-    return `${origin}${prefix}/phase1?join=${encodeURIComponent(roomCode)}`;
+    return `${origin}${prefix}/join?room=${encodeURIComponent(roomCode)}`;
 }
 
 async function copyJoinUrl() {

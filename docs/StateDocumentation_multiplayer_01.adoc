@@ -1,0 +1,1967 @@
+= StateDocumentation_multiplayer_01
+:toc: left
+:toclevels: 4
+:sectnums:
+:icons: font
+:source-highlighter: highlight.js
+:experimental:
+:description: Current architectural, implementation, validation, packaging, and planning state of the Karak multiplayer project.
+:revnumber: 0.1
+:revdate: 2026-08-02
+:revremark: Updated with server/client entry separation, room discovery, LAN address selection, and local server-control protection.
+
+== Document purpose
+
+This document is a state-transfer artifact for continuing the Karak multiplayer project in a new assistant instance.
+
+Its purpose is to preserve:
+
+* the architecture that has already been agreed,
+* the implementation stages that have already been completed,
+* the security and authorization boundaries that must not be weakened,
+* the deployment and packaging decisions that have already been made,
+* the current automated and manual validation baseline,
+* the known limitations,
+* the intentionally deferred work,
+* the next recommended local proof-of-concept work,
+* the questions that still need to be answered by the implementation assistant or by direct repository inspection.
+
+The intended reader is a new AI assistant acting as architectural and coding manager for the project.
+
+This is not intended to replace repository documentation, tests, or source inspection. It is a high-context handover that explains what the project is trying to achieve, why the current architecture looks the way it does, what is believed to be complete, and where the remaining uncertainty lies.
+
+== Evidence and confidence conventions
+
+The project has been developed through a repeated workflow:
+
+. The architectural assistant defines a constrained implementation or audit stage.
+. A dedicated coding assistant works in the repository.
+. The coding assistant returns a completion report.
+. The architectural assistant accepts, rejects, or narrows the result.
+. The user performs manual tests where practical.
+
+This document therefore distinguishes several evidence levels.
+
+[cols="1,3"]
+|===
+|Marker |Meaning
+
+|`CONFIRMED_BY_REPORT`
+|The coding assistant explicitly reported that the behavior was implemented and tested.
+
+|`CONFIRMED_BY_AUTOMATED_TESTS`
+|The report included concrete focused or full-suite test counts.
+
+|`CONFIRMED_MANUALLY`
+|The user explicitly reported successful manual behavior.
+
+|`ARCHITECTURAL_DECISION`
+|The design has been deliberately selected and should be treated as a constraint unless reopened.
+
+|`OPEN_VALIDATION`
+|The design or implementation exists, but the required real-world test has not yet been completed.
+
+|`DEFERRED`
+|The issue is known and intentionally postponed.
+
+|`NEEDS_REPOSITORY_VERIFICATION`
+|The reported behavior is credible, but a new assistant should inspect the current source before relying on exact class, endpoint, file, or configuration details.
+|===
+
+Where exact repository details are not available in the conversation record, this document avoids inventing them.
+
+== Project identity and working relationship
+
+=== Project
+
+The project is a server-client, round-based implementation of the board game Karak.
+
+The application currently uses:
+
+* Python,
+* FastAPI,
+* server-rendered templates,
+* vanilla JavaScript,
+* an in-memory runtime registry,
+* HTTP polling,
+* package-based static and template resources.
+
+The application is also designed to integrate into the wider SHMC framework, but standalone operation must remain possible.
+
+=== User role
+
+The user acts as architectural lead and product owner.
+
+The user wants the assistant to act as a coding manager:
+
+* define implementation stages,
+* preserve architectural consistency,
+* review implementation reports,
+* detect scope drift,
+* define acceptance conditions,
+* avoid unnecessary code forks,
+* avoid deployment-specific hard-coding,
+* preserve future portability.
+
+The coding assistant is expected to perform repository work. The architectural assistant should not pretend that code was inspected when only a report is available.
+
+=== Preferred collaboration pattern
+
+A new assistant should:
+
+. First determine the current stage and accepted baseline.
+. Avoid reopening completed architecture without evidence of a defect.
+. Produce precise implementation prompts with explicit scope and non-scope.
+. Require exact test commands and results in completion reports.
+. Keep local, LAN, central-hosted, and packaging concerns separated.
+. Preserve the same gameplay implementation across all deployment topologies.
+. Treat manual physical-device validation as distinct from automated or same-machine browser testing.
+. Prefer partial evidence and transparent limitations over confident assumptions.
+
+== Product goals
+
+The long-term product must support multiple use cases from one codebase and one package.
+
+=== Hotseat
+
+One human participant controls all player seats on one browser/device.
+
+Hotseat is not a separate rules engine. It is a special ownership configuration within the common runtime architecture.
+
+=== Central hosted Multiplayer
+
+A centrally hosted server eventually allows multiple remote players to connect through the internet.
+
+The central deployment is not yet the active target. Remote installation and public-host hardening are intentionally postponed until the local Multiplayer proof of concept is proven.
+
+=== Player-hosted local Multiplayer
+
+A user can run the game server on a local machine and allow other players to join.
+
+Target host examples include:
+
+* a personal PC,
+* a family media center,
+* a Raspberry Pi,
+* another small Linux server,
+* eventually a VPS.
+
+Target client examples include:
+
+* desktop browsers,
+* independent browser profiles,
+* family tablets,
+* mobile browsers.
+
+=== Multiple independently configured instances
+
+The same installed package must support several independent server instances by changing configuration only.
+
+Examples:
+
+* one family instance,
+* one test instance,
+* several instances on a VPS,
+* different ports,
+* different advertised origins,
+* different mount prefixes,
+* different authentication integrations.
+
+No source-code copy, branch-per-instance, or machine-specific code edit should be required.
+
+== Non-negotiable architectural constraints
+
+=== One gameplay implementation
+
+There must not be separate Hotseat, LAN, and central-hosted game engines.
+
+All topologies must use the same:
+
+* game rules,
+* `DungeonGraph`,
+* `GameRuntime`,
+* command authorization boundary,
+* projections,
+* revisions,
+* polling,
+* participant model,
+* seat-ownership model.
+
+Deployment topology may change configuration and transport exposure, but not game semantics.
+
+=== `DungeonGraph` and `GameRuntime` remain separate
+
+`DungeonGraph` owns game rules and game state.
+
+`GameRuntime` owns session and server concerns around that graph, such as:
+
+* runtime lifecycle,
+* participant membership,
+* host identity,
+* seat ownership,
+* participant credentials,
+* revision,
+* mutation locking,
+* fault state,
+* room-code lifecycle,
+* safe state projection.
+
+This separation is an `ARCHITECTURAL_DECISION`.
+
+=== Process-local runtime registry
+
+The current registry is in memory and process-local.
+
+Conceptually:
+
+[source,text]
+----
+game_id -> GameRuntime
+----
+
+Consequences:
+
+* exactly one server process,
+* exactly one worker,
+* no multi-worker deployment,
+* no horizontal scaling,
+* no runtime persistence,
+* all active games are lost on process restart,
+* independent server processes have independent registries.
+
+This limitation is currently accepted for local/LAN proof-of-concept and restricted staging.
+
+=== Configuration-driven portability
+
+The packaged implementation must not be specialized for one machine or environment.
+
+Application code must not hard-code:
+
+* a hostname,
+* an IP address,
+* a port,
+* `/app/karak`,
+* an SHMC repository path,
+* a systemd unit,
+* an Nginx location,
+* a certificate path,
+* a service user,
+* a JWT issuer or audience,
+* a specific Raspberry Pi or VPS setup.
+
+Deployment-specific values belong in:
+
+* package-safe defaults,
+* selected instance configuration files,
+* environment variables,
+* explicit command-line overrides,
+* operator-owned infrastructure files.
+
+The intended precedence is:
+
+[source,text]
+----
+package defaults
+-> selected configuration file
+-> process environment variables
+-> explicit CLI overrides
+----
+
+== Core identity model
+
+Three identities are deliberately distinct.
+
+=== `game_id`
+
+Identifies one `GameRuntime`.
+
+It is not a participant or player identifier.
+
+=== `participant_id`
+
+Identifies one human membership in one game.
+
+A participant may own one seat, several seats, or all seats.
+
+Hotseat normally has one participant owning every seat.
+
+Multiplayer normally has several participants owning different seats.
+
+=== `player_id`
+
+Identifies one game-engine or lobby player seat.
+
+This belongs to the game state and seat model.
+
+A participant acts for a player only when authoritative seat ownership grants control.
+
+=== Why the distinction matters
+
+The architecture must not collapse these identifiers.
+
+The server must be able to answer separately:
+
+* Which runtime is being addressed?
+* Which human membership authenticated the request?
+* Which game seat is being controlled?
+* Does this participant own that seat?
+* Does this participant hold the special decision role for the current pending state?
+
+== Authentication and credential model
+
+=== Application authentication
+
+Application authentication proves that the browser/user may use the application.
+
+Depending on topology, this may be:
+
+* explicitly enabled local development authentication,
+* standalone trusted-LAN authentication,
+* SHMC browser authentication,
+* central production JWT verification.
+
+The packaged standalone game must not require SHMC.
+
+=== Participant credential
+
+The participant token proves membership in a particular game.
+
+It is separate from the application bearer credential.
+
+Header:
+
+[source,text]
+----
+X-Karak-Participant-Token
+----
+
+The token is opaque.
+
+Reported design:
+
+* generated using `secrets`,
+* SHA-256 digest stored,
+* raw token returned once,
+* raw token not stored in runtime state,
+* revocable when participant leaves or game closes.
+
+=== Expected revision
+
+Gameplay and lobby mutations use an expected-revision credential/header.
+
+Reported header:
+
+[source,text]
+----
+X-Karak-Expected-Revision
+----
+
+This is concurrency control, not identity.
+
+=== Credential separation invariant
+
+A valid request may need both:
+
+* application authentication,
+* participant credential.
+
+A room code is not a post-join credential.
+
+A participant token must not replace application authentication.
+
+Application authentication must not automatically grant ownership of a game seat.
+
+=== URL secrecy
+
+The following must never be placed in join URLs:
+
+* application bearer tokens,
+* participant tokens,
+* participant digests,
+* private pending-state data.
+
+A join URL may contain the low-assurance room code.
+
+== Runtime lifecycle and participation modes
+
+=== Participation mode
+
+Reported participation modes:
+
+[source,text]
+----
+HOTSEAT
+MULTIPLAYER
+----
+
+Participation mode determines participant/seat organization.
+
+It must not create different rules-engine behavior.
+
+=== Runtime lifecycle
+
+Exact enum names should be verified in the repository, but the implemented flow includes at least:
+
+* lobby/not started,
+* in-game,
+* closed or unavailable,
+* fault handling.
+
+The state endpoint dispatches projection according to lifecycle.
+
+=== Room-code lifecycle
+
+Room codes are used for Multiplayer admission.
+
+Reported properties:
+
+* human-friendly,
+* generated with `secrets.choice`,
+* reduced alphabet,
+* six characters at the time of audit,
+* invalidated after game start,
+* invalidated after game close.
+
+Room codes are low-assurance locators/admission secrets.
+
+They do not authorize gameplay after joining.
+
+Public-host rate limiting and brute-force protection are deferred.
+
+== Locking, revisions, and mutation boundaries
+
+=== Per-runtime lock
+
+Each runtime uses a non-reentrant `threading.Lock`.
+
+Mutation handling must avoid lock re-entry.
+
+=== Revision
+
+Every authoritative runtime mutation increments a monotonic revision.
+
+The revision allows:
+
+* polling change detection,
+* stale-command detection,
+* deterministic conflict handling,
+* frontend projection ordering.
+
+=== Common command boundary
+
+Ordinary gameplay commands were migrated behind a shared server boundary.
+
+Reported sequence:
+
+. authenticate application user,
+. authenticate participant token,
+. resolve runtime,
+. acquire runtime lock,
+. validate lifecycle,
+. validate expected revision,
+. validate authority,
+. call graph/game operation,
+. increment revision exactly once on successful mutation,
+. return sanitized result,
+. release lock.
+
+The boundary must not:
+
+* retry stale mutations automatically,
+* increment revision on denied commands,
+* mutate before authority validation,
+* grant debug authority to game host.
+
+=== Conflict semantics
+
+Reported behavior:
+
+* `403` for authority denial,
+* `409` for stale revision or relevant domain conflict,
+* frontend performs one authoritative refresh,
+* frontend does not retry the denied/stale command automatically,
+* polling continues after recovery.
+
+== State projection architecture
+
+=== Unified state endpoint
+
+The application moved from fragmented gameplay reads to one unified state projection.
+
+Reported endpoint concept:
+
+[source,text]
+----
+GET /api/games/{game_id}/state
+----
+
+Mounted prefixes may alter the browser-visible path.
+
+The endpoint supports `since_revision`.
+
+=== `204` behavior
+
+When no state changed since the supplied revision:
+
+[source,text]
+----
+HTTP 204 No Content
+----
+
+The frontend must:
+
+* not render,
+* not replace projection state,
+* not change local revision,
+* continue polling.
+
+=== Projection requirements
+
+The server projection must:
+
+* be safe for the requesting participant,
+* detach returned collections from live runtime state,
+* avoid hidden pools and credentials,
+* redact private pending decisions,
+* expose participant-specific permissions,
+* convert engine identifiers into frontend-compatible identifiers,
+* avoid mutating the game while reading.
+
+=== Read-side mutation problems previously found
+
+A read audit found historical issues including:
+
+* `/map` calling `ensure_entrance()` on GET,
+* `DungeonGraph.serialize()` mutating compatibility position,
+* `serialize_turn_actors()` lazily rebuilding,
+* `Player.to_dict()` exposing Scout private pocket data,
+* `TurnState.to_dict()` exposing live/private pending dictionaries,
+* shallow live collections,
+* engine numeric player IDs versus runtime seat IDs such as `p1`.
+
+Stage 3B.1a introduced backend gameplay projection specifically to remove these risks from the active frontend path.
+
+A new assistant should verify that no later refactor reintroduced fragmented or mutating reads.
+
+== Frontend synchronization architecture
+
+=== Phase model
+
+The frontend is divided into phases.
+
+Reported relevant phases:
+
+* Phase 1: create/join entry,
+* Phase 2: lobby,
+* Phase 3: gameplay,
+* Phase 4: results.
+
+A package audit also referred to phase templates `0-4`; exact current page naming should be verified.
+
+=== Phase 2
+
+The Multiplayer lobby frontend supports:
+
+* create,
+* join query prefill,
+* safe participant context,
+* participant list,
+* seat list,
+* room code,
+* host controls,
+* leave,
+* close,
+* server-calculated readiness,
+* host-only start,
+* revision conflicts,
+* polling.
+
+=== Phase 3 unified projection
+
+Phase 3 was migrated to consume one state projection.
+
+Reported frontend concepts:
+
+[source,text]
+----
+latestGameProjection
+acceptGameProjection()
+renderGameProjection()
+refreshAll()
+----
+
+The exact function names should be verified, but the important invariant is:
+
+* active gameplay rendering must not use the old fragmented `/map`, `/players`, `/inventory`, and `/fight/state` reads.
+
+=== Poll coordinator
+
+Polling, manual refresh, and post-command refresh share a centralized synchronization controller.
+
+Reported properties:
+
+* no overlapping requests,
+* explicit refresh may queue behind active request,
+* bounded backoff,
+* hidden tabs poll more slowly,
+* visible tabs trigger a full synchronization,
+* invalid/closed runtime clears client context,
+* temporary errors do not create multiple loops,
+* post-command synchronization uses the same coordinator.
+
+=== Browser storage
+
+The participant and game context are retained across reloads.
+
+Exact storage keys and security behavior should be verified.
+
+The package report indicates local browser authentication and participant credentials may involve local storage in standalone mode.
+
+XSS exposure remains a future hardening concern.
+
+== Authority model
+
+=== Host authority
+
+The game host controls lobby administration such as:
+
+* creating/removing seats,
+* assignment/unassignment,
+* game start,
+* game close,
+* allowed administrative reset behavior.
+
+Host authority must not imply:
+
+* ownership of every Multiplayer seat,
+* authority for another participant’s gameplay commands,
+* debug authority,
+* ownership of another role-specific pending decision.
+
+=== Seat ownership
+
+Ordinary gameplay authority follows seat ownership.
+
+Examples:
+
+* movement,
+* tile interaction,
+* ordinary inventory use,
+* ordinary fights,
+* skills,
+* Scout actions where current rules permit,
+* end turn.
+
+A participant may act only for seats it owns.
+
+Turn changes transfer effective command availability through the same authority boundary.
+
+=== Special pending-decision authority
+
+An audit found that active-seat ownership alone was not sufficient for all game situations.
+
+The implementation added explicit authority policies for role-specific pending states.
+
+Reported policies include:
+
+[source,text]
+----
+PENDING_OWNER
+CHALLENGER_OWNER
+FIGHT_ROLE_OWNER
+WINNER_OWNER
+----
+
+=== KO
+
+KO decisions are owned by the affected player.
+
+The authoritative pending state records an affected or owner player ID.
+
+=== Arena challenge and fight roles
+
+Arena behavior distinguishes:
+
+* challenger,
+* challenged participant,
+* fight roles,
+* winner,
+* loser.
+
+The challenged Arena participant may need to act even when it is not their normal active turn.
+
+=== Arena loot
+
+Arena loot authority belongs to the winner.
+
+Loot selection must be validated against the pending stealable snapshot, not merely against current general inventory state.
+
+Projection and UI must show controls only to the authorized participant.
+
+=== Curse, poison, and healing
+
+These pending decisions were given explicit `owner_player_id` fields and use the common pending-owner policy.
+
+The architecture distinguishes:
+
+* active player,
+* target player,
+* game host,
+* decision owner.
+
+A new assistant should preserve this distinction.
+
+== Completed implementation stages
+
+=== Stage 1: Runtime foundation
+
+Status: `CONFIRMED_BY_REPORT`, `CONFIRMED_BY_AUTOMATED_TESTS`.
+
+Implemented concepts:
+
+* `app/runtime/`,
+* `GameLifecycle`,
+* participant records,
+* credential records,
+* `SeatOwnership`,
+* `GameRuntime`,
+* `InMemoryGameRuntimeRegistry`,
+* `create_hotseat_runtime()`,
+* per-runtime graph ownership,
+* lock,
+* revision,
+* host,
+* seat ownership,
+* fault state,
+* token digest storage.
+
+Early results:
+
+[source,text]
+----
+Focused: 16 passed
+Full suite: two pre-existing HP expectation failures remained
+----
+
+=== Stage 2: Hotseat migration
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* registry-owned Hotseat runtime,
+* game-scoped routes,
+* per-runtime lobby,
+* frontend game/token storage,
+* gameplay/results through runtime graph,
+* mutation lock,
+* revision,
+* fault handling.
+
+Reported results:
+
+[source,text]
+----
+Focused: 29 passed
+Full suite: 41 passed, two historical HP failures
+----
+
+=== Stage 3A.1: Multiplayer backend primitives
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* `ParticipationMode.HOTSEAT`,
+* `ParticipationMode.MULTIPLAYER`,
+* generalized game creation,
+* room codes,
+* create/join APIs,
+* unified state endpoint,
+* distinct participants,
+* safe lobby projection,
+* credential revoke/remove,
+* temporary Multiplayer start block.
+
+Reported results:
+
+[source,text]
+----
+Focused: 43 passed
+Full suite: 55 passed, two historical HP failures
+----
+
+=== Stage 3A.2: Lobby projection, revision, and polling
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* `since_revision`,
+* `204` no-change semantics,
+* unified lobby projection,
+* expected revision for lobby mutations,
+* Phase 2 polling,
+* conflict refresh.
+
+Reported results:
+
+[source,text]
+----
+Focused: 51 passed
+Full suite: 63 passed, two historical HP failures
+----
+
+=== Asset versioning
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* `karak_asset_version`,
+* version query parameters on owned assets,
+* stable value per process/build,
+* SHMC auth script kept separate.
+
+After resolving the old HP test expectation:
+
+[source,text]
+----
+Full suite: 81 passed
+----
+
+=== Stage 3A.3: Lobby authority
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* host-only lobby administration,
+* create/remove seats,
+* assign/unassign,
+* leave/close,
+* room-code invalidation,
+* token invalidation,
+* participant permissions.
+
+Reported results included:
+
+[source,text]
+----
+Focused stage tests: 9 passed
+Focused aggregate: 60 passed
+----
+
+=== Stage 3A.4: Frontend Multiplayer lobby
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* Host and Join in Phase 1,
+* join query prefill,
+* safe context,
+* Phase 2 participant/seat/room display,
+* host controls,
+* leave/close,
+* invalid-session handling.
+
+At this point Multiplayer start remained intentionally blocked.
+
+Reported full suite:
+
+[source,text]
+----
+81 passed
+----
+
+=== Phase 3 read audit
+
+Status: `CONFIRMED_BY_REPORT`.
+
+This was a read-only audit that found mutating and privacy-unsafe read behavior in the old frontend/backend path.
+
+Its findings motivated Stage 3B.1a.
+
+=== Stage 3B.1a: Backend gameplay projection
+
+Status: `CONFIRMED_BY_REPORT`, `CONFIRMED_BY_AUTOMATED_TESTS`.
+
+Implemented:
+
+* unified `IN_GAME` state projection,
+* lifecycle dispatch,
+* `since_revision`,
+* one-lock projection,
+* detached structures,
+* safe map/player/turn/inventory/fight data,
+* identifier conversion,
+* participant permissions,
+* Scout filtering,
+* pending-choice redaction,
+* hidden pool and credential exclusion.
+
+Results:
+
+[source,text]
+----
+Focused: 13 passed
+Regression: 80 passed
+Full suite: 94 passed
+----
+
+=== Stage 3B.1b: Phase 3 read/render migration
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* one state load,
+* projection acceptance,
+* retained latest projection,
+* compatibility adaptation,
+* single projection render,
+* post-command projection refresh,
+* revision ordering,
+* lifecycle and permission handling,
+* old fragmented reads removed from active path.
+
+Results:
+
+[source,text]
+----
+Focused: 11 passed
+Full suite: 105 passed
+JavaScript syntax: passed
+----
+
+=== Stage 3B.1c: Polling and lifecycle synchronization
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented centralized synchronization behavior described earlier.
+
+Results:
+
+[source,text]
+----
+Focused B.1b/B.1c: 23 passed
+Focused regression: 103 passed
+Full suite: 117 passed
+JavaScript syntax: passed
+----
+
+=== Stage 3B.2a: Common command boundary
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* common mutation boundary,
+* participant authorization,
+* expected revision,
+* lifecycle check,
+* ordinary command authority,
+* one revision increment,
+* frontend automatic credential headers,
+* refresh on `403` and `409`,
+* no automatic retry.
+
+Results:
+
+[source,text]
+----
+Focused: 12 passed
+Regression: 115 passed
+Full suite: 129 passed
+JavaScript syntax: passed
+----
+
+=== Special authority audit
+
+Status: `CONFIRMED_BY_REPORT`.
+
+The audit identified explicit KO, Arena, fight-role, winner, and pending-state ownership needs.
+
+It also identified that curse, poison, and healing initially lacked explicit owner fields.
+
+=== Stage 3B.2b.1: KO and Arena authority
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented:
+
+* KO pending-owner authority,
+* challenger authority,
+* fight-role authority,
+* winner authority,
+* Arena loot validation against pending stealable snapshot,
+* projection and UI alignment.
+
+Results:
+
+[source,text]
+----
+Focused: 13 passed
+Broader focused: 58 passed
+Full suite: 142 passed
+JavaScript syntax: passed
+----
+
+=== Stage 3B.2b.2: Curse, poison, and healing ownership
+
+Status: `CONFIRMED_BY_REPORT`.
+
+Implemented explicit pending decision owners for these flows.
+
+Results:
+
+[source,text]
+----
+Focused: 16 passed
+Focused regression: 61 passed
+Full suite: 145 passed
+JavaScript syntax: passed
+----
+
+=== Stage 3C.1: Multiplayer start and shared gameplay
+
+Status: `CONFIRMED_BY_REPORT`, `CONFIRMED_MANUALLY` for multiple browser instances.
+
+Implemented:
+
+* valid Multiplayer lobby start,
+* server-calculated readiness,
+* host-only locked and revision-aware start,
+* transition of every participant into the same running `GameRuntime`,
+* room-code invalidation after start,
+* Phase 3 unified projection and polling for all participants,
+* authoritative seat ownership,
+* turn-based control transfer,
+* no separate Hotseat/Multiplayer engine branch.
+
+Manual report:
+
+* separate browser instances joined the same game,
+* gameplay continued over multiple rounds successfully.
+
+Important distinction:
+
+* A successful multiple-browser test exists.
+* A confirmed physical multi-tablet LAN test has not yet been recorded in this document.
+
+=== Stage 4A.1: Trusted-LAN hosting foundation
+
+Status: `CONFIRMED_BY_REPORT`, with physical-device acceptance still open.
+
+Implemented:
+
+* `KARAK_HOST`,
+* `KARAK_PORT`,
+* explicit `KARAK_TRUSTED_LAN=true` requirement for non-loopback bind,
+* `KARAK_ADVERTISED_ORIGIN`,
+* same-origin frontend/assets/API,
+* standalone SHMC-script behavior cleanup,
+* startup diagnostics,
+* one-worker warning,
+* process-local state warning,
+* trusted-LAN documentation.
+
+Reported verification:
+
+[source,text]
+----
+Focused LAN tests: passed
+Affected frontend tests: passed
+Full suite: 158 passed
+JavaScript/shell syntax: passed
+----
+
+Manual multiple-browser Multiplayer had been successful.
+
+The original report explicitly said that a real two-device LAN manual test had not been executed at that time.
+
+=== Stage 4B.1: Central deployment compatibility
+
+Status: `CONFIRMED_BY_REPORT`.
+
+This stage implemented application-level compatibility only. It did not deploy anything.
+
+Reported new files:
+
+[source,text]
+----
+app/core/deployment_config.py
+docs/central_hosted_deployment.adoc
+deploy/examples/karak-central.service
+deploy/examples/karak-central-nginx.conf
+tests/test_central_deployment_stage4b1.py
+----
+
+Reported modified areas:
+
+* `app/api.py`,
+* `app/karak_router_bundle.py`,
+* frontend router,
+* operations router,
+* `karak_auth.js`,
+* phase templates.
+
+Implemented:
+
+* `KARAK_DEPLOYMENT_MODE`,
+* `standalone_local`,
+* `trusted_lan`,
+* `central_hosted`,
+* central HTTPS origin validation,
+* loopback bind validation,
+* one-worker and no-reload validation,
+* SHMC browser-auth requirement,
+* production JWT validation,
+* local debug/auth helper rejection,
+* origin/prefix separation,
+* prefix regression tests,
+* reverse-proxy samples,
+* safe health endpoint.
+
+Reported results:
+
+[source,text]
+----
+Central tests: 24 passed
+Trusted-LAN regression: 7 passed
+Full suite: 182 passed
+JavaScript syntax: passed
+Python syntax: passed
+----
+
+No deployment was performed.
+
+=== Portable deployment preparation
+
+Status: `CONFIRMED_BY_REPORT`.
+
+The scope was deliberately changed to remain local and not access Hetzner.
+
+Implemented or documented:
+
+* safe defaults,
+* selected configuration files,
+* environment overrides,
+* explicit overrides,
+* local PC profile,
+* trusted-LAN profile,
+* Raspberry Pi/media-center profile,
+* central HTTPS profile,
+* placeholder systemd examples,
+* placeholder Nginx examples,
+* origin-versus-prefix behavior,
+* multi-instance use,
+* one-worker limitation,
+* process-local state loss,
+* no machine-specific hard-coding.
+
+Reported results:
+
+[source,text]
+----
+Portable deployment focused tests: 14 passed
+Central deployment compatibility: 24 passed
+Trusted-LAN regression: 7 passed
+Multiplayer/authorization regression: 15 passed
+Full suite: 196 passed
+JavaScript syntax: passed
+Python syntax: passed
+----
+
+No SSH or remote deployment occurred.
+
+=== Stage 4B.2b: Portable package build and clean installation
+
+Status: `CONFIRMED_BY_REPORT`, `CONFIRMED_BY_AUTOMATED_TESTS`.
+
+Implemented package artifacts:
+
+[source,text]
+----
+dist/karak_game-0.0.3-py3-none-any.whl
+dist/karak_game-0.0.3.tar.gz
+----
+
+Added or reported:
+
+* standards-based `pyproject.toml`,
+* `MANIFEST.in`,
+* `app/version.py`,
+* `app/cli.py`,
+* `karak-server`,
+* CLI options:
+** `--config`,
+** `--host`,
+** `--port`,
+** `--instance-name`,
+** `--check-config`,
+* installed package resource loading,
+* wheel and sdist clean installation,
+* operation from `/tmp`,
+* no repository on `PYTHONPATH`,
+* two installed local instances,
+* trusted-LAN installed configuration,
+* root and arbitrary mount prefix,
+* installed SHMC adapter.
+
+Reported dependency correction:
+
+* `shmc-auth-client` removed from mandatory dependencies,
+* moved to optional extra:
++
+[source,text]
+----
+karak-game[shmc]
+----
+* standalone uses SHMC client only when installed,
+* local HS256 development authentication requires explicit configuration,
+* otherwise authentication fails closed,
+* central mode rejects insecure development authentication.
+
+Reported results:
+
+[source,text]
+----
+Package focused: 8 passed
+Portable/central/LAN focused: 53 passed
+Multiplayer/authorization regression: 31 passed
+Full suite: 204 passed
+JavaScript syntax: passed
+Python syntax: passed
+----
+
+No public-internet remote deployment occurred.
+
+=== Server/client utility flow and LAN discovery update
+
+Status: `CONFIRMED_BY_AUTOMATED_TESTS`, with continued physical-device validation.
+
+Implemented on `feature/server_client`:
+
+* full local server bootstrap at `/server`,
+* join-only client page at `/join`,
+* compatibility redirect from `/phase1?join=<code>` to `/join?room=<code>`,
+* human-readable room names separate from stable random room codes,
+* safe listing of active Multiplayer lobbies on the selected server,
+* automatically refreshed and selectable room list,
+* best-effort detection of usable active IPv4 LAN addresses,
+* host selection of the advertised origin per created game,
+* navigation from the full server bootstrap to another `IP:port`,
+* loopback-only full bootstrap and creation/Hotseat controls in standalone and
+  trusted-LAN modes,
+* remote `/` and plain `/phase1` redirection to the join-only page,
+* central-hosted behavior kept separate from the local loopback restriction.
+
+The current invitation form is:
+
+[source,text]
+----
+http://<selected-lan-address>:<port>/join?room=<stable-room-code>
+----
+
+The room list exposes only room name, stable room code, host display name, and
+participant count. Hotseat, started, closed, and faulted games are excluded.
+
+Latest reported automated baseline:
+
+[source,text]
+----
+216 passed
+----
+
+== Current packaging state
+
+=== Distribution identity
+
+Reported metadata:
+
+[source,text]
+----
+Distribution name: karak-game
+Normalized artifact prefix: karak_game
+Version: 0.0.3
+Console command: karak-server
+Wheel tag: py3-none-any
+Import packages: app, karak_shmc, shmc_routers
+----
+
+=== Package resources
+
+Reported included runtime content:
+
+* Python application modules,
+* FastAPI routers,
+* game engine and runtime,
+* templates,
+* JavaScript,
+* CSS,
+* favicon,
+* gameplay YAML,
+* required PNGs,
+* SHMC integration adapter,
+* safe configuration examples,
+* deployment documentation.
+
+Reported excluded content:
+
+* `.git`,
+* virtual environments,
+* tests,
+* bytecode,
+* editor backups,
+* `.kra` source art,
+* old/original asset folders,
+* real instance `.env` files,
+* private keys,
+* secrets,
+* machine-specific live deployment files.
+
+=== Package-size issue
+
+The package is approximately `262 MiB`.
+
+Audit findings:
+
+[source,text]
+----
+Wheel size:
+274,209,233 bytes
+
+Extracted package size:
+275,116,409 bytes
+
+PNG count:
+149
+
+PNG bytes:
+273,832,140 bytes
+
+PNG share:
+99.533%
+----
+
+The size is dominated by:
+
+* hero boards,
+* tiles,
+* tile-content PNGs.
+
+The package-size issue is `DEFERRED`.
+
+It does not block the local LAN Multiplayer proof of concept.
+
+A GitHub issue has been prepared to handle:
+
+* runtime asset inventory,
+* reference-completeness tests,
+* safe unused-asset pruning,
+* duplicate analysis,
+* before/after size budget,
+* no lossy conversion in the first optimization slice.
+
+Important current conclusion:
+
+* no asset deletion is yet proven safe,
+* suspected `medium` and `small` hero variants require manifest and runtime validation,
+* `BackSide.png` and `proportions.png` must not be removed without conclusive evidence,
+* CDN delivery is incompatible with the offline/LAN goal,
+* package splitting is not currently justified.
+
+== Current configuration model
+
+=== Required properties
+
+The same package must support different architectures through configuration.
+
+Reported configuration concepts include:
+
+[source,text]
+----
+KARAK_CONFIG_FILE
+KARAK_INSTANCE_NAME
+KARAK_DEPLOYMENT_MODE
+KARAK_HOST
+KARAK_PORT
+KARAK_WORKERS
+KARAK_RELOAD
+KARAK_ADVERTISED_ORIGIN
+KARAK_PUBLIC_BASE_PATH
+KARAK_TRUSTED_LAN
+KARAK_SHMC_BROWSER_AUTH_ENABLED
+KARAK_DEV_AUTH_HELPER_ENABLED
+KARAK_LOCAL_DEV_GAME_DEBUG
+AUTH_JWT_ALGORITHM
+AUTH_JWT_PUBLIC_KEY_PATH
+AUTH_JWT_ISSUER
+AUTH_JWT_AUDIENCE
+----
+
+Exact names and defaults should be verified in the current code and example configurations.
+
+=== Deployment modes
+
+[source,text]
+----
+standalone_local
+trusted_lan
+central_hosted
+----
+
+=== Local defaults
+
+Conceptually safe defaults:
+
+[source,text]
+----
+bind host: 127.0.0.1
+one worker
+no advertised public origin
+debug disabled unless explicitly enabled
+process-local state
+----
+
+=== Trusted LAN
+
+Conceptual trusted-LAN configuration:
+
+[source,text]
+----
+deployment mode: trusted_lan
+bind: 0.0.0.0
+explicit trusted-LAN acknowledgement: true
+detected/selected origin: http://<LAN-address>:<port>
+optional configured fallback: KARAK_ADVERTISED_ORIGIN
+workers: 1
+----
+
+Another device cannot use a join link containing `localhost`. The local server
+bootstrap now detects candidate LAN origins and lets the operator select one.
+`KARAK_ADVERTISED_ORIGIN` remains available as an explicit fallback.
+
+=== Origin and prefix separation
+
+`KARAK_ADVERTISED_ORIGIN` is origin-only.
+
+Correct:
+
+[source,text]
+----
+http://192.168.1.25:8001
+https://games.example.com
+----
+
+Incorrect:
+
+[source,text]
+----
+https://games.example.com/app/karak
+----
+
+The public base path is added separately.
+
+Supported conceptual base paths include:
+
+[source,text]
+----
+/
+ /karak
+ /games/karak
+ /app/karak
+----
+
+=== Multiple instance isolation
+
+Separate processes using different configurations must have:
+
+* different ports,
+* different instance names,
+* different origins where appropriate,
+* independent in-memory registries,
+* independent authentication configuration where needed.
+
+A room code created in one instance must not resolve in another.
+
+This behavior was reported as tested from one installed wheel.
+
+== Manual validation state
+
+=== Confirmed
+
+The user reported:
+
+* separate browser instances joined the same Multiplayer runtime,
+* play continued successfully over multiple rounds.
+
+This validates:
+
+* common runtime sharing,
+* participant separation at browser-storage level,
+* seat control transfer,
+* unified synchronization during actual play.
+
+=== Still required
+
+The main next milestone is a physical LAN proof of concept.
+
+Recommended target:
+
+[source,text]
+----
+One local server process
+-> Wi-Fi/LAN
+-> 3-4 personal tablets or independent physical devices
+----
+
+The current conversation does not confirm that this complete physical setup has been tested.
+
+== Current priorities
+
+=== Immediate priority
+
+Do not install remotely.
+
+Do not access Hetzner.
+
+Do not focus on package-size optimization.
+
+The immediate priority is:
+
+[source,text]
+----
+Local physical-device LAN Multiplayer proof of concept
+----
+
+=== Deferred priorities
+
+* package asset-size optimization,
+* remote/VPS installation,
+* central HTTPS deployment,
+* public-host hardening,
+* persistence,
+* multi-worker coordination,
+* room-code rate limiting,
+* durable reconnect,
+* token rotation,
+* production observability.
+
+== Recommended next stage
+
+=== Proposed stage name
+
+[source,text]
+----
+Stage 4C.1 - Physical LAN Multiplayer Proof of Concept
+----
+
+The exact numbering may be adjusted, but the scope should remain local.
+
+=== Objective
+
+Prove that one packaged Karak server can run on a local host and support a real game across multiple physical client devices over the same LAN.
+
+=== Recommended server candidates
+
+Choose one available host:
+
+* user PC,
+* laptop,
+* media center,
+* Raspberry Pi.
+
+The first test should use the simplest currently available machine.
+
+Do not introduce Raspberry Pi-specific code before a PC-hosted LAN test succeeds.
+
+=== Required physical-device test
+
+Use:
+
+* one host machine,
+* at least two physical client devices,
+* preferably three or four tablets/phones,
+* one shared LAN/Wi-Fi network,
+* independent browser storage,
+* the installed package or the same packaged startup path intended for family use.
+
+=== Required validation sequence
+
+. Start one `trusted_lan` instance.
+. Confirm bind address and port.
+. Open `/server` locally and confirm the detected address selector contains the
+  host LAN address or an explicitly configured resolvable LAN hostname.
+. Open `/join` from a client device.
+. Confirm the join page, CSS, JavaScript, favicon, and PNG assets load.
+. Create a named Multiplayer game on the server machine.
+. Confirm the room appears on device B and the generated `/join?room=` link works.
+. Add further devices if available.
+. Confirm independent application authentication behavior.
+. Confirm independent participant identities.
+. Create and assign seats.
+. Assign professions.
+. Start the game.
+. Confirm every device enters the same runtime.
+. Confirm only the active seat owner can mutate.
+. Confirm unauthorized controls are hidden or disabled.
+. Attempt one unauthorized command and verify `403`.
+. Create one stale revision and verify `409` plus refresh without retry.
+. Play multiple complete rounds.
+. Exercise:
+** movement,
+** tile discovery,
+** fight,
+** inventory,
+** item use,
+** pending decision if practical,
+** turn transfer.
+. Reload at least one client.
+. Confirm participant and seat identity restore correctly.
+. Temporarily disable Wi-Fi on one client.
+. Reconnect and confirm bounded polling recovery.
+. Confirm no duplicate participant is created.
+. Confirm other devices continue during one device interruption.
+. Stop the server and verify documented state loss.
+. Restart and confirm stale game context is cleared cleanly.
+. Start a new game after restart.
+. Run a Hotseat regression afterward.
+
+=== Required observations
+
+Record:
+
+* server OS and Python version,
+* package artifact/version,
+* exact configuration file,
+* bind address,
+* port,
+* advertised origin,
+* server device,
+* client device models,
+* browser names and versions,
+* number of participants,
+* number of player seats,
+* number of rounds,
+* network interruption behavior,
+* reload behavior,
+* `403` result,
+* `409` result,
+* console errors,
+* server errors,
+* broken or slow assets,
+* responsive-layout problems,
+* touch-control problems,
+* battery/network concerns if visible.
+
+=== Acceptance condition
+
+[source,text]
+----
+One packaged Karak server running on a local host supports a complete
+Multiplayer session across multiple physical LAN devices for several
+rounds, using the same GameRuntime, projection, polling, revision, and
+authorization architecture as Hotseat and same-machine Multiplayer.
+----
+
+== Known limitations
+
+=== No persistence
+
+All games are lost when the process exits.
+
+This is expected.
+
+=== One process and one worker
+
+Multiple workers would create multiple independent registries.
+
+This is prohibited until shared state is designed.
+
+=== No durable reconnect account
+
+Reload restoration uses current browser/session storage.
+
+A different browser or cleared storage is a different participant unless a future reconnect mechanism is added.
+
+=== No public internet hardening
+
+Current room-code and creation behavior are not ready for unrestricted public exposure.
+
+Deferred controls include:
+
+* rate limiting,
+* room-code throttling,
+* quotas,
+* abuse prevention,
+* token expiry,
+* stronger browser session posture,
+* public operational logging,
+* persistence.
+
+=== Package size
+
+The package is large but functional.
+
+This is deferred.
+
+=== Physical-device UI
+
+Tablet responsiveness, touch behavior, and older-device decoding performance remain to be measured.
+
+=== Raspberry Pi performance
+
+The wheel is pure Python and does not bundle x86-only binaries, but no real Raspberry Pi test has been performed.
+
+=== Build reproducibility
+
+Repeated builds were content-equivalent but not byte-identical because of archive timestamps.
+
+This is not currently a blocker.
+
+== Questions for the coding assistant
+
+The user may forward these questions to the implementation assistant.
+
+They are intended to close gaps before defining the physical LAN test stage in final detail.
+
+=== Repository identity
+
+. What is the current branch?
+. What is the current commit?
+. Is the working tree clean?
+. What is the exact repository root?
+. Which Python versions are currently supported and tested?
+
+=== Canonical startup
+
+. What is the exact recommended command for running the installed wheel in `trusted_lan` mode?
+. Which command is canonical:
+** `karak-server`,
+** `python3 RUN_API_karak.py`,
+** direct `uvicorn`,
+** another launcher?
+. Does `karak-server` itself start Uvicorn?
+. Does it honor host and port from the selected config file?
+. What is the exact precedence between CLI host/port and config/environment host/port?
+. How should graceful termination be performed?
+
+=== Example configuration
+
+. What is the exact path and filename of the committed trusted-LAN example?
+. Please provide the full commented minimal family-LAN configuration.
+. Is `KARAK_TRUSTED_LAN=true` still required when `KARAK_DEPLOYMENT_MODE=trusted_lan`, or does the mode itself satisfy that declaration?
+. Is `KARAK_ADVERTISED_ORIGIN` required in trusted-LAN mode?
+. Can a resolvable LAN hostname be used instead of an IP?
+. How is `KARAK_PUBLIC_BASE_PATH=/` represented and normalized?
+
+=== Local authentication
+
+. What application authentication mode is recommended for family tablets in a private LAN?
+. Does each tablet need a separate application user?
+. Is the local HS256 development mode intended for this PoC?
+. How is a local test user/token obtained?
+. Does the UI provide a login/bootstrap flow?
+. Which values must be present in the config?
+. Are any browser tokens stored in localStorage?
+. Which exact storage keys are used?
+. What happens when storage is cleared?
+
+=== Participant storage and reload
+
+. Which exact browser-storage keys contain:
+** game ID,
+** participant ID,
+** participant token,
+** current revision,
+** phase context?
+. Does a normal reload restore the same participant?
+. Does opening the join URL in another tab reuse or create identity?
+. Does private browsing create a clean independent participant?
+. What response causes stale local context to be cleared?
+
+=== Routes
+
+. What are the current exact browser-visible routes for Phases 1-4?
+. What are the exact create, join, lobby, start, state, and gameplay endpoint paths?
+. Which paths change under an arbitrary mount prefix?
+. Is `/api/health` mounted below the configured base path in standalone operation?
+. Is `/js/shmc_auth.js` absent by design in standalone mode?
+
+=== Polling
+
+. What is the active polling interval?
+. What is the hidden-tab polling interval?
+. What is the maximum backoff?
+. Which status codes trigger retry versus context clearing?
+. How are temporary network failures distinguished from a missing runtime?
+. Does the coordinator log or expose its current state for manual testing?
+
+=== Authority tests
+
+. What is the easiest safe method to generate a real `403` from the browser during manual testing?
+. What is the easiest safe method to generate a stale revision and real `409`?
+. Are there existing test-only controls that should not be enabled for the physical PoC?
+. What server logs should be inspected to confirm no mutation occurred?
+
+=== Multiplayer gameplay coverage
+
+. Which game actions are currently implemented and stable enough for manual Multiplayer?
+. Which pending-decision flows can be deliberately reached:
+** KO,
+** Arena challenge,
+** Arena loot,
+** curse,
+** poison,
+** healing?
+. Are any rules still single-browser dependent?
+. Are any UI controls still globally visible even when unauthorized?
+. Are there known gameplay actions not yet migrated to the common command boundary?
+
+=== Assets and tablet performance
+
+. Are all PNG assets loaded eagerly or on demand?
+. Does the browser cache versioned assets?
+. Is there a known first-load transfer size?
+. Are there responsive breakpoints for tablet widths?
+. Are touch events handled separately from click events?
+. Are any hover-only controls present?
+. Are there known layout problems in portrait orientation?
+. Does Phase 3 require a minimum viewport width?
+
+=== Logging
+
+. What log level is recommended for the PoC?
+. Which logs identify game ID, revision, denial, and runtime fault without exposing credentials?
+. Are `204` polls suppressed or low-noise?
+. Are participant tokens, bearer tokens, and room codes redacted?
+. Is there an optional safe diagnostic mode for polling and authority tests?
+
+=== Test suite
+
+. Please provide the current exact full-suite command.
+. Please provide the exact focused commands for:
+** trusted-LAN hosting,
+** package installation,
+** Multiplayer start,
+** command authorization,
+** polling,
+** mount-prefix behavior.
+. Is the current full-suite baseline still `204 passed`?
+. Have any tests changed since the last report?
+
+=== Package artifact
+
+. Is `karak_game-0.0.3-py3-none-any.whl` still the latest built artifact?
+. Should the PoC install with normal dependency resolution?
+. Which command should be used?
+. Is `--force-reinstall --no-deps` only for established SHMC workflows?
+. Which optional extras are needed for standalone family LAN operation?
+. Is the package currently committed/tagged, or only built locally?
+
+== Questions for the user
+
+These are product and test-environment questions that the new assistant may ask the user before preparing the final LAN test instruction.
+
+. Which machine should host the first physical LAN test?
+. Which operating system is installed on that host?
+. Is Python already installed?
+. Are the tablets Android, iPadOS, or mixed?
+. How many physical client devices are available?
+. Are all devices on the same Wi-Fi network?
+. Does the Wi-Fi router isolate wireless clients from each other?
+. Is a firewall active on the host?
+. Should the first test use an IP address or a local hostname?
+. Is family authentication required for the first PoC, or is a controlled local test login acceptable?
+. Is portrait tablet orientation important for the first acceptance?
+. Is the goal a complete game or several representative rounds?
+. Should one client intentionally disconnect during another participant’s turn?
+. Should the server remain on the user’s PC for now, or should Raspberry Pi installation follow immediately after success?
+
+== Guidance to the next assistant
+
+=== First action
+
+Read this document fully.
+
+Then ask only the minimum questions needed to identify:
+
+* the current repository/package state,
+* the intended server host,
+* available physical client devices,
+* exact trusted-LAN startup command,
+* local authentication workflow.
+
+=== Do not do these things
+
+Do not:
+
+* propose Hetzner deployment,
+* access remote infrastructure,
+* reopen package optimization,
+* create a separate LAN game mode,
+* fork Hotseat and Multiplayer,
+* replace polling with WebSockets without a new design decision,
+* add persistence before the PoC,
+* weaken participant/seat authority,
+* treat host as owner of every Multiplayer seat,
+* put credentials in URLs,
+* hard-code the host’s LAN IP,
+* assume `/app/karak`,
+* recommend multiple workers,
+* confuse browser-instance testing with physical LAN validation,
+* claim Raspberry Pi compatibility has been physically proven.
+
+=== Preserve these invariants
+
+Always preserve:
+
+* one shared game implementation,
+* `DungeonGraph` separate from `GameRuntime`,
+* distinct game/participant/player identities,
+* application auth separate from participant token,
+* room code separate from post-join auth,
+* server-authoritative seat ownership,
+* explicit pending-decision ownership,
+* one mutation boundary,
+* expected revision,
+* no automatic mutation retry after `403` or `409`,
+* one unified state projection,
+* one polling coordinator,
+* process-local one-worker runtime,
+* configuration-driven deployment,
+* package operation outside the source repository,
+* offline/LAN self-contained assets.
+
+== Proposed document refinement process
+
+This is the first full handover draft.
+
+A second pass should incorporate:
+
+* answers from the coding assistant,
+* exact current file and route names,
+* exact configuration templates,
+* exact startup and installation commands,
+* current branch and commit,
+* exact browser storage model,
+* exact polling timings,
+* known UI limitations,
+* results of the first physical-device LAN test.
+
+Recommended next revision:
+
+[source,text]
+----
+StateDocumentation_multiplayer_01.adoc
+revision 0.2
+----
+
+The filename may remain unchanged while the revision metadata advances.
+
+== Current one-paragraph state
+
+Karak currently has a common server-authoritative runtime architecture supporting Hotseat and Multiplayer, distinct participant and seat identities, secure participant credentials, unified safe projections, revision-aware polling, a common mutation boundary, explicit special-decision ownership, Multiplayer lobby/start, and multiple-round play across separate browser instances. The same implementation has been made portable through local, trusted-LAN, central-compatible, arbitrary-prefix, multi-instance, and clean installed-package configurations. A pure-Python wheel and source distribution build and run outside the repository, with SHMC integration optional. No remote deployment has occurred. Package-size optimization is documented and deferred. The immediate goal is to prove the existing packaged Multiplayer implementation across several physical devices on a real local network before any Hetzner or public-host work begins.

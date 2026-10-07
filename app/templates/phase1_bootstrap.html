@@ -2,34 +2,51 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Karak - Game style selection</title>
+    <title>Karak - Server</title>
     <link rel="icon" href="{{ karak_static_url }}/favicon.ico">
     <link href="{{ karak_static_url }}/css/phases12.css?v={{ karak_asset_version }}" rel="stylesheet">
 </head>
 <body>
 
-<h1>Karak - Game style selection</h1>
-<p>Bootstrap / session start</p>
+<h1>Karak Server</h1>
+<p>Run a local game, host a Multiplayer game, or join one.</p>
 {% if karak_dev_auth_helper_enabled %}
 <p><a href="{{ karak_base_url }}/login">Developer auth helper</a></p>
 {% endif %}
 
 <div class="panel">
-    <h2>Local</h2>
+    <h2>LAN address</h2>
+    {% if karak_advertised_origin_candidates %}
+    <p>Select the one address other players should open:</p>
+    <select id="advertised-origin">
+        {% for origin in karak_advertised_origin_candidates %}
+        <option value="{{ origin }}">{{ origin }}/join</option>
+        {% endfor %}
+    </select>
+    {% else %}
+    <p class="message-warning">No usable LAN address was detected. Check the server bind and network connection.</p>
+    <select id="advertised-origin" disabled></select>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Hotseat</h2>
     <button onclick="startHotseat()">Start Hot-seat</button>
 </div>
 
 <div class="panel">
-    <h2>Host</h2>
+    <h2>Host Multiplayer</h2>
     <input id="host-name" placeholder="Host name" type="text" value="Host">
+    <input id="host-room-name" maxlength="40" placeholder="Room name" type="text" value="Family Game">
     <button id="host-submit-btn" onclick="startHost()">Create Multiplayer Lobby</button>
 </div>
 
+{% include "_phase1_join_panel.html" %}
+
 <div class="panel">
-    <h2>Join</h2>
-    <input id="join-name" placeholder="Player name" type="text" value="Guest">
-    <input id="join-room" placeholder="Room code" type="text" value="">
-    <button id="join-submit-btn" onclick="joinHost()">Join Multiplayer Lobby</button>
+    <h2>Join Another Server</h2>
+    <input id="external-server-address" placeholder="Server address, for example 10.3.77.45:8001" type="text">
+    <button id="external-server-btn" onclick="openExternalServer()">Open Server</button>
 </div>
 
 <div class="message-box message-info" id="message-box">

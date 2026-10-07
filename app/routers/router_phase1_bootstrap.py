@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.bootstrap import SessionPhase
+from app.core.auth_dependencies import require_local_server_request
 from app.dto import (
     BootstrapHotseatRequest,
     BootstrapHostRequest,
@@ -13,7 +14,12 @@ from app.runtime.game_sessions import create_runtime_session
 from app.runtime.registry import InMemoryGameRuntimeRegistry
 
 
-def build_bootstrap_router(*, bootstrap_service, runtime_registry: InMemoryGameRuntimeRegistry) -> APIRouter:
+def build_bootstrap_router(
+    *,
+    bootstrap_service,
+    runtime_registry: InMemoryGameRuntimeRegistry,
+    restrict_host_actions_to_local: bool = False,
+) -> APIRouter:
     router = APIRouter(prefix="/api/bootstrap", tags=["Karak - bootstrap"])
 
     @router.get(
@@ -28,6 +34,7 @@ def build_bootstrap_router(*, bootstrap_service, runtime_registry: InMemoryGameR
         "/reset",
         summary="Reset bootstrap state",
         description="Resets startup/session bootstrap back to pristine Phase-1 state.",
+        dependencies=[Depends(require_local_server_request)] if restrict_host_actions_to_local else None,
     )
     def reset_bootstrap():
         return bootstrap_service.reset()
@@ -36,6 +43,7 @@ def build_bootstrap_router(*, bootstrap_service, runtime_registry: InMemoryGameR
         "/hotseat",
         summary="Start local hot-seat session",
         description="Initializes local authoritative hot-seat mode and proceeds to lobby phase.",
+        dependencies=[Depends(require_local_server_request)] if restrict_host_actions_to_local else None,
     )
     def start_hotseat(req: BootstrapHotseatRequest):
         try:
@@ -80,6 +88,7 @@ def build_bootstrap_router(*, bootstrap_service, runtime_registry: InMemoryGameR
         "/host",
         summary="Start host session",
         description="Initializes host/admin network session and proceeds to lobby phase.",
+        dependencies=[Depends(require_local_server_request)] if restrict_host_actions_to_local else None,
     )
     def start_host(req: BootstrapHostRequest):
         try:
